@@ -87,6 +87,17 @@ def _extract_10q_sections(filing) -> dict[str, str]:
     return sections
 
 
+def _extract_8k_sections(filing) -> dict[str, str]:
+    """Extract text from an 8-K filing (current reports / material events)."""
+    try:
+        text = filing.text()[:200_000]
+        if text:
+            return {"full_text": text}
+    except Exception as e:
+        logger.warning(f"Could not extract 8-K text: {e}")
+    return {}
+
+
 def download_filings_for_ticker(
     ticker: str,
     form_types: list[str] | None = None,
@@ -142,6 +153,8 @@ def download_filings_for_ticker(
             # Extract sections
             if form_type == "10-K":
                 sections = _extract_10k_sections(filing)
+            elif form_type == "8-K":
+                sections = _extract_8k_sections(filing)
             else:
                 sections = _extract_10q_sections(filing)
 

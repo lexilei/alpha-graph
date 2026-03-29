@@ -1,24 +1,26 @@
 # alpha-graph
 
-Financial knowledge graph and multi-agent LLM pipeline for quantitative trading signals.
+Multi-agent LLM pipeline for quantitative trading signals, built on SEC filings, earnings calls, and material event analysis.
 
-## Strategy overview
+## Strategy
 
-1. **Multi-agent LLM pipeline** — Specialized agents process SEC filings, earnings calls, and news to generate trading signals based on the "Lazy Prices" anomaly (Cohen, Malloy & Nguyen 2020) and executive communication patterns.
+Based on the "Lazy Prices" anomaly (Cohen, Malloy & Nguyen 2020) — companies that substantially change their 10-K/10-Q language tend to underperform (~188 bps/month alpha). Extended with LLM-based analysis of earnings call communication patterns (247 bps alpha for proactive executives) and 8-K material event detection.
 
-2. **Financial knowledge graph** — Extract supplier/customer/competitor relationships from 10-K filings, build a dynamic knowledge graph, and predict return spillovers via GNN.
+**Architecture**: 4 specialized LangGraph agents process financial documents in parallel and produce a confidence-weighted BUY/SELL/HOLD recommendation:
 
-3. **Regime-aware pairs trading** — HMM regime detection overlay with Hierarchical Risk Parity portfolio construction.
+```
+START ──> Filing Analyst ──────┐
+     ──> Earnings Analyst ─────┤──> Research Coordinator ──> BUY/SELL/HOLD
+     ──> News Synthesizer ─────┘
+```
 
 ## Setup
 
 ```bash
-# Clone and install
 git clone https://github.com/lexilei/alpha-graph.git
 cd alpha-graph
 pip install -e ".[dev]"
 
-# Configure API keys
 cp .env.example .env
 # Edit .env with your credentials
 ```
@@ -27,35 +29,62 @@ cp .env.example .env
 
 | Service | Purpose | Cost |
 |---------|---------|------|
-| SEC EDGAR | 10-K/10-Q filings | Free (just need name + email) |
-| Finnhub | Earnings transcripts, news | Free tier (60 req/min) |
-| OpenAI | GPT-4o-mini for filing analysis | ~$20-40/month |
-| Alpaca | Market data + paper trading | Free |
+| SEC EDGAR | 10-K/10-Q/8-K filings | Free (name + email) |
+| Finnhub | Earnings transcripts | Free tier (60 req/min) |
+| OpenAI | GPT-4o-mini for agent analysis | ~$20-40/month |
 
 ## Usage
 
 ```bash
-# Download SEC filings for S&P 500 companies
-python -m alpha_graph.data.filings
+# 1. Download data
+python -m alpha_graph.data.filings --tickers AAPL MSFT GOOGL --years-back 3
+python -m alpha_graph.data.transcripts --tickers AAPL MSFT GOOGL
+python -m alpha_graph.data.market --tickers AAPL MSFT GOOGL
 
-# Compute Lazy Prices similarity scores
-python -m alpha_graph.signals.lazy_prices
+# 2. Generate signals
+python -m alpha_graph.signals.lazy_prices          # Cosine similarity signal
+python -m alpha_graph.signals.filing_changes       # LLM change detection
 
-# Fetch earnings call transcripts
-python -m alpha_graph.data.transcripts
+# 3. Run multi-agent pipeline
+python -m alpha_graph.agents.pipeline --tickers AAPL MSFT GOOGL
+
+# 4. Backtest
+python -m alpha_graph.backtest.engine
 ```
 
 ## Project structure
 
 ```
 src/alpha_graph/
-    config.py          # Central configuration
+    config.py                  # Central configuration (.env)
     data/
-        universe.py    # S&P 500 ticker management
-        filings.py     # SEC EDGAR filing downloader
-        transcripts.py # Earnings call transcript collector
+        universe.py            # S&P 500 ticker management
+        filings.py             # SEC EDGAR 10-K/10-Q/8-K downloader
+        transcripts.py         # Finnhub earnings call transcripts
+        market.py              # yfinance price/return data
     signals/
-        lazy_prices.py # Cosine similarity between consecutive filings
-    agents/            # LLM agent pipeline (Week 3-4)
-    utils/
+        lazy_prices.py         # TF-IDF cosine similarity (quantitative)
+        filing_changes.py      # LLM-enhanced change detection (qualitative)
+    agents/
+        state.py               # Shared PipelineState definition
+        filing_analyst.py      # Filing Analyst (Lazy Prices + LLM)
+        earnings_analyst.py    # Earnings Call Analyst (communication scoring)
+        news_synthesizer.py    # News Synthesizer (8-K material events)
+        coordinator.py         # Research Coordinator (signal combiner)
+        pipeline.py            # LangGraph orchestration
+    backtest/
+        engine.py              # Walk-forward backtest, Deflated Sharpe Ratio
+```
+
+## Methodology
+
+- **Walk-forward validation**: purged CV with 5-day gap to prevent leakage
+- **Transaction costs**: 10 bps round-trip for liquid large-caps
+- **Deflated Sharpe Ratio**: accounts for multiple testing (Bailey & Lopez de Prado 2014)
+- **Long-short portfolio**: top/bottom decile by combined signal score
+
+## Tests
+
+```bash
+pytest tests/ -v
 ```

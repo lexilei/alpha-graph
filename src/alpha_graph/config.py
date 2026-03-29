@@ -40,7 +40,7 @@ class Config:
     max_tickers: int = 100  # start with top 100 for speed
 
     # Filing settings
-    filing_types: list[str] = field(default_factory=lambda: ["10-K", "10-Q"])
+    filing_types: list[str] = field(default_factory=lambda: ["10-K", "10-Q", "8-K"])
     filing_years_back: int = 5
 
     # LLM settings
