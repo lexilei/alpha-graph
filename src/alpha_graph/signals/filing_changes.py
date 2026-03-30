@@ -22,6 +22,8 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
+from alpha_graph.utils.llm import extract_json
+
 from alpha_graph.config import CACHE_DIR, FILINGS_DIR, cfg
 
 CHANGE_ANALYSIS_PROMPT = """\
@@ -105,10 +107,13 @@ def analyze_filing_changes(
     """
     from openai import OpenAI
 
-    if not cfg.openai_api_key:
-        raise ValueError("OPENAI_API_KEY not set. Add it to .env")
+    if not cfg.llm_api_key:
+        raise ValueError("LLM_API_KEY not set. Add it to .env")
 
-    client = OpenAI(api_key=cfg.openai_api_key)
+    client = OpenAI(
+        api_key=cfg.llm_api_key,
+        base_url=cfg.llm_base_url or None,
+    )
 
     prompt = CHANGE_ANALYSIS_PROMPT.format(
         prev_date=prev_filing["filing_date"],
@@ -125,7 +130,7 @@ def analyze_filing_changes(
     )
 
     try:
-        result = json.loads(response.choices[0].message.content)
+        result = extract_json(response.choices[0].message.content)
     except (json.JSONDecodeError, IndexError) as e:
         logger.error(f"Failed to parse LLM response: {e}")
         result = {"changes": [], "overall_score": 0, "summary": "Parse error"}

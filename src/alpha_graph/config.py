@@ -25,8 +25,16 @@ class Config:
     finnhub_api_key: str = field(
         default_factory=lambda: os.getenv("FINNHUB_API_KEY", "")
     )
-    openai_api_key: str = field(
-        default_factory=lambda: os.getenv("OPENAI_API_KEY", "")
+    llm_api_key: str = field(
+        default_factory=lambda: os.getenv(
+            "LLM_API_KEY", os.getenv("TOGETHER_API_KEY", os.getenv("OPENAI_API_KEY", ""))
+        )
+    )
+    llm_base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "LLM_BASE_URL",
+            "https://api.together.xyz/v1" if os.getenv("TOGETHER_API_KEY") else "",
+        )
     )
     alpaca_api_key: str = field(
         default_factory=lambda: os.getenv("ALPACA_API_KEY", "")
@@ -43,8 +51,10 @@ class Config:
     filing_types: list[str] = field(default_factory=lambda: ["10-K", "10-Q", "8-K"])
     filing_years_back: int = 5
 
-    # LLM settings
-    llm_model: str = "gpt-4o-mini"
+    # LLM settings (works with any OpenAI-compatible API: OpenAI, Together, Groq, etc.)
+    llm_model: str = field(
+        default_factory=lambda: os.getenv("LLM_MODEL", "deepseek-ai/DeepSeek-V3")
+    )
     llm_temperature: float = 0.0
 
     def validate(self) -> list[str]:

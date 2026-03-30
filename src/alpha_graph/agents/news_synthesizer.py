@@ -26,6 +26,7 @@ from loguru import logger
 
 from alpha_graph.agents.state import AgentSignal, PipelineState
 from alpha_graph.config import cfg
+from alpha_graph.utils.llm import extract_json
 
 SYSTEM_PROMPT = """\
 You are a News Synthesizer at a quantitative trading firm. Your job is to
@@ -88,7 +89,8 @@ def news_synthesizer(state: PipelineState) -> dict:
     llm = ChatOpenAI(
         model=cfg.llm_model,
         temperature=cfg.llm_temperature,
-        api_key=cfg.openai_api_key,
+        api_key=cfg.llm_api_key,
+        base_url=cfg.llm_base_url or None,
     )
 
     messages = [
@@ -102,7 +104,7 @@ def news_synthesizer(state: PipelineState) -> dict:
 
     try:
         response = llm.invoke(messages)
-        result = json.loads(response.content)
+        result = extract_json(response.content)
     except Exception as e:
         logger.error(f"[{ticker}] News Synthesizer LLM call failed: {e}")
         return {"signals": []}
