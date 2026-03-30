@@ -119,9 +119,8 @@ def build_monthly_signal_panel(
     return panels
 
 
-def run_walk_forward() -> pd.DataFrame | None:
-    """Execute the full walk-forward backtest."""
-    # Load data
+def _load_data() -> tuple[pd.DataFrame, pd.DataFrame] | None:
+    """Load signals and market data."""
     signals = build_historical_signals()
     if signals.empty:
         return None
@@ -131,6 +130,29 @@ def run_walk_forward() -> pd.DataFrame | None:
         logger.error("Run market data download first")
         return None
     market = pd.read_parquet(market_path)
+    return signals, market
+
+
+def _load_regimes() -> pd.DataFrame:
+    """Load regime data, fitting HMM if needed."""
+    regime_path = CACHE_DIR / "regimes.parquet"
+    if regime_path.exists():
+        return pd.read_parquet(regime_path)
+
+    from alpha_graph.signals.regime import detect_regimes
+    return detect_regimes()
+
+
+def run_walk_forward(use_regime_filter: bool = False) -> pd.DataFrame | None:
+    """Execute the full walk-forward backtest.
+
+    Args:
+        use_regime_filter: if True, scale position weights by HMM regime exposure.
+    """
+    data = _load_data()
+    if data is None:
+        return None
+    signals, market = data
 
     # Build monthly panels
     panels = build_monthly_signal_panel(signals, market)
@@ -140,6 +162,16 @@ def run_walk_forward() -> pd.DataFrame | None:
         logger.error("No valid rebalancing periods")
         return None
 
+    # Load regimes if needed
+    regimes = None
+    if use_regime_filter:
+        regimes = _load_regimes()
+        if regimes.empty:
+            logger.warning("No regime data — running without filter")
+            use_regime_filter = False
+        else:
+            regimes["date"] = pd.to_datetime(regimes["date"])
+
     # Run backtest across all periods
     config = BacktestConfig(top_n_long=10, top_n_short=10, cost_bps=10)
     results = []
@@ -147,7 +179,6 @@ def run_walk_forward() -> pd.DataFrame | None:
     for date_str, panel in sorted(panels.items()):
         n_long = (panel["combined_score"] > 0).sum()
         n_short = (panel["combined_score"] < 0).sum()
-        n_neutral = (panel["combined_score"] == 0).sum()
 
         # Adjust portfolio size based on available signals
         adj_long = min(config.top_n_long, max(n_long, 1))
@@ -157,9 +188,26 @@ def run_walk_forward() -> pd.DataFrame | None:
         )
 
         portfolio = build_long_short_portfolio(panel, adj_config)
+
+        # Apply regime filter: scale weights by exposure multipliers
+        regime_label = "MEAN_REVERTING"  # default
+        if use_regime_filter and regimes is not None:
+            rebal_date = pd.Timestamp(date_str)
+            # Get regime as of rebalance date (most recent available)
+            past_regimes = regimes[regimes["date"] <= rebal_date]
+            if not past_regimes.empty:
+                latest = past_regimes.iloc[-1]
+                regime_label = latest["regime"]
+                long_mult = latest["long_exposure"]
+                short_mult = latest["short_exposure"]
+
+                portfolio.loc[portfolio["position"] == "LONG", "weight"] *= long_mult
+                portfolio.loc[portfolio["position"] == "SHORT", "weight"] *= short_mult
+
         period_result = compute_portfolio_return(portfolio, adj_config)
         period_result["date"] = date_str
         period_result["n_tickers_with_signal"] = len(panel)
+        period_result["regime"] = regime_label
         results.append(period_result)
 
     results_df = pd.DataFrame(results)
@@ -199,48 +247,72 @@ def run_benchmark() -> pd.Series:
     return spy_monthly
 
 
-def main():
-    results = run_walk_forward()
-    if results is None:
-        print("Walk-forward backtest failed — check data availability.")
-        return
-
-    # Performance metrics
+def _print_results(results: pd.DataFrame, title: str, spy_returns: pd.Series):
+    """Print backtest results with tearsheet."""
     returns = results["net_return"]
 
     print("\n" + "=" * 60)
-    print("  WALK-FORWARD BACKTEST: LAZY PRICES LONG-SHORT")
+    print(f"  {title}")
     print("=" * 60)
 
-    # Per-period results
     print("\n--- Monthly Returns ---")
     for _, row in results.iterrows():
+        regime_str = f"  [{row['regime']}]" if "regime" in row and row.get("regime") else ""
         print(
             f"  {row['date'].strftime('%Y-%m')}: "
             f"net={row['net_return']:+.2%}  "
             f"gross={row['gross_return']:+.2%}  "
-            f"positions={row['n_positions']:.0f}  "
-            f"tickers={row['n_tickers_with_signal']:.0f}"
+            f"pos={row['n_positions']:.0f}"
+            f"{regime_str}"
         )
 
-    # Tearsheet
-    spy_returns = run_benchmark()
-    # Align benchmark to same months as strategy
+    # Align benchmark
+    benchmark = None
     if not spy_returns.empty:
         strategy_months = pd.to_datetime(results["date"]).dt.to_period("M")
         spy_monthly = spy_returns.copy()
         spy_monthly.index = spy_monthly.index.to_period("M")
         aligned_spy = spy_monthly[spy_monthly.index.isin(strategy_months)]
         benchmark = aligned_spy.reset_index(drop=True)
-    else:
-        benchmark = None
 
     print("\n" + generate_tearsheet(returns, benchmark))
 
+
+def main():
+    # Run both versions
+    results_raw = run_walk_forward(use_regime_filter=False)
+    results_regime = run_walk_forward(use_regime_filter=True)
+
+    if results_raw is None:
+        print("Walk-forward backtest failed — check data availability.")
+        return
+
+    spy_returns = run_benchmark()
+
+    _print_results(results_raw, "LAZY PRICES — NO REGIME FILTER", spy_returns)
+
+    if results_regime is not None:
+        _print_results(results_regime, "LAZY PRICES — WITH HMM REGIME FILTER", spy_returns)
+
+        # Comparison
+        raw_metrics = compute_performance_metrics(results_raw["net_return"])
+        regime_metrics = compute_performance_metrics(results_regime["net_return"])
+        print("\n" + "=" * 60)
+        print("  REGIME FILTER IMPACT")
+        print("=" * 60)
+        print(f"  Sharpe:     {raw_metrics['sharpe']:+.3f}  ->  {regime_metrics['sharpe']:+.3f}")
+        print(f"  Return:     {raw_metrics['total_return']:+.2%}  ->  {regime_metrics['total_return']:+.2%}")
+        print(f"  Max DD:     {raw_metrics['max_drawdown']:.2%}  ->  {regime_metrics['max_drawdown']:.2%}")
+        print(f"  % Positive: {raw_metrics['pct_positive']:.1%}  ->  {regime_metrics['pct_positive']:.1%}")
+        print("=" * 60)
+
     # Save results
     out_path = CACHE_DIR / "walk_forward_results.parquet"
-    results.to_parquet(out_path, index=False)
-    logger.info(f"Saved walk-forward results to {out_path}")
+    results_raw.to_parquet(out_path, index=False)
+    if results_regime is not None:
+        out_path_regime = CACHE_DIR / "walk_forward_results_regime.parquet"
+        results_regime.to_parquet(out_path_regime, index=False)
+    logger.info(f"Saved walk-forward results to {CACHE_DIR}")
 
 
 if __name__ == "__main__":
