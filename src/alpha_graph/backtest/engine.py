@@ -163,6 +163,10 @@ def compute_performance_metrics(returns: pd.Series, risk_free_rate: float = 0.05
     Returns:
         Dict with Sharpe, Sortino, max drawdown, etc.
     """
+    # Flatten to a plain 1-D Series of floats
+    returns = pd.Series(returns.values.flatten(), dtype=float)
+    returns = returns.dropna()
+
     if returns.empty or returns.std() == 0:
         return {"sharpe": 0.0, "sortino": 0.0, "max_drawdown": 0.0}
 
@@ -176,7 +180,7 @@ def compute_performance_metrics(returns: pd.Series, risk_free_rate: float = 0.05
 
     # Sortino (downside deviation only)
     downside = excess_returns[excess_returns < 0]
-    downside_std = downside.std() if len(downside) > 0 else excess_returns.std()
+    downside_std = float(downside.std()) if len(downside) > 0 else float(excess_returns.std())
     sortino = np.sqrt(periods_per_year) * excess_returns.mean() / downside_std if downside_std > 0 else 0.0
 
     # Max drawdown
