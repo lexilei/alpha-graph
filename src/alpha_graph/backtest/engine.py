@@ -58,12 +58,13 @@ def load_signals_and_returns() -> pd.DataFrame | None:
     signals = pd.read_parquet(signals_path)
     market = pd.read_parquet(market_path)
 
-    # Get the latest price date for each ticker to compute forward returns
+    # Get the latest row with valid forward returns for each ticker
+    valid_market = market.dropna(subset=["ret_21d"])
     latest_prices = (
-        market.sort_values("date")
+        valid_market.sort_values("date")
         .groupby("ticker")
-        .tail(1)[["ticker", "ret_21d"]]
-        .rename(columns={"ret_21d": "fwd_return_21d"})
+        .tail(1)[["ticker", "date", "ret_21d"]]
+        .rename(columns={"ret_21d": "fwd_return_21d", "date": "price_date"})
     )
 
     merged = signals.merge(latest_prices, on="ticker", how="inner")

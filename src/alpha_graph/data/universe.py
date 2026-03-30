@@ -21,7 +21,12 @@ def get_sp500_tickers(max_tickers: int | None = None) -> list[str]:
         tickers = pd.read_csv(cache_path)["ticker"].tolist()
     else:
         logger.info("Fetching S&P 500 constituents from Wikipedia...")
-        table = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]
+        import urllib.request
+        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+        req = urllib.request.Request(url, headers={"User-Agent": "alpha-graph/0.1"})
+        html = urllib.request.urlopen(req).read().decode("utf-8")
+        from io import StringIO
+        table = pd.read_html(StringIO(html))[0]
         tickers = table["Symbol"].str.replace(".", "-", regex=False).tolist()
         pd.DataFrame({"ticker": tickers}).to_csv(cache_path, index=False)
         logger.info(f"Cached {len(tickers)} tickers to {cache_path}")
