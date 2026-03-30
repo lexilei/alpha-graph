@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Financial knowledge graph and multi-agent LLM pipeline for quantitative trading signals"
 requires-python = ">=3.10"
 dependencies = [
+    "alpaca-py>=0.30",
     "edgartools>=3.0",
     "finnhub-python>=2.4",
     "openai>=1.0",

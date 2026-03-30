@@ -44,12 +44,19 @@ python -m alpha_graph.data.market --tickers AAPL MSFT GOOGL
 # 2. Generate signals
 python -m alpha_graph.signals.lazy_prices          # Cosine similarity signal
 python -m alpha_graph.signals.filing_changes       # LLM change detection
+python -m alpha_graph.signals.regime               # HMM regime detection
 
 # 3. Run multi-agent pipeline
-python -m alpha_graph.agents.pipeline --tickers AAPL MSFT GOOGL
+python -m alpha_graph.agents.pipeline --max-tickers 100
 
 # 4. Backtest
-python -m alpha_graph.backtest.engine
+python -m alpha_graph.backtest.walk_forward        # Walk-forward (24 months OOS)
+python -m alpha_graph.backtest.combined            # Combined LLM + regime
+python -m alpha_graph.backtest.tearsheet           # Generate HTML reports
+
+# 5. Paper trading (requires Alpaca account)
+python -m alpha_graph.trading.executor --dry-run   # Simulate trades
+python -m alpha_graph.trading.executor --live      # Submit paper trades
 ```
 
 ## Project structure
@@ -65,6 +72,7 @@ src/alpha_graph/
     signals/
         lazy_prices.py         # TF-IDF cosine similarity (quantitative)
         filing_changes.py      # LLM-enhanced change detection (qualitative)
+        regime.py              # 3-state Gaussian HMM regime detector
     agents/
         state.py               # Shared PipelineState definition
         filing_analyst.py      # Filing Analyst (Lazy Prices + LLM)
@@ -73,15 +81,34 @@ src/alpha_graph/
         coordinator.py         # Research Coordinator (signal combiner)
         pipeline.py            # LangGraph orchestration
     backtest/
-        engine.py              # Walk-forward backtest, Deflated Sharpe Ratio
+        engine.py              # Portfolio construction, performance metrics
+        walk_forward.py        # Walk-forward backtest (Lazy Prices, 24mo OOS)
+        combined.py            # Combined LLM pipeline + regime filter
+        tearsheet.py           # Quantstats HTML report generation
+    trading/
+        executor.py            # Alpaca paper trading executor
+reports/
+    tearsheet_*.html           # Generated performance tearsheets
+METHODOLOGY.md                 # Full methodology for interview discussion
 ```
 
-## Methodology
+## Results
 
-- **Walk-forward validation**: purged CV with 5-day gap to prevent leakage
-- **Transaction costs**: 10 bps round-trip for liquid large-caps
-- **Deflated Sharpe Ratio**: accounts for multiple testing (Bailey & Lopez de Prado 2014)
-- **Long-short portfolio**: top/bottom decile by combined signal score
+### Walk-forward (24 months out-of-sample, Lazy Prices signal)
+
+| Variant | Sharpe | Return | Max DD | % Positive |
+|---------|--------|--------|--------|------------|
+| No filter | -1.49 | -25.3% | -28.1% | 37.5% |
+| HMM regime filter | -1.04 | -19.9% | -28.6% | 50.0% |
+
+### Multi-agent LLM pipeline (single-period, 100 tickers)
+
+| Metric | Value |
+|--------|-------|
+| Net return | +5.64% |
+| Short leg | +11.71% (correctly shorted CNC -25%, CPB -18%, BA -17%) |
+
+See [METHODOLOGY.md](METHODOLOGY.md) for full discussion of economic hypothesis, what works, what doesn't, and the three interview questions.
 
 ## Tests
 
