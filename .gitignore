@@ -27,9 +27,7 @@ data/cache/
 # Jupyter
 .ipynb_checkpoints/
 
-# Report (large binary files)
-report/*.pdf
-report/*.png
+# Report build artifacts
 report/*.aux
 report/*.log
 report/*.out
