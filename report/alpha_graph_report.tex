@@ -310,6 +310,15 @@ An ICIR of 0.61 exceeds the $0.5$ threshold commonly considered indicative of a 
 
 \subsection{Long/Short Portfolio Performance}
 
+Figure~\ref{fig:cumret} compares the cumulative performance of the ML combiner long/short portfolio against the Lazy Prices baseline and the S\&P~500 index.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig1_cumulative_return.png}
+\caption{Cumulative return comparison over 24 out-of-sample months. The ML combiner (blue) achieves +80.5\% cumulative return with Sharpe 1.77, versus $-$25.3\% for the Lazy Prices baseline (red) and +44.8\% for S\&P~500 long-only (green).}
+\label{fig:cumret}
+\end{figure}
+
 Table~\ref{tab:performance} compares the ML combiner portfolio against the baseline Lazy Prices signal and the S\&P~500 benchmark.
 
 \begin{table}[H]
@@ -332,6 +341,15 @@ Worst Month & $-9.0\%$ & $-8.3\%$ & --- \\
 \end{table}
 
 \subsection{Monthly Return Decomposition}
+
+Figure~\ref{fig:monthly} visualizes the monthly long and short leg contributions. The short leg (red) contributes substantial alpha from August~2025 onward.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig2_monthly_returns.png}
+\caption{Monthly return decomposition. Blue bars: long leg return. Red bars: short leg return. Black line: net long/short return after 20~bps transaction costs.}
+\label{fig:monthly}
+\end{figure}
 
 Table~\ref{tab:monthly} provides the full monthly return decomposition into long and short legs.
 
@@ -373,6 +391,48 @@ Month & Long Leg & Short Leg & Net Return \\
 \end{table}
 
 The short leg contributes substantial alpha in the second half of the test period (August 2025 onward), correctly identifying underperforming stocks during a period of market rotation away from momentum names.
+
+\subsection{Information Coefficient and Feature Importance}
+
+Figure~\ref{fig:ic} shows the monthly out-of-sample IC. The signal is positive in 18 of 24 months (75\%), with a mean IC of 0.062 and ICIR of 0.61.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig3_monthly_ic.png}
+\caption{Walk-forward Spearman IC by month. Blue: positive IC. Red: negative IC. Dashed line: mean IC = 0.062.}
+\label{fig:ic}
+\end{figure}
+
+Figure~\ref{fig:importance} shows the LightGBM feature importance. The 8-K event score dominates, followed by event count and 21-day momentum. The original Lazy Prices cosine similarity has zero importance, subsumed by the higher-frequency event signal.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{fig4_feature_importance.png}
+\caption{LightGBM feature importance (split count). The 8-K event score is the dominant predictor.}
+\label{fig:importance}
+\end{figure}
+
+\subsection{Market Regime Analysis}
+
+Figure~\ref{fig:regime} shows the HMM regime classification over the sample period. The market spent 76\% of days in the \emph{Trending} regime (green), which explains the strong drag on short positions for the Lazy Prices baseline.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig5_regime_timeline.png}
+\caption{HMM 3-state regime classification. Green: Trending (556 days). Blue: Mean-Reverting (90 days). Red: Crisis (85 days).}
+\label{fig:regime}
+\end{figure}
+
+\subsection{Drawdown Analysis}
+
+Figure~\ref{fig:drawdown} compares the drawdown profiles. The ML combiner's maximum drawdown of $-$13.3\% is less than half that of the Lazy Prices baseline ($-$28.1\%).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig6_drawdown.png}
+\caption{Drawdown comparison. The ML combiner (blue) maintains significantly shallower drawdowns than the Lazy Prices baseline (red).}
+\label{fig:drawdown}
+\end{figure}
 
 \subsection{Regime Filter Impact}
 

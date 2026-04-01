@@ -43,23 +43,38 @@
 \@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces Walk-forward IC statistics (24 months OOS).}}{6}{table.caption.8}\protected@file@percent }
 \newlabel{tab:ic}{{7}{6}{Walk-forward IC statistics (24 months OOS)}{table.caption.8}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Long/Short Portfolio Performance}{6}{subsection.6.2}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces Portfolio performance comparison (March 2024 -- February 2026).}}{6}{table.caption.9}\protected@file@percent }
-\newlabel{tab:performance}{{8}{6}{Portfolio performance comparison (March 2024 -- February 2026)}{table.caption.9}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Monthly Return Decomposition}{6}{subsection.6.3}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces Monthly return decomposition (top/bottom 10 tickers).}}{7}{table.caption.10}\protected@file@percent }
-\newlabel{tab:monthly}{{9}{7}{Monthly return decomposition (top/bottom 10 tickers)}{table.caption.10}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Regime Filter Impact}{7}{subsection.6.4}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {10}{\ignorespaces Regime filter impact on Lazy Prices signal.}}{7}{table.caption.11}\protected@file@percent }
-\newlabel{tab:regime_impact}{{10}{7}{Regime filter impact on Lazy Prices signal}{table.caption.11}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {7}Discussion}{7}{section.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Why the ML Combiner Outperforms}{7}{subsection.7.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Cumulative return comparison over 24 out-of-sample months. The ML combiner (blue) achieves +80.5\% cumulative return with Sharpe 1.77, versus $-$25.3\% for the Lazy Prices baseline (red) and +44.8\% for S\&P~500 long-only (green).}}{6}{figure.caption.9}\protected@file@percent }
+\newlabel{fig:cumret}{{2}{6}{Cumulative return comparison over 24 out-of-sample months. The ML combiner (blue) achieves +80.5\% cumulative return with Sharpe 1.77, versus $-$25.3\% for the Lazy Prices baseline (red) and +44.8\% for S\&P~500 long-only (green)}{figure.caption.9}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces Portfolio performance comparison (March 2024 -- February 2026).}}{7}{table.caption.10}\protected@file@percent }
+\newlabel{tab:performance}{{8}{7}{Portfolio performance comparison (March 2024 -- February 2026)}{table.caption.10}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Monthly Return Decomposition}{7}{subsection.6.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Monthly return decomposition. Blue bars: long leg return. Red bars: short leg return. Black line: net long/short return after 20~bps transaction costs.}}{7}{figure.caption.11}\protected@file@percent }
+\newlabel{fig:monthly}{{3}{7}{Monthly return decomposition. Blue bars: long leg return. Red bars: short leg return. Black line: net long/short return after 20~bps transaction costs}{figure.caption.11}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces Monthly return decomposition (top/bottom 10 tickers).}}{8}{table.caption.12}\protected@file@percent }
+\newlabel{tab:monthly}{{9}{8}{Monthly return decomposition (top/bottom 10 tickers)}{table.caption.12}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Information Coefficient and Feature Importance}{8}{subsection.6.4}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Walk-forward Spearman IC by month. Blue: positive IC. Red: negative IC. Dashed line: mean IC = 0.062.}}{9}{figure.caption.13}\protected@file@percent }
+\newlabel{fig:ic}{{4}{9}{Walk-forward Spearman IC by month. Blue: positive IC. Red: negative IC. Dashed line: mean IC = 0.062}{figure.caption.13}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces LightGBM feature importance (split count). The 8-K event score is the dominant predictor.}}{9}{figure.caption.14}\protected@file@percent }
+\newlabel{fig:importance}{{5}{9}{LightGBM feature importance (split count). The 8-K event score is the dominant predictor}{figure.caption.14}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Market Regime Analysis}{9}{subsection.6.5}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces HMM 3-state regime classification. Green: Trending (556 days). Blue: Mean-Reverting (90 days). Red: Crisis (85 days).}}{10}{figure.caption.15}\protected@file@percent }
+\newlabel{fig:regime}{{6}{10}{HMM 3-state regime classification. Green: Trending (556 days). Blue: Mean-Reverting (90 days). Red: Crisis (85 days)}{figure.caption.15}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.6}Drawdown Analysis}{10}{subsection.6.6}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces Drawdown comparison. The ML combiner (blue) maintains significantly shallower drawdowns than the Lazy Prices baseline (red).}}{10}{figure.caption.16}\protected@file@percent }
+\newlabel{fig:drawdown}{{7}{10}{Drawdown comparison. The ML combiner (blue) maintains significantly shallower drawdowns than the Lazy Prices baseline (red)}{figure.caption.16}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.7}Regime Filter Impact}{10}{subsection.6.7}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {10}{\ignorespaces Regime filter impact on Lazy Prices signal.}}{10}{table.caption.17}\protected@file@percent }
+\newlabel{tab:regime_impact}{{10}{10}{Regime filter impact on Lazy Prices signal}{table.caption.17}{}}
 \citation{kim2025earnings}
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Limitations and Caveats}{8}{subsection.7.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Extensions}{8}{subsection.7.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {8}System Architecture}{8}{section.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Discussion}{11}{section.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Why the ML Combiner Outperforms}{11}{subsection.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Limitations and Caveats}{11}{subsection.7.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Extensions}{11}{subsection.7.3}\protected@file@percent }
 \bibstyle{plainnat}
 \bibcite{cohen2020lazy}{{1}{2020}{{Cohen et~al.}}{{}}}
 \bibcite{ke2017lightgbm}{{2}{2017}{{Ke et~al.}}{{}}}
 \bibcite{kim2025earnings}{{3}{2025}{{Kim \& Blouin}}{{}}}
-\@writefile{toc}{\contentsline {section}{\numberline {9}Conclusion}{9}{section.9}\protected@file@percent }
-\gdef \@abspage@last{9}
+\@writefile{toc}{\contentsline {section}{\numberline {8}System Architecture}{12}{section.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {9}Conclusion}{12}{section.9}\protected@file@percent }
+\gdef \@abspage@last{12}
