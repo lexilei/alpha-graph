@@ -27,6 +27,13 @@ data/cache/
 # Jupyter
 .ipynb_checkpoints/
 
+# Report (large binary files)
+report/*.pdf
+report/*.png
+report/*.aux
+report/*.log
+report/*.out
+
 # OS
 .DS_Store
 Thumbs.db
