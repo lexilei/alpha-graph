@@ -36,6 +36,11 @@ class BacktestConfig:
     # Position sizing
     top_n_long: int = 10  # number of stocks in long leg
     top_n_short: int = 10  # number of stocks in short leg
+    # Position limits
+    max_position_pct: float = 0.05  # max 5% in any single stock
+    max_sector_pct: float = 0.30  # max 30% in any single sector
+    # Signal-weighted positions (vs equal-weight)
+    signal_weighted: bool = True  # weight by signal strength
     # Evaluation
     holding_period_days: int = 21  # ~1 month forward returns
     # Walk-forward
@@ -79,7 +84,11 @@ def build_long_short_portfolio(
 
     Long leg: top N stocks by combined_score (most bullish)
     Short leg: bottom N stocks by combined_score (most bearish)
-    Equal-weighted within each leg.
+
+    Improvements over equal-weight:
+    - Signal-weighted positions (stronger signals get more weight)
+    - Max position cap (default 5% per stock)
+    - Sector diversification constraint (max 30% in any sector)
     """
     signals = signals.sort_values("combined_score", ascending=False)
 
@@ -87,11 +96,95 @@ def build_long_short_portfolio(
     short_leg = signals.tail(config.top_n_short).copy()
 
     long_leg["position"] = "LONG"
-    long_leg["weight"] = 1.0 / config.top_n_long
     short_leg["position"] = "SHORT"
-    short_leg["weight"] = -1.0 / config.top_n_short
+
+    if config.signal_weighted and long_leg["combined_score"].std() > 0.01:
+        # Signal-weighted: weight proportional to signal strength
+        long_leg["raw_weight"] = long_leg["combined_score"].abs()
+        long_sum = long_leg["raw_weight"].sum()
+        if long_sum > 0:
+            long_leg["weight"] = long_leg["raw_weight"] / long_sum
+        else:
+            long_leg["weight"] = 1.0 / config.top_n_long
+    else:
+        long_leg["weight"] = 1.0 / config.top_n_long
+
+    if config.signal_weighted and short_leg["combined_score"].std() > 0.01:
+        short_leg["raw_weight"] = short_leg["combined_score"].abs()
+        short_sum = short_leg["raw_weight"].sum()
+        if short_sum > 0:
+            short_leg["weight"] = -(short_leg["raw_weight"] / short_sum)
+        else:
+            short_leg["weight"] = -1.0 / config.top_n_short
+    else:
+        short_leg["weight"] = -1.0 / config.top_n_short
 
     portfolio = pd.concat([long_leg, short_leg], ignore_index=True)
+
+    # Apply max position cap
+    portfolio["weight"] = portfolio["weight"].clip(
+        lower=-config.max_position_pct,
+        upper=config.max_position_pct,
+    )
+
+    # Re-normalize so long weights sum to 1 and short weights sum to -1
+    long_mask = portfolio["position"] == "LONG"
+    short_mask = portfolio["position"] == "SHORT"
+
+    long_total = portfolio.loc[long_mask, "weight"].sum()
+    if long_total > 0:
+        portfolio.loc[long_mask, "weight"] /= long_total
+
+    short_total = portfolio.loc[short_mask, "weight"].sum()
+    if short_total < 0:
+        portfolio.loc[short_mask, "weight"] /= abs(short_total)
+
+    # Sector diversification (if sector column available)
+    if "sector" in portfolio.columns:
+        portfolio = _apply_sector_constraint(portfolio, config.max_sector_pct)
+
+    # Clean up temporary columns
+    portfolio = portfolio.drop(columns=["raw_weight"], errors="ignore")
+
+    return portfolio
+
+
+def _apply_sector_constraint(
+    portfolio: pd.DataFrame,
+    max_sector_pct: float,
+) -> pd.DataFrame:
+    """Reduce positions to enforce sector concentration limits.
+
+    For each leg (long/short), if a sector's total absolute weight exceeds
+    max_sector_pct, scale down all positions in that sector proportionally.
+    """
+    portfolio = portfolio.copy()
+
+    for position_type in ["LONG", "SHORT"]:
+        mask = portfolio["position"] == position_type
+        leg = portfolio.loc[mask]
+
+        if leg.empty or "sector" not in leg.columns:
+            continue
+
+        sector_weights = leg.groupby("sector")["weight"].apply(lambda s: s.abs().sum())
+
+        for sector, total_weight in sector_weights.items():
+            if total_weight > max_sector_pct:
+                sector_mask = mask & (portfolio["sector"] == sector)
+                scale_factor = max_sector_pct / total_weight
+                portfolio.loc[sector_mask, "weight"] *= scale_factor
+                logger.debug(
+                    f"Sector cap: {sector} {position_type} scaled by {scale_factor:.2f} "
+                    f"({total_weight:.2%} -> {max_sector_pct:.2%})"
+                )
+
+        # Re-normalize the leg
+        leg_total = portfolio.loc[mask, "weight"].sum()
+        target = 1.0 if position_type == "LONG" else -1.0
+        if abs(leg_total) > 0.01:
+            portfolio.loc[mask, "weight"] *= abs(target / leg_total)
+
     return portfolio
 
 
