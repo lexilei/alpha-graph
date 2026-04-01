@@ -1,111 +1,156 @@
 # Methodology
 
-## Economic hypothesis
+## Economic Hypothesis
 
-Information embedded in SEC filings propagates into stock prices with a measurable delay. Companies that substantially change their 10-K/10-Q language — particularly risk factors, litigation disclosures, and MD&A tone — tend to underperform in subsequent months. This "Lazy Prices" anomaly (Cohen, Malloy & Nguyen, 2020) documented portfolios earning ~188 bps/month by shorting high-change and buying low-change companies.
+Information embedded in SEC filings propagates into stock prices with a measurable delay. Companies that substantially change their 10-K/10-Q language — particularly risk factors, litigation disclosures, and MD&A tone — tend to underperform in subsequent months. This "Lazy Prices" anomaly (Cohen, Malloy & Nguyen, 2020) documented portfolios earning ~188 bps/month alpha.
 
-We extend this with two additions:
+We extend this in three directions:
 
-1. **LLM-enhanced change detection**: Rather than relying solely on TF-IDF cosine similarity, we use a multi-agent LLM pipeline to identify *what specifically changed* — distinguishing material shifts (new litigation, guidance cuts) from boilerplate updates (date changes, formatting). This produces a richer, directional signal versus the binary change/no-change of the original paper.
+1. **8-K event-driven signals**: 8-K filings are filed on material events (auditor changes, M&A, officer departures) and provide ~40x higher signal frequency than annual 10-K filings. We score 25 different 8-K item types and exponentially weight recent events.
 
-2. **HMM regime filtering**: A 3-state Hidden Markov Model classifies market regimes as trending, mean-reverting, or crisis. The long-short signal has most edge during mean-reverting periods. During trending bull markets, the short leg gets crushed by momentum — the regime filter reduces short exposure to 25% in these periods.
+2. **ML signal combination**: A walk-forward LightGBM model combines filing similarity, event scores, market regime, and price features to predict forward 21-day returns. This replaces hardcoded heuristics with learned cross-sectional patterns.
 
-**Why this should work**: Information asymmetry between firms that disclose material changes (which sophisticated investors process first) and the broader market creates a window of predictability. The LLM layer extracts signal that keyword-based approaches miss. The regime filter addresses the well-documented failure mode of mean-reversion strategies in trending markets.
+3. **LLM-enhanced analysis**: Multi-agent LLM pipeline (Filing Analyst, News Synthesizer, Research Coordinator) extracts qualitative assessments that complement quantitative signals.
 
-## System architecture
+**Why this should work**: SEC filings are public but costly to process at scale. Systematic NLP extracts signals from the gap between what's filed and what's priced. The 8-K event signal captures information that arrives throughout the year, not just during annual filing season.
 
-```
-SEC EDGAR ──> Filing Analyst ──────────┐
-(10-K/10-Q)   (Lazy Prices + LLM)     │
-                                       ├──> Research Coordinator ──> Signals
-SEC EDGAR ──> News Synthesizer ────────┤    (confidence-weighted)
-(8-K)         (material events)        │
-                                       │        ┌──> Regime Filter
-Market Data ──────────────────────────>│        │   (HMM 3-state)
-(yfinance)                             │        │
-                                       └────────┴──> Portfolio Constructor
-                                                     (long-short, 10+10)
-```
+## Signal Generation
 
-The multi-agent pipeline uses LangGraph for parallel execution: all three analyst agents run concurrently on each ticker, then the Research Coordinator combines their signals with confidence-weighted averaging.
+### 1. Lazy Prices (TF-IDF Cosine Similarity)
 
-## Backtesting methodology
+For consecutive 10-K filings $(d_{t-1}, d_t)$:
+- TF-IDF vectors with bigrams, 10,000 term vocabulary, English stop words removed
+- Cosine similarity: mean 0.896, std 0.204 across 299 filing pairs
+- Cross-sectional quintile ranking: top quintile (least change) = +1, bottom = -1
+- **Update frequency**: ~1x/year per ticker (major limitation)
 
-### Walk-forward validation
-- **24 monthly out-of-sample periods** (Feb 2024 — Jan 2026)
-- No in-sample optimization — the signal is the raw cosine similarity quintile sort
-- Signals are carried forward from filing date until the next filing (point-in-time, no lookahead)
-- Rebalance monthly at month-end
+### 2. 8-K Event Signal (NEW)
 
-### Transaction cost model
-- **10 bps round-trip** for liquid large-cap US equities
-- Applied per position at each rebalance
-- 20 positions per period (10 long, 10 short) = 200 bps total cost per month
-- This is conservative — actual costs for S&P 500 names are typically 3-5 bps
+Scores 8-K filings by item type:
+| Item | Event | Score |
+|------|-------|-------|
+| 1.01 | Material agreement | +0.30 |
+| 1.02 | Agreement termination | -0.50 |
+| 2.05 | Restructuring costs | -0.40 |
+| 4.01 | Auditor change | -0.70 |
+| 5.02 | Officer departure | -0.30 |
 
-### Risk metrics
-- **Deflated Sharpe Ratio** (Bailey & Lopez de Prado, 2014): adjusts for skewness, kurtosis, and number of strategies tested. Our DSR p-value of 0.059 with the regime filter means we cannot reject the null that the Sharpe is due to chance at 5% significance — this is an honest result.
-- **Sortino Ratio**: penalizes downside volatility only
-- **Maximum Drawdown**: worst peak-to-trough decline
-- **Benchmark**: SPY total return over the same period
+Exponentially-weighted average (λ=0.9 decay per month). 4,146 events across 102 tickers.
+- **Update frequency**: ~40x/year per ticker
+- **This is the dominant predictive feature** (importance = 6, vs cosine_similarity = 0)
 
-### Survivorship bias
-The current implementation uses only currently-listed S&P 500 constituents. This introduces survivorship bias — companies that were delisted or removed from the index during the backtest period are excluded. A production version would use point-in-time constituent lists and delisted stock data (available via EODHD at ~$22/month).
+### 3. HMM Market Regime
+
+3-state Gaussian HMM on S&P 500 features (5-day return, 21-day volatility, volatility ratio).
+Features standardized before fitting. BIC-based model selection between 3 and 4 states.
+
+| Regime | Days | Fraction | Long Exposure | Short Exposure |
+|--------|------|----------|---------------|----------------|
+| Trending | 556 | 76.1% | 100% | 25% |
+| Mean-Reverting | 90 | 12.3% | 100% | 100% |
+| Crisis | 85 | 11.6% | 25% | 25% |
+
+### 4. ML Signal Combiner (LightGBM)
+
+Walk-forward training: 12-month rolling window, 1-month test, 5-day purge gap.
+
+**Features**:
+| Feature | Coverage | Importance |
+|---------|----------|------------|
+| event_score | 100% | 6 |
+| event_count | 100% | 3 |
+| momentum_21d | 97% | 2 |
+| regime_state | 97% | 1 |
+| momentum_5d | 99% | 1 |
+| volume_zscore | 92% | 1 |
+| cosine_similarity | 66% | 0 |
+| volatility_21d | 97% | 0 |
+
+**Walk-forward IC**: Mean 0.062, ICIR 0.61, positive in 18/24 months (75%).
+
+### 5. Multi-Agent LLM Pipeline (Optional)
+
+LangGraph fan-out/fan-in architecture with DeepSeek-V3:
+- **Filing Analyst**: Balanced risk + opportunity prompt. Scores both risk (-1 to 0) and opportunity (0 to +1).
+- **News Synthesizer**: 8-K event categorization and impact scoring.
+- **Research Coordinator**: IC-optimized confidence-weighted signal combination.
+
+## Portfolio Construction
+
+- Monthly rebalance, top 10 long / bottom 10 short
+- Signal-weighted positions (stronger signal = larger weight)
+- Position cap: 5% per stock
+- Sector cap: 30% per sector
+- Transaction costs: 20 bps per rebalance (conservative for S&P 500)
 
 ## Results
 
-### Lazy Prices standalone (no LLM, no regime filter)
+### ML Combiner Long/Short (24-month OOS, Mar 2024 – Feb 2026)
+
 | Metric | Value |
 |--------|-------|
-| Total Return | -25.33% |
-| Annualized Return | -13.59% |
-| Sharpe Ratio | -1.487 |
-| Max Drawdown | -28.05% |
-| % Positive Months | 37.5% |
+| Cumulative Return | **+80.5%** |
+| Annualized Sharpe | **1.77** |
+| Max Drawdown | -13.3% |
+| Positive Months | 71% (17/24) |
+| Avg Monthly Return | +2.61% |
+| Best Month | +11.7% (Dec 2024) |
+| Worst Month | -9.0% (Jan 2025) |
 
-### With HMM regime filter
-| Metric | Value |
-|--------|-------|
-| Total Return | -19.85% |
-| Annualized Return | -10.48% |
-| Sharpe Ratio | -1.043 |
-| Max Drawdown | -28.55% |
-| % Positive Months | 50.0% |
+### Comparison
 
-### Multi-agent LLM pipeline (single-period test, 100 tickers)
-| Metric | Value |
-|--------|-------|
-| Net Return (1 month) | +5.64% |
-| Long leg | -4.07% |
-| Short leg | +11.71% |
+| Strategy | Cum Return | Sharpe | Max DD |
+|----------|-----------|--------|--------|
+| **ML Combiner** | **+80.5%** | **1.77** | **-13.3%** |
+| Lazy Prices + HMM | -19.9% | -1.04 | -28.6% |
+| Lazy Prices (baseline) | -25.3% | -1.49 | -28.1% |
+| S&P 500 | +44.8% | 1.41 | -7.6% |
 
-The regime filter improved every metric: Sharpe improved 30%, win rate went from 37.5% to 50%. The improvement came primarily from reducing short exposure during the 2024 bull market — October 2024 flipped from -2.93% to +3.09%.
+### Performance by Half-Year
 
-## What doesn't work and why
+| Period | Mean IC | Interpretation |
+|--------|---------|----------------|
+| H1 2024 | +0.055 | Momentum works, growth outperforms |
+| H2 2024 | +0.065 | Same regime, consistent signal |
+| H1 2025 | -0.014 | **Momentum crash** — signal fails |
+| H2 2025 | +0.135 | Growth recovers, model works again |
 
-1. **Lazy Prices alone is too sparse**: The signal only updates when a company files a 10-K (once per year). Between filings, the signal is stale. This is why the walk-forward Sharpe is negative — there simply aren't enough signal updates to drive consistent monthly returns.
+## What Doesn't Work and Why
 
-2. **The 2024-2025 market regime was hostile**: A strong bull market punishes short positions regardless of signal quality. The HMM correctly identified this as a TRENDING regime (76% of days), but even with reduced short exposure, momentum dominated.
+### 1. Jan 2025 Momentum Crash (-9.0%)
 
-3. **Quintile sorting with 100 stocks is coarse**: With only ~94 tickers carrying a signal, the top/bottom 10 selection is sensitive to outliers. A larger universe (500+ stocks) with finer decile sorting would produce more stable portfolios.
+The model's long portfolio (APP, CVNA, AXON, BX, ANET) was concentrated in high-beta growth names because `event_score` and `momentum_21d` dominate feature importance. During the Jan 2025 risk-off episode:
+- Long leg: -15.5% (ANET -25.8%, CCL -20.8%, AXON -19.0%)
+- Short leg: -6.8% (defensive names held up: BAX +7.4%, APTV +0.6%)
+- HMM oscillated between CRISIS and MEAN_REVERTING every day
 
-## What would improve it
+**Root cause**: The model is implicitly a momentum + event factor. When momentum reverses, both signals point the wrong way.
 
-1. **Higher-frequency LLM signals**: Run the multi-agent pipeline on 8-K filings (which are event-driven and filed any time) rather than only on annual 10-K filings. This would generate signals throughout the year, not just around filing season.
+### 2. Lazy Prices Signal is Subsumed
 
-2. **Earnings transcript analysis**: The Earnings Call Analyst agent is built but lacks data (Finnhub free tier doesn't include transcripts). Adding this would provide a quarterly signal with documented alpha (247 bps from proactive executives per academic research).
+Cosine similarity has zero feature importance in the final model. The 8-K event signal captures the same information (companies with negative events also tend to rewrite filings) at 40x higher frequency. Lazy Prices alone cannot sustain a monthly-rebalanced portfolio.
 
-3. **Larger universe + delisted stocks**: Expanding to full S&P 500 with survivorship-bias-free data would improve statistical power and reduce sensitivity to individual stock outliers.
+### 3. Survivorship Bias
 
-4. **Knowledge graph spillovers**: Extract supplier/customer relationships from filings and predict cross-company return spillovers via GNN — this is where the graph ML background creates genuine differentiation.
+Only current S&P 500 constituents. Companies removed from the index (typically after underperformance) are excluded, biasing results upward for longs and downward for shorts.
 
-## The three interview questions
+## Improvement Roadmap
+
+1. **Momentum crash protection**: Detect momentum factor drawdown > 10%, auto-reduce long exposure
+2. **Factor diversification**: Add quality, value, low-vol features to reduce momentum dependence
+3. **Regime-aware sizing**: Scale gross exposure by regime (currently ignored by ML combiner)
+4. **Larger universe**: 500 tickers with survivorship-bias-free data
+5. **Earnings transcripts**: Activate earnings_analyst agent (needs paid Finnhub)
+
+See [TODO.md](TODO.md) for the full roadmap.
+
+## Interview Questions
 
 **Why should this work?**
-Information in SEC filings is public but costly to process at scale. Most investors read headlines, not the full 200-page 10-K. Systematic text analysis — both TF-IDF similarity and LLM-based semantic understanding — extracts signals from the gap between what's filed and what's priced. The academic evidence is strong: Cohen et al. (2020) documented 22% annualized alpha from filing language changes; Kim & Blouin (2025) showed LLM-scored earnings transcripts predict returns. Our multi-agent architecture mirrors actual trading desk workflows, with specialist analysts producing independent assessments combined by a coordinator.
+SEC filings are public but costly to process at scale. The 8-K event signal captures material information (auditor changes, officer departures, restructuring) that the market underreacts to. The ML combiner learns cross-sectional patterns from a diverse feature set rather than relying on a single anomaly. ICIR of 0.61 over 24 OOS months provides statistical evidence of predictive power.
 
 **How do you know it's not overfit?**
-Three safeguards: (1) Walk-forward validation with no in-sample optimization — the signal is a simple quintile sort with zero tunable parameters. (2) The Deflated Sharpe Ratio accounts for the total number of strategies tested. (3) Transaction costs are modeled conservatively at 10 bps round-trip, and we report both gross and net returns. The negative standalone Sharpe is itself evidence against overfitting — an overfit strategy would show artificially positive results.
+(1) Walk-forward validation with 5-day purge gap — each month is predicted by a model that never saw future data. (2) Conservative LightGBM hyperparameters (15 leaves, strong L1/L2 regularization). (3) The IC is positive in 75% of months, not just a few lucky periods. (4) Transaction costs modeled at 20 bps. (5) The worst month (-9.0%) and H1 2025 IC collapse are reported honestly.
 
 **What breaks it?**
-Three failure modes: (1) Regime dependence — the signal underperforms in strong momentum markets where the short leg faces unlimited upside. The HMM filter partially addresses this. (2) Signal decay — as more firms adopt LLM-based filing analysis, the information advantage erodes. (3) Filing format changes — SEC XBRL mandates could alter the text structure in ways that break cosine similarity comparisons. The LLM-based analysis is more robust to format changes than TF-IDF.
+(1) Momentum crashes — the model is overweight momentum/growth, which fails during risk-off. (2) Regime dependence — 76% of the test period was trending, favoring long bias. A prolonged bear market would stress the short signal differently. (3) Signal crowding — as more firms adopt NLP filing analysis, the information edge erodes.
