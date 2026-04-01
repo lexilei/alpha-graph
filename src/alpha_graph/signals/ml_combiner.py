@@ -249,8 +249,8 @@ def _merge_asof_signal(
     This is critical for avoiding lookahead bias — we only use signals
     that were available at the time of the observation.
     """
-    panel = panel.sort_values([on, left_date])
-    signal = signal.sort_values([on, right_date])
+    panel = panel.sort_values(left_date)
+    signal = signal.sort_values(right_date)
 
     merged = pd.merge_asof(
         panel,
