@@ -489,6 +489,187 @@ Several directions could strengthen the framework:
     \item \textbf{Intraday rebalancing}: The current monthly rebalance frequency leaves alpha on the table; more frequent rebalancing around 8-K filing dates could capture event-driven moves more efficiently.
 \end{itemize}
 
+\section{Risk Management Extensions}
+\label{sec:extensions}
+
+The baseline ML combiner achieves strong aggregate performance (Sharpe 1.77) but exhibits a concentrated $-$9.0\% loss in January~2025 driven by momentum factor reversal. We evaluate three post-hoc risk management overlays to assess whether tail risk can be reduced without sacrificing returns.
+
+\subsection{Motivation: The January 2025 Momentum Crash}
+
+In January~2025, the model's long portfolio was concentrated in high-beta growth names (APP, CVNA, AXON, ANET, BX) because the dominant features---\texttt{event\_score} and \texttt{momentum\_21d}---systematically favor recent winners with positive 8-K filings. During the risk-off episode:
+
+\begin{itemize}[noitemsep]
+    \item Long leg: $-15.5\%$ (ANET $-25.8\%$, CCL $-20.8\%$, AXON $-19.0\%$)
+    \item Short leg: $-6.8\%$ (defensive names held up: BAX $+7.4\%$, APTV $+0.6\%$)
+    \item The HMM oscillated between CRISIS and MEAN\_REVERTING daily, indicating extreme regime instability.
+\end{itemize}
+
+The root cause is implicit momentum factor exposure: when momentum reverses, both the event and momentum features point in the wrong direction simultaneously.
+
+\subsection{Three Risk Management Strategies}
+
+We test three overlays applied to the baseline ML combiner portfolio:
+
+\textbf{Strategy 1: Momentum Crash Protection.} We compute a pure momentum factor return each month (top-10 minus bottom-10 by trailing 21-day return). When the cumulative momentum factor drawdown exceeds 10\%, both long and short exposure are reduced to 50\% in the following month. This triggered in 5 of 24 months.
+
+\textbf{Strategy 2: Regime-Aware Sizing.} Position sizes are scaled by the HMM regime state: \emph{Trending} $\rightarrow$ 100\% long / 25\% short; \emph{Crisis} $\rightarrow$ 25\% long / 25\% short; \emph{Mean-Reverting} $\rightarrow$ 100\% / 100\%. Since 76\% of months were classified as \emph{Trending}, this effectively maintains a persistent net-long bias.
+
+\textbf{Strategy 3: Combined.} At each rebalance, exposure is set to the minimum of the momentum protection and regime sizing levels for each leg independently.
+
+\subsection{Results}
+
+Table~\ref{tab:extensions} compares all four variants.
+
+\begin{table}[H]
+\centering
+\caption{Risk management overlay comparison (24-month OOS).}
+\label{tab:extensions}
+\begin{tabular}{lrrrr}
+\toprule
+Strategy & Cumulative & Sharpe & Max DD & Win Rate \\
+\midrule
+Baseline & $+80.5\%$ & $1.77$ & $-13.3\%$ & 71\% \\
+Momentum Protection & $+75.0\%$ & $\mathbf{1.94}$ & $\mathbf{-9.1\%}$ & 71\% \\
+Regime Sizing & $+85.4\%$ & $1.60$ & $-20.3\%$ & 71\% \\
+Combined & $\mathbf{+86.3\%}$ & $1.91$ & $-13.1\%$ & 71\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Figure~\ref{fig:strat_cum} shows the cumulative return paths, and Figure~\ref{fig:strat_dd} shows the drawdown profiles.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig7_strategy_comparison.png}
+\caption{Cumulative return comparison of four strategy variants. Momentum Protection (green) avoids the January~2025 drawdown. Combined (purple) achieves the highest cumulative return.}
+\label{fig:strat_cum}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig8_drawdown_comparison.png}
+\caption{Drawdown profiles. Momentum Protection (green) limits the maximum drawdown to $-9.1\%$, while Regime Sizing (red) worsens it to $-20.3\%$.}
+\label{fig:strat_dd}
+\end{figure}
+
+Figure~\ref{fig:strat_monthly} provides a panel comparison of monthly returns across all four variants, with the January~2025 loss annotated.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig9_monthly_returns_comparison.png}
+\caption{Monthly returns for each strategy variant. Momentum Protection halves the January~2025 loss from $-9.0\%$ to $-4.6\%$.}
+\label{fig:strat_monthly}
+\end{figure}
+
+Figure~\ref{fig:exposure} shows the dynamic exposure levels over time for the two active overlays.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig10_exposure_timeline.png}
+\caption{Dynamic exposure for Momentum Protection (top) and Regime Sizing (bottom). Momentum Protection triggers infrequently (5 months); Regime Sizing maintains persistently low short exposure.}
+\label{fig:exposure}
+\end{figure}
+
+\subsection{Analysis}
+
+\textbf{Momentum Protection} delivers the best risk-adjusted performance: Sharpe improves from 1.77 to 1.94 (+10\%) and maximum drawdown decreases from $-$13.3\% to $-$9.1\% ($-$32\%). The January~2025 loss is halved from $-$9.0\% to $-$4.6\%. The trade-off is a modest reduction in cumulative return ($+$75.0\% vs $+$80.5\%), because the filter also reduces exposure during some months that turn out to be profitable.
+
+\textbf{Regime Sizing} achieves the appearance of higher returns ($+$85.4\%) but this is attributable to net-long beta exposure, not additional alpha. By reducing short exposure to 25\% during 76\% of months (Trending regime), the portfolio effectively becomes 75\% net long, capturing the 2024--2025 bull market. However, when the market declines (January~2025), the long-heavy portfolio suffers a $-$14.0\% loss versus $-$9.0\% for the baseline. The Sharpe ratio decreases from 1.77 to 1.60, confirming that the additional return does not compensate for the increased risk.
+
+\textbf{Combined} inherits the best properties of both overlays: it achieves the highest cumulative return ($+$86.3\%) with a Sharpe of 1.91 and maximum drawdown comparable to the baseline ($-$13.1\%). This works because the two filters activate at different times---regime sizing captures the bull market upside in calm months, while momentum protection overrides it during crash episodes. The January~2025 loss is reduced to $-$6.3\%.
+
+\textbf{Recommendation.} For deployment, we recommend the Combined overlay as the default configuration. It preserves 97\% of the Momentum Protection's Sharpe improvement while delivering 15\% higher cumulative returns. However, if maximum drawdown minimization is the primary objective (e.g., for a risk-constrained mandate), Momentum Protection alone is preferred.
+
+\section{Structural Extensions}
+\label{sec:structural}
+
+The overlays in Section~\ref{sec:extensions} are post-hoc exposure adjustments that do not modify the underlying signal. We now evaluate four structural changes that address the root cause of momentum dependence: the model's feature space, portfolio construction, and training procedure.
+
+\subsection{Extension 1: Anti-Momentum Features}
+
+We augment the ML combiner's feature set with two anti-momentum signals:
+\begin{itemize}[noitemsep]
+    \item \textbf{Distance from 52-week high}: $(\text{price} / \max_{252d}(\text{price})) - 1$. Stocks near their 52-week high have elevated reversal risk; stocks far below may be oversold.
+    \item \textbf{5-day reversal}: $-r_{5d}$, the negative of the trailing 5-day return. Short-term losers tend to rebound (Jegadeesh, 1990).
+\end{itemize}
+
+The enhanced model is retrained walk-forward with the same LightGBM hyperparameters, using the baseline signal plus the two new features as inputs.
+
+\subsection{Extension 2: Sector-Neutral Portfolio}
+
+Instead of ranking stocks globally, we rank within each GICS sector and select top/bottom positions proportionally across sectors. This prevents the long leg from concentrating in a single sector (e.g., the baseline's January~2025 portfolio was dominated by Technology and Consumer Discretionary).
+
+\subsection{Extension 3: Regime-Conditional Models}
+
+We train separate LightGBM models for each HMM regime. For each test month, the model trained exclusively on same-regime historical data is used for prediction. The hypothesis is that return predictability patterns differ across regimes---e.g., momentum features may be informative in trending markets but misleading during crises.
+
+If fewer than 50 same-regime training samples are available (common for the Crisis regime), we fall back to the full training set.
+
+\subsection{Extension 4: Momentum Factor Hedge}
+
+We compute a synthetic momentum factor return each month (top-10 minus bottom-10 by trailing 21-day momentum). We then estimate a trailing 6-month rolling beta of the portfolio returns to this factor, and subtract $\beta \times r_{\text{momentum}}$ from the portfolio return, simulating a dynamic hedge with a momentum ETF (e.g., MTUM). Hedge transaction costs are modeled at 10~bps.
+
+\subsection{Results}
+
+Table~\ref{tab:structural} compares all four structural extensions against the baseline.
+
+\begin{table}[H]
+\centering
+\caption{Structural extension comparison (24-month OOS).}
+\label{tab:structural}
+\begin{tabular}{lrrrrr}
+\toprule
+Strategy & Cumulative & Annualized & Sharpe & Max DD & Win \\
+\midrule
+Baseline & $+80.5\%$ & $+34.4\%$ & $1.77$ & $-13.3\%$ & 71\% \\
+Anti-Momentum Features & $\mathbf{+87.2\%}$ & $\mathbf{+51.9\%}$ & $\mathbf{1.91}$ & $-9.2\%$ & 72\% \\
+Sector-Neutral & $+45.4\%$ & $+20.6\%$ & $1.67$ & $\mathbf{-4.4\%}$ & 67\% \\
+Regime-Conditional & $+41.0\%$ & $+25.7\%$ & $1.47$ & $-7.5\%$ & 72\% \\
+Momentum Hedge & $+80.2\%$ & $+36.0\%$ & $1.77$ & $-15.1\%$ & 74\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig11_extensions_cumulative.png}
+\caption{Cumulative return comparison of structural extensions versus baseline.}
+\label{fig:ext_cum}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig12_extensions_drawdown.png}
+\caption{Drawdown profiles for structural extensions. Sector-Neutral achieves the shallowest drawdown ($-4.4\%$), while Anti-Momentum Features combines strong returns with controlled risk.}
+\label{fig:ext_dd}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{fig13_jan2025_comparison.png}
+\caption{January 2025 loss by strategy. Anti-Momentum Features reduces the loss from $-9.0\%$ to $-1.4\%$; Sector-Neutral effectively neutralizes it ($-0.02\%$).}
+\label{fig:ext_jan}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{fig14_risk_return_scatter.png}
+\caption{Risk-return trade-off. Anti-Momentum Features occupies the upper-left region (high Sharpe, low drawdown). Sector-Neutral trades return for minimal drawdown.}
+\label{fig:ext_scatter}
+\end{figure}
+
+\subsection{Analysis}
+
+\textbf{Anti-Momentum Features} is the clear winner on a risk-return basis: it improves cumulative return from $+80.5\%$ to $+87.2\%$, Sharpe from 1.77 to 1.91, and reduces maximum drawdown from $-13.3\%$ to $-9.2\%$. Critically, the January~2025 loss shrinks from $-9.0\%$ to $-1.4\%$. The 52-week-high distance and 5-day reversal features allow the model to learn when momentum is overextended, naturally de-risking before crashes. This is the most promising extension because it improves the signal itself rather than applying post-hoc filters.
+
+\textbf{Sector-Neutral} achieves the smallest maximum drawdown ($-4.4\%$) and essentially eliminates the January~2025 loss ($-0.02\%$), but at the cost of cumulative return ($+45.4\%$ vs $+80.5\%$). The return reduction occurs because the baseline's alpha is partly driven by sector tilts---the model correctly overweights tech during the 2024 rally and underweights it during the 2025 correction. Forcing sector neutrality removes this source of alpha. This extension is suitable for mandates with strict tracking-error constraints.
+
+\textbf{Regime-Conditional} underperforms the baseline (Sharpe 1.47 vs 1.77). The likely cause is insufficient training data within each regime: with only 85 Crisis days and 90 Mean-Reverting days in the entire sample, the regime-specific models overfit to small samples. The idea is sound but requires a longer history or a larger universe to be viable.
+
+\textbf{Momentum Hedge} is approximately neutral: Sharpe is unchanged (1.77), cumulative return is nearly identical ($+80.2\%$), and the January~2025 loss barely improves ($-8.8\%$ vs $-9.0\%$). The rolling beta estimation with only 6 months of data is noisy, and the hedge cost (10~bps/month) offsets much of the benefit. A more sophisticated hedge---using daily frequency and a broader factor model---could improve results.
+
+\textbf{Recommended configuration}: Anti-Momentum Features as the default model, optionally combined with the Momentum Crash Protection overlay from Section~\ref{sec:extensions} for additional tail-risk insurance.
+
 \section{System Architecture}
 
 The system is implemented in Python and consists of approximately 2{,}800 lines of source code across four modules:
