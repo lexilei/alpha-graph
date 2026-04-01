@@ -273,13 +273,14 @@ def ext3_regime_conditional(preds, market, regimes):
 
     for i, test_month in enumerate(months):
         train_months = months[max(0, i - 12):i]
-        if len(train_months) < 6:
-            continue
 
         test = preds[preds["month"] == test_month].dropna(
             subset=feature_cols + ["actual_return"]
         )
         if len(test) < 10:
+            continue
+
+        if len(train_months) < 6:
             continue
 
         test_regime = test["regime"].mode()[0] if len(test) > 0 else "TRENDING"
