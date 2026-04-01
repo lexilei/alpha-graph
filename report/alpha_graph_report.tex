@@ -1,0 +1,469 @@
+\documentclass[11pt,a4paper]{article}
+
+% --- Packages ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{subcaption}
+\usepackage{natbib}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{enumitem}
+
+\hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
+
+\title{Alpha-Graph: NLP-Driven Equity Signal Generation \\via SEC Filing Analysis and Machine Learning}
+\author{Zhihan Lei}
+\date{April 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We present Alpha-Graph, a quantitative equity signal generation framework that extracts forward-looking information from SEC regulatory filings using a combination of natural language processing, large language model (LLM) agents, and gradient-boosted machine learning. The system ingests 10-K annual reports, 10-Q quarterly filings, and 8-K material event disclosures for 102 S\&P~500 constituents, generating cross-sectional return predictions via a walk-forward LightGBM combiner. Over a 24-month out-of-sample period (March~2024 to February~2026), the top-10/bottom-10 long/short portfolio achieves an annualized Sharpe ratio of \textbf{1.77}, cumulative return of \textbf{+80.5\%}, and maximum drawdown of \textbf{$-$13.3\%}, compared to $-$25.3\% and Sharpe $-$1.49 for the baseline Lazy Prices signal alone. The dominant predictive features are 8-K event scores and 21-day price momentum, confirming that high-frequency filing events contain material alpha beyond the annual filing change anomaly.
+\end{abstract}
+
+\section{Introduction}
+
+Public companies in the United States are required to file periodic disclosures with the Securities and Exchange Commission (SEC). These filings---annual reports (10-K), quarterly reports (10-Q), and material event disclosures (8-K)---contain information about business operations, risk factors, litigation, management changes, and financial performance that is often overlooked by the market.
+
+\citet{cohen2020lazy} documented the ``Lazy Prices'' anomaly: firms that substantially change the language of their annual filings subsequently underperform, suggesting that the market is slow to incorporate textual information from regulatory disclosures. While the original study relied exclusively on cosine similarity between consecutive 10-K filings, we extend this approach in three directions:
+
+\begin{enumerate}[noitemsep]
+    \item \textbf{8-K event-driven signals}: We score material events from 8-K filings by item type, providing signal updates multiple times per month rather than once per year.
+    \item \textbf{Multi-agent LLM analysis}: We deploy specialized LLM agents (filing analyst, news synthesizer) to extract qualitative assessments of filing changes.
+    \item \textbf{Machine learning signal combination}: We train a walk-forward LightGBM model to predict cross-sectional forward returns from heterogeneous signal features.
+\end{enumerate}
+
+\section{Data}
+
+\subsection{SEC Filings}
+
+We download filings from the SEC EDGAR database for 102 S\&P~500 constituents over a 3-year lookback period. Table~\ref{tab:filings} summarizes the dataset.
+
+\begin{table}[H]
+\centering
+\caption{SEC filing dataset summary.}
+\label{tab:filings}
+\begin{tabular}{lrrr}
+\toprule
+Filing Type & Count & Avg.\ per Ticker & Description \\
+\midrule
+10-K & 401 & 3.9 & Annual report \\
+10-Q & 935 & 9.2 & Quarterly report \\
+8-K  & 4{,}146 & 40.6 & Material event disclosure \\
+\midrule
+\textbf{Total} & \textbf{5{,}482} & \textbf{53.7} & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For 10-K and 10-Q filings, we extract three key sections: \emph{Item~1A---Risk Factors}, \emph{Item~7---Management's Discussion and Analysis} (MD\&A), and \emph{Item~1---Business Description}. For 8-K filings, we parse the item numbers from the filing metadata to identify the type of material event.
+
+\subsection{Market Data}
+
+We obtain daily OHLCV price data via Yahoo Finance for 94 tickers with complete coverage, spanning March~29, 2023 to March~27, 2026 (70{,}688 observations). Forward 21-trading-day returns serve as the prediction target. We compute rolling 21-day realized volatility, 5-day and 21-day momentum, and volume z-scores as auxiliary features.
+
+\section{Signal Generation}
+
+Our framework produces four categories of signals, summarized in Figure~\ref{fig:pipeline}.
+
+\begin{figure}[H]
+\centering
+\fbox{\parbox{0.9\textwidth}{
+\centering
+\textbf{Signal Generation Pipeline} \\[6pt]
+\begin{tabular}{ccccc}
+10-K Filings & $\rightarrow$ & TF-IDF Cosine Similarity & $\rightarrow$ & Lazy Prices Score \\
+8-K Filings & $\rightarrow$ & Item-Type Scoring & $\rightarrow$ & Event Score \\
+Market Data & $\rightarrow$ & Gaussian HMM & $\rightarrow$ & Regime State \\
+All Features & $\rightarrow$ & Walk-Forward LightGBM & $\rightarrow$ & \textbf{Predicted Return}
+\end{tabular}
+}}
+\caption{Signal generation pipeline. Four signal sources are combined via a walk-forward LightGBM model.}
+\label{fig:pipeline}
+\end{figure}
+
+\subsection{Lazy Prices: TF-IDF Cosine Similarity}
+\label{sec:lazy}
+
+Following \citet{cohen2020lazy}, we measure the textual similarity between consecutive 10-K filings for each company. For each filing pair $(d_{t-1}, d_t)$, we:
+
+\begin{enumerate}[noitemsep]
+    \item Tokenize and compute TF-IDF vectors with $n$-grams up to order 2, a vocabulary of 10{,}000 terms, and English stop-word removal.
+    \item Compute cosine similarity:
+    \begin{equation}
+        \text{sim}(d_{t-1}, d_t) = \frac{\mathbf{v}_{t-1} \cdot \mathbf{v}_t}{\|\mathbf{v}_{t-1}\| \, \|\mathbf{v}_t\|}
+    \end{equation}
+\end{enumerate}
+
+Across 299 filing pairs, the mean cosine similarity is $0.896$ (std $0.204$), with a minimum of $0.102$ (Altria Group, indicating a near-complete rewrite) and a maximum of $0.994$. We assign cross-sectional quintile ranks: the top quintile (highest similarity, least change) receives signal $+1$, and the bottom quintile receives signal $-1$.
+
+\subsection{8-K Event-Driven Signal}
+\label{sec:events}
+
+The Lazy Prices signal updates only at 10-K filing frequency (approximately annual). To capture intra-year information, we introduce an 8-K event signal that updates whenever a company files a material event disclosure.
+
+We assign a base score to each 8-K item type based on its expected impact on equity value:
+
+\begin{table}[H]
+\centering
+\caption{8-K item scoring (selected items).}
+\label{tab:8k_scores}
+\begin{tabular}{llr}
+\toprule
+Item & Description & Score \\
+\midrule
+1.01 & Entry into material agreement & $+0.30$ \\
+1.02 & Termination of material agreement & $-0.50$ \\
+2.01 & Completion of acquisition/disposition & $+0.20$ \\
+2.05 & Costs associated with exit/restructuring & $-0.40$ \\
+4.01 & Changes in registrant's certifying accountant & $-0.70$ \\
+5.02 & Departure of directors or principal officers & $-0.30$ \\
+7.01 & Regulation FD disclosure & $0.00$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For each ticker, we compute an exponentially-weighted average of recent event scores with decay parameter $\lambda = 0.9$ per month:
+\begin{equation}
+    s_i = \frac{\sum_{k} w_k \cdot \text{score}(e_k)}{\sum_k w_k}, \quad w_k = \lambda^{\Delta t_k / 30}
+\end{equation}
+where $\Delta t_k$ is the number of days since event $e_k$. Across 102 tickers, the mean event score is $-0.005$ (std $0.062$), with 1{,}296 total 8-K events parsed.
+
+\subsection{HMM Market Regime Detection}
+\label{sec:regime}
+
+We fit a 3-state Gaussian Hidden Markov Model to daily market features to classify the regime as \emph{Trending}, \emph{Mean-Reverting}, or \emph{Crisis}. Features include:
+
+\begin{itemize}[noitemsep]
+    \item 5-day rolling return of the S\&P~500 index
+    \item 21-day rolling realized volatility
+    \item Volatility ratio (5-day / 21-day)
+\end{itemize}
+
+All features are standardized prior to fitting. The HMM is estimated with full covariance matrices and 200 EM iterations. Regime labels are assigned post-hoc by volatility percentile of each state. Over the sample period, the market spent 76.1\% of days in the \emph{Trending} regime, 12.3\% in \emph{Mean-Reverting}, and 11.6\% in \emph{Crisis} (Table~\ref{tab:regimes}).
+
+\begin{table}[H]
+\centering
+\caption{HMM regime distribution (731 trading days).}
+\label{tab:regimes}
+\begin{tabular}{lrr}
+\toprule
+Regime & Days & Fraction \\
+\midrule
+Trending & 556 & 76.1\% \\
+Mean-Reverting & 90 & 12.3\% \\
+Crisis & 85 & 11.6\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Multi-Agent LLM Pipeline}
+
+We deploy three specialized LLM agents (powered by DeepSeek-V3 via Together AI) in a fan-out/fan-in architecture built on LangGraph:
+
+\begin{enumerate}[noitemsep]
+    \item \textbf{Filing Analyst}: Compares current and previous 10-K filing text, identifies material changes in risk factors and MD\&A, and produces a signal in $[-1, +1]$ with a confidence score. The prompt explicitly asks for both risk assessment (negative signals) and opportunity detection (positive signals) to avoid bearish bias.
+    \item \textbf{News Synthesizer}: Analyzes recent 8-K filings and categorizes events by materiality. Returns a signal and list of identified events.
+    \item \textbf{Research Coordinator}: Combines agent signals using confidence-weighted averaging with an agreement penalty:
+    \begin{equation}
+        s_{\text{combined}} = \frac{\sum_i w_i \cdot c_i \cdot s_i}{\sum_i w_i \cdot c_i}, \quad c_{\text{final}} = \bar{c} \cdot (0.5 + 0.5 \cdot \text{agreement})
+    \end{equation}
+    where $w_i$ are agent weights, $c_i$ are confidence scores, and agreement measures directional consensus.
+\end{enumerate}
+
+\section{Machine Learning Signal Combination}
+\label{sec:ml}
+
+\subsection{Feature Panel}
+
+We construct a daily cross-sectional panel of 94 tickers $\times$ 731 trading days (68{,}714 observations) with the following features:
+
+\begin{table}[H]
+\centering
+\caption{ML combiner feature panel.}
+\label{tab:features}
+\begin{tabular}{llr}
+\toprule
+Feature & Source & Coverage \\
+\midrule
+\texttt{cosine\_similarity} & Lazy Prices (Section~\ref{sec:lazy}) & 66.1\% \\
+\texttt{event\_score} & 8-K events (Section~\ref{sec:events}) & 100.0\% \\
+\texttt{event\_count} & 8-K events & 100.0\% \\
+\texttt{regime\_state} & HMM (Section~\ref{sec:regime}) & 97.1\% \\
+\texttt{regime\_prob} & HMM posterior probability & 97.1\% \\
+\texttt{momentum\_21d} & 21-day price return & 97.1\% \\
+\texttt{momentum\_5d} & 5-day price return & 99.3\% \\
+\texttt{volatility\_21d} & 21-day realized volatility & 97.1\% \\
+\texttt{volume\_zscore} & Volume relative to 63-day average & 91.5\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Missing features are handled natively by LightGBM's NaN-aware split algorithm, avoiding the need for imputation.
+
+\subsection{Walk-Forward Training}
+
+To avoid lookahead bias, we train the model using a strict walk-forward protocol:
+
+\begin{itemize}[noitemsep]
+    \item \textbf{Training window}: 12 rolling months
+    \item \textbf{Test window}: 1 calendar month
+    \item \textbf{Purge gap}: 5 trading days between training end and test start
+    \item \textbf{Target}: Forward 21-day return
+    \item \textbf{Total folds}: 24 (March 2024 -- February 2026)
+\end{itemize}
+
+\subsection{Model Specification}
+
+We use LightGBM \citep{ke2017lightgbm} with conservative hyperparameters designed to prevent overfitting:
+
+\begin{table}[H]
+\centering
+\caption{LightGBM hyperparameters.}
+\begin{tabular}{lr}
+\toprule
+Parameter & Value \\
+\midrule
+\texttt{num\_leaves} & 15 \\
+\texttt{max\_depth} & 5 \\
+\texttt{n\_estimators} & 200 \\
+\texttt{learning\_rate} & 0.03 \\
+\texttt{subsample} & 0.7 \\
+\texttt{colsample\_bytree} & 0.7 \\
+\texttt{reg\_alpha} (L1) & 0.1 \\
+\texttt{reg\_lambda} (L2) & 1.0 \\
+\texttt{min\_child\_samples} & 10 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Feature Importance}
+
+Table~\ref{tab:importance} reports LightGBM split-based feature importance from the final trained model. The 8-K event score is the dominant feature, confirming that high-frequency filing events carry the strongest predictive signal.
+
+\begin{table}[H]
+\centering
+\caption{Feature importance (split count) from final LightGBM model.}
+\label{tab:importance}
+\begin{tabular}{lr}
+\toprule
+Feature & Importance \\
+\midrule
+\texttt{event\_score} & 6 \\
+\texttt{event\_count} & 3 \\
+\texttt{momentum\_21d} & 2 \\
+\texttt{regime\_state} & 1 \\
+\texttt{momentum\_5d} & 1 \\
+\texttt{volume\_zscore} & 1 \\
+\texttt{cosine\_similarity} & 0 \\
+\texttt{volatility\_21d} & 0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Notably, the Lazy Prices cosine similarity feature has zero importance in the final model, suggesting that the 8-K event signal subsumes the information content of annual filing changes when both are available.
+
+\section{Portfolio Construction}
+
+We construct a monthly-rebalanced long/short equity portfolio:
+
+\begin{enumerate}[noitemsep]
+    \item Rank all tickers by the ML combiner's predicted return signal.
+    \item Go long the top 10 tickers (equal-weighted, 10\% each).
+    \item Go short the bottom 10 tickers (equal-weighted, 10\% each).
+    \item Apply transaction costs of 20 basis points per rebalance (conservative estimate for S\&P~500 constituents).
+\end{enumerate}
+
+We also implement signal-weighted position sizing, a 5\% per-stock cap, and a 30\% per-sector cap for the production portfolio, though the backtest results reported below use equal weights for simplicity.
+
+\section{Results}
+
+\subsection{Information Coefficient Analysis}
+
+The walk-forward out-of-sample information coefficient (Spearman rank correlation between predicted and realized 21-day returns) is reported in Table~\ref{tab:ic}.
+
+\begin{table}[H]
+\centering
+\caption{Walk-forward IC statistics (24 months OOS).}
+\label{tab:ic}
+\begin{tabular}{lr}
+\toprule
+Metric & Value \\
+\midrule
+Mean IC & 0.062 \\
+IC Standard Deviation & 0.103 \\
+ICIR (IC / IC Std) & 0.609 \\
+Positive IC Months & 18 / 24 (75\%) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+An ICIR of 0.61 exceeds the $0.5$ threshold commonly considered indicative of a useful cross-sectional signal in equity markets.
+
+\subsection{Long/Short Portfolio Performance}
+
+Table~\ref{tab:performance} compares the ML combiner portfolio against the baseline Lazy Prices signal and the S\&P~500 benchmark.
+
+\begin{table}[H]
+\centering
+\caption{Portfolio performance comparison (March 2024 -- February 2026).}
+\label{tab:performance}
+\begin{tabular}{lrrr}
+\toprule
+Metric & ML Combiner & Lazy Prices & S\&P~500 \\
+\midrule
+Cumulative Return & $+80.5\%$ & $-25.3\%$ & $+44.8\%$ \\
+Annualized Sharpe & $1.77$ & $-1.49$ & $1.41$ \\
+Max Drawdown & $-13.3\%$ & $-28.1\%$ & $-7.6\%$ \\
+Positive Months & 71\% & 37.5\% & --- \\
+Avg.\ Monthly Return & $+2.61\%$ & $-1.06\%$ & --- \\
+Best Month & $+11.7\%$ & $+4.5\%$ & --- \\
+Worst Month & $-9.0\%$ & $-8.3\%$ & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Monthly Return Decomposition}
+
+Table~\ref{tab:monthly} provides the full monthly return decomposition into long and short legs.
+
+\begin{table}[H]
+\centering
+\caption{Monthly return decomposition (top/bottom 10 tickers).}
+\label{tab:monthly}
+\small
+\begin{tabular}{lrrr}
+\toprule
+Month & Long Leg & Short Leg & Net Return \\
+\midrule
+2024-03 & $-5.44\%$ & $-2.48\%$ & $-3.16\%$ \\
+2024-04 & $+6.71\%$ & $+2.66\%$ & $+3.86\%$ \\
+2024-05 & $+3.67\%$ & $+4.72\%$ & $-1.25\%$ \\
+2024-06 & $+7.29\%$ & $+2.44\%$ & $+4.65\%$ \\
+2024-07 & $+1.74\%$ & $+1.04\%$ & $+0.51\%$ \\
+2024-08 & $+9.47\%$ & $+2.00\%$ & $+7.27\%$ \\
+2024-09 & $+5.62\%$ & $+3.17\%$ & $+2.26\%$ \\
+2024-10 & $+18.28\%$ & $+9.35\%$ & $+8.73\%$ \\
+2024-11 & $-2.47\%$ & $-4.60\%$ & $+1.94\%$ \\
+2024-12 & $+10.04\%$ & $-1.81\%$ & $+11.65\%$ \\
+2025-01 & $-15.52\%$ & $-6.75\%$ & $-8.97\%$ \\
+2025-02 & $-8.29\%$ & $-5.08\%$ & $-3.41\%$ \\
+2025-03 & $-0.56\%$ & $-0.93\%$ & $+0.17\%$ \\
+2025-04 & $+8.09\%$ & $+3.97\%$ & $+3.92\%$ \\
+2025-05 & $+4.95\%$ & $+6.74\%$ & $-1.98\%$ \\
+2025-06 & $+2.26\%$ & $+5.40\%$ & $-3.34\%$ \\
+2025-07 & $+7.03\%$ & $+4.88\%$ & $+1.94\%$ \\
+2025-08 & $+5.24\%$ & $-1.43\%$ & $+6.47\%$ \\
+2025-09 & $+2.14\%$ & $+1.89\%$ & $+0.05\%$ \\
+2025-10 & $+5.85\%$ & $-1.55\%$ & $+7.20\%$ \\
+2025-11 & $+5.77\%$ & $-0.51\%$ & $+6.08\%$ \\
+2025-12 & $+6.82\%$ & $-2.12\%$ & $+8.74\%$ \\
+2026-01 & $+4.55\%$ & $-5.97\%$ & $+10.32\%$ \\
+2026-02 & $-9.13\%$ & $-8.43\%$ & $-0.90\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The short leg contributes substantial alpha in the second half of the test period (August 2025 onward), correctly identifying underperforming stocks during a period of market rotation away from momentum names.
+
+\subsection{Regime Filter Impact}
+
+The HMM regime filter applied to the baseline Lazy Prices signal (without the ML combiner) reduces short exposure during trending markets to 25\%. Table~\ref{tab:regime_impact} shows the improvement.
+
+\begin{table}[H]
+\centering
+\caption{Regime filter impact on Lazy Prices signal.}
+\label{tab:regime_impact}
+\begin{tabular}{lrr}
+\toprule
+Metric & No Filter & With HMM Filter \\
+\midrule
+Cumulative Return & $-25.3\%$ & $-19.9\%$ \\
+Sharpe Ratio & $-1.49$ & $-1.04$ \\
+Positive Months & 37.5\% & 50.0\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+While the regime filter improves the baseline by 30\%, it is insufficient to make the Lazy Prices signal profitable in isolation. The ML combiner approach supersedes both variants.
+
+\section{Discussion}
+
+\subsection{Why the ML Combiner Outperforms}
+
+The baseline Lazy Prices signal updates only at 10-K filing frequency---approximately once per year per company. Between filings, the signal is stale and the portfolio holds positions based on month-old or year-old information. The ML combiner addresses this by incorporating:
+
+\begin{enumerate}[noitemsep]
+    \item \textbf{8-K event scores}: Updated whenever a material event is disclosed (average 40.6 8-K filings per ticker over 3 years), providing 40$\times$ higher signal frequency than 10-K filings alone.
+    \item \textbf{Price momentum}: 5-day and 21-day momentum capture short-term market sentiment that complements the fundamental filing signals.
+    \item \textbf{Market regime}: The HMM regime state conditions the model's predictions on the prevailing market environment.
+\end{enumerate}
+
+Feature importance analysis confirms that \texttt{event\_score} is the dominant predictor, followed by \texttt{event\_count} and \texttt{momentum\_21d}. The original Lazy Prices cosine similarity contributes zero importance to the final model, suggesting it is subsumed by the higher-frequency 8-K event signal.
+
+\subsection{Limitations and Caveats}
+
+\begin{enumerate}[noitemsep]
+    \item \textbf{Survivorship bias}: The universe consists of current S\&P~500 constituents only. Companies that were delisted or removed from the index during the sample period are excluded, which may upward-bias reported returns.
+    \item \textbf{Limited out-of-sample period}: 24 months of walk-forward results provides reasonable but not definitive evidence of alpha. A lucky streak in a few months can inflate the Sharpe ratio.
+    \item \textbf{Simplified transaction costs}: We model a flat 20~bps per monthly rebalance. Real-world costs include market impact, bid-ask spread, and short borrowing costs that vary by stock and market conditions.
+    \item \textbf{No short borrowing costs}: The short leg assumes costless borrowing, which is realistic for large-cap S\&P~500 names but would reduce net returns by approximately 30--50~bps annually.
+    \item \textbf{Capacity constraints}: A 10-stock equal-weight long/short portfolio within the S\&P~500 has limited capacity before market impact erodes alpha.
+\end{enumerate}
+
+\subsection{Extensions}
+
+Several directions could strengthen the framework:
+\begin{itemize}[noitemsep]
+    \item \textbf{Earnings call transcripts}: The earnings analyst agent is implemented but inactive due to data limitations (Finnhub free tier). \citet{kim2025earnings} report 247~bps of alpha from transcript tone analysis.
+    \item \textbf{Expanded universe}: Extending to the full S\&P~500 (500 tickers) or Russell~1000 would improve statistical power and portfolio diversification.
+    \item \textbf{Knowledge graph}: Supply-chain and customer-supplier relationships could enable cross-firm signal propagation using graph neural networks.
+    \item \textbf{Intraday rebalancing}: The current monthly rebalance frequency leaves alpha on the table; more frequent rebalancing around 8-K filing dates could capture event-driven moves more efficiently.
+\end{itemize}
+
+\section{System Architecture}
+
+The system is implemented in Python and consists of approximately 2{,}800 lines of source code across four modules:
+
+\begin{itemize}[noitemsep]
+    \item \texttt{data/}: SEC EDGAR downloader, Yahoo Finance market data, Finnhub earnings transcripts
+    \item \texttt{signals/}: Lazy Prices (TF-IDF), 8-K event scoring, HMM regime detection, LightGBM combiner
+    \item \texttt{agents/}: LangGraph multi-agent pipeline (filing analyst, news synthesizer, coordinator)
+    \item \texttt{backtest/}: Walk-forward backtesting engine with transaction cost modeling
+\end{itemize}
+
+LLM inference uses DeepSeek-V3 via the Together AI API. The full pipeline processes 100 tickers in approximately 15 minutes. The ML combiner trains in under 15 seconds per fold on a single CPU core.
+
+\section{Conclusion}
+
+We demonstrate that combining high-frequency 8-K event signals with machine learning produces a materially stronger equity signal than the Lazy Prices filing-change anomaly alone. The key insight is that annual filing similarity is too slow-moving to serve as a standalone trading signal in modern markets, but when augmented with event-driven 8-K scores and short-term momentum features via a walk-forward LightGBM model, the resulting signal achieves an out-of-sample Sharpe ratio of 1.77 over 24 months. Paper trading validation is the natural next step before any capital allocation.
+
+\bibliographystyle{plainnat}
+\begin{thebibliography}{9}
+
+\bibitem[Cohen et~al.(2020)]{cohen2020lazy}
+Cohen, L., Malloy, C., \& Nguyen, Q. (2020).
+\newblock Lazy Prices.
+\newblock \emph{The Journal of Finance}, 75(3), 1371--1415.
+
+\bibitem[Ke et~al.(2017)]{ke2017lightgbm}
+Ke, G., Meng, Q., Finley, T., Wang, T., Chen, W., Ma, W., Ye, Q., \& Liu, T.-Y. (2017).
+\newblock LightGBM: A Highly Efficient Gradient Boosting Decision Tree.
+\newblock \emph{Advances in Neural Information Processing Systems}, 30.
+
+\bibitem[Kim \& Blouin(2025)]{kim2025earnings}
+Kim, S., \& Blouin, J. (2025).
+\newblock Earnings Call Tone and Stock Returns: Evidence from NLP Analysis.
+\newblock \emph{Working Paper}.
+
+\end{thebibliography}
+
+\end{document}
