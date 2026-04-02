@@ -252,9 +252,14 @@ def _merge_asof_signal(
     panel = panel.sort_values(left_date)
     signal = signal.sort_values(right_date)
 
+    # Normalize datetime dtypes (yfinance returns ms, filings use ns)
+    signal = signal.rename(columns={right_date: left_date})
+    signal[left_date] = pd.to_datetime(signal[left_date]).astype("datetime64[ns]")
+    panel[left_date] = pd.to_datetime(panel[left_date]).astype("datetime64[ns]")
+
     merged = pd.merge_asof(
         panel,
-        signal.rename(columns={right_date: left_date}),
+        signal,
         on=left_date,
         by=on,
         direction="backward",

@@ -7,8 +7,6 @@
 - [ ] Monitor dashboard (equity curve, positions, P&L)
 
 ## Next: Data
-- [ ] Fetch more price/IV data for option_volitility project
-- [ ] Download real Deribit option chains for vol_smile project
 - [ ] Upgrade Finnhub → activate earnings_analyst agent
 
 ## Later: Improvements
