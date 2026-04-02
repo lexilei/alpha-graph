@@ -13,6 +13,10 @@ NLP-driven equity signal generation via SEC filing analysis and machine learning
 
 The ML combiner (walk-forward LightGBM on 8-K events + cosine similarity + momentum + regime features) transforms the strategy from losing money to Sharpe 1.77.
 
+![Cumulative Return](report/fig1_cumulative_return.png)
+
+![Monthly Return Decomposition](report/fig2_monthly_returns.png)
+
 ## Architecture
 
 ```
@@ -28,6 +32,14 @@ LLM Agents (optional):                                                      v
 ```
 
 **Key insight**: The 8-K event signal (updated ~40x/year per ticker) subsumes the annual Lazy Prices signal. Feature importance: `event_score` >> `momentum_21d` >> `cosine_similarity` = 0.
+
+![Feature Importance](report/fig4_feature_importance.png)
+
+![HMM Regime Timeline](report/fig5_regime_timeline.png)
+
+![Structural Extensions Comparison](report/fig11_extensions_cumulative.png)
+
+![Risk-Return Trade-off](report/fig14_risk_return_scatter.png)
 
 ## Setup
 
