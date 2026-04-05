@@ -80,8 +80,8 @@ def _extract_item_numbers(text: str) -> list[str]:
     Looks for patterns like "Item 1.01", "Item 2.05", "ITEM 4.01", etc.
     Returns deduplicated list of item number strings like ["1.01", "2.05"].
     """
-    pattern = r"[Ii]tem\s+(\d+\.\d+)"
-    matches = re.findall(pattern, text)
+    pattern = r"item\s+(\d+\.\d+)"
+    matches = re.findall(pattern, text, re.IGNORECASE)
     return list(set(matches))
 
 

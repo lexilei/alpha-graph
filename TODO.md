@@ -6,10 +6,15 @@
 - [x] Daily cron: fetch data → generate signals → submit orders (`trading/daily_pipeline.py`)
 - [x] Monitor dashboard (equity curve, positions, P&L) (`trading/monitor.py`)
 
+## Done: Feature Expansion
+- [x] Add quality/value factors to ML combiner (`data/fundamentals.py`)
+- [x] Expand universe default to 500 tickers (`config.py`)
+- [x] Knowledge graph spillover signal (`signals/graph_signal.py`, `data/relationships.py`)
+
 ## Now: Data
 - [ ] Upgrade Finnhub → activate earnings_analyst agent
 
 ## Next: Improvements
-- [ ] Expand universe to 500 tickers
-- [ ] Add quality/value factors to ML combiner
 - [ ] Longer backtest (need 5+ years of 8-K data)
+- [ ] Enable graph spillover features after more relationship data collected
+- [ ] Run full 500-ticker backtest and compare to 100-ticker results

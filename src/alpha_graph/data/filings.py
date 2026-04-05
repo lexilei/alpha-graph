@@ -57,7 +57,10 @@ def _extract_10k_sections(filing) -> dict[str, str]:
             pass
 
     if not sections:
-        sections["full_text"] = filing.text()[:500_000]
+        try:
+            sections["full_text"] = filing.text()[:500_000]
+        except Exception:
+            pass
     return sections
 
 
@@ -67,7 +70,10 @@ def _extract_10q_sections(filing) -> dict[str, str]:
         ten_q = filing.obj()
     except Exception as e:
         logger.warning(f"Could not parse 10-Q structure: {e}")
-        return {"full_text": filing.text()[:500_000]}
+        try:
+            return {"full_text": filing.text()[:500_000]}
+        except Exception:
+            return {}
 
     sections = {}
     # 10-Q items are part-qualified
@@ -83,7 +89,10 @@ def _extract_10q_sections(filing) -> dict[str, str]:
             pass
 
     if not sections:
-        sections["full_text"] = filing.text()[:500_000]
+        try:
+            sections["full_text"] = filing.text()[:500_000]
+        except Exception:
+            pass
     return sections
 
 

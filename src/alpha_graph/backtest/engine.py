@@ -76,6 +76,50 @@ def load_signals_and_returns() -> pd.DataFrame | None:
     return merged
 
 
+def _cap_and_redistribute(
+    weights: np.ndarray,
+    max_pct: float,
+    target_sum: float = 1.0,
+    iterations: int = 10,
+) -> np.ndarray:
+    """Cap individual weights at max_pct and redistribute excess.
+
+    Iteratively clips overweight positions and redistributes their excess
+    to underweight positions proportionally, preserving relative signal ordering.
+    If the cap is infeasible (n * max_pct < target_sum), returns normalized
+    weights without capping.
+    """
+    weights = weights.copy()
+    n = len(weights)
+    if n == 0:
+        return weights
+
+    # If cap is infeasible, just normalize
+    if n * max_pct < target_sum:
+        total = weights.sum()
+        return weights / total * target_sum if total > 0 else np.full(n, target_sum / n)
+
+    # Normalize to target_sum first
+    total = weights.sum()
+    if total > 0:
+        weights = weights / total * target_sum
+
+    for _ in range(iterations):
+        over = weights > max_pct
+        if not over.any():
+            break
+        excess = (weights[over] - max_pct).sum()
+        weights[over] = max_pct
+        under = ~over
+        under_total = weights[under].sum()
+        if under_total > 0:
+            weights[under] += excess * (weights[under] / under_total)
+        else:
+            break
+
+    return weights
+
+
 def build_long_short_portfolio(
     signals: pd.DataFrame,
     config: BacktestConfig,
@@ -121,23 +165,16 @@ def build_long_short_portfolio(
 
     portfolio = pd.concat([long_leg, short_leg], ignore_index=True)
 
-    # Apply max position cap
-    portfolio["weight"] = portfolio["weight"].clip(
-        lower=-config.max_position_pct,
-        upper=config.max_position_pct,
-    )
-
-    # Re-normalize so long weights sum to 1 and short weights sum to -1
+    # Apply max position cap with iterative redistribution
     long_mask = portfolio["position"] == "LONG"
     short_mask = portfolio["position"] == "SHORT"
 
-    long_total = portfolio.loc[long_mask, "weight"].sum()
-    if long_total > 0:
-        portfolio.loc[long_mask, "weight"] /= long_total
-
-    short_total = portfolio.loc[short_mask, "weight"].sum()
-    if short_total < 0:
-        portfolio.loc[short_mask, "weight"] /= abs(short_total)
+    portfolio.loc[long_mask, "weight"] = _cap_and_redistribute(
+        portfolio.loc[long_mask, "weight"].values, config.max_position_pct, target_sum=1.0
+    )
+    portfolio.loc[short_mask, "weight"] = _cap_and_redistribute(
+        portfolio.loc[short_mask, "weight"].abs().values, config.max_position_pct, target_sum=1.0
+    ) * -1.0
 
     # Sector diversification (if sector column available)
     if "sector" in portfolio.columns:
@@ -179,11 +216,22 @@ def _apply_sector_constraint(
                     f"({total_weight:.2%} -> {max_sector_pct:.2%})"
                 )
 
-        # Re-normalize the leg
-        leg_total = portfolio.loc[mask, "weight"].sum()
+        # Redistribute excess to uncapped sectors (don't blindly re-normalize,
+        # which would undo the cap)
+        capped_sectors = {
+            s for s, w in sector_weights.items() if w > max_sector_pct
+        }
+        uncapped_mask = mask & ~portfolio["sector"].isin(capped_sectors)
+        uncapped_total = portfolio.loc[uncapped_mask, "weight"].abs().sum()
         target = 1.0 if position_type == "LONG" else -1.0
-        if abs(leg_total) > 0.01:
-            portfolio.loc[mask, "weight"] *= abs(target / leg_total)
+        capped_total = len(capped_sectors) * max_sector_pct
+        remaining = abs(target) - capped_total
+        if uncapped_total > 0 and remaining > 0:
+            sign = np.sign(portfolio.loc[uncapped_mask, "weight"].iloc[0]) if len(portfolio.loc[uncapped_mask]) > 0 else 1.0
+            portfolio.loc[uncapped_mask, "weight"] = (
+                sign * portfolio.loc[uncapped_mask, "weight"].abs()
+                / uncapped_total * remaining
+            )
 
     return portfolio
 
