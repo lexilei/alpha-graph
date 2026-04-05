@@ -101,6 +101,8 @@ FEATURE_COLS = [
     "momentum_5d",
     "volatility_21d",
     "volume_zscore",
+    # "spillover_event",      # Knowledge graph — disabled, hurts OOS returns
+    # "spillover_momentum",   # Knowledge graph — disabled, hurts OOS returns
 ]
 
 
@@ -202,6 +204,21 @@ def build_feature_panel() -> pd.DataFrame:
         panel["event_score"] = np.nan
         panel["event_count"] = np.nan
         logger.debug("No 8-K event data — feature will be NaN")
+
+    # --- Merge graph spillover signals ---
+    spillover_path = CACHE_DIR / "graph_spillover.parquet"
+    if spillover_path.exists():
+        spillover = pd.read_parquet(spillover_path)
+        spillover["date"] = pd.to_datetime(spillover["date"])
+        panel = _merge_asof_signal(
+            panel, spillover,
+            left_date="date", right_date="date",
+            on="ticker", cols=["spillover_event", "spillover_momentum"],
+        )
+    else:
+        panel["spillover_event"] = np.nan
+        panel["spillover_momentum"] = np.nan
+        logger.debug("No graph spillover data — feature will be NaN")
 
     # --- Merge HMM regime ---
     regime_path = CACHE_DIR / "regimes.parquet"
