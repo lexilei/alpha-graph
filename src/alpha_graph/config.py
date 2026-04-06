@@ -16,6 +16,36 @@ FILINGS_DIR = DATA_DIR / "filings"
 TRANSCRIPTS_DIR = DATA_DIR / "transcripts"
 CACHE_DIR = DATA_DIR / "cache"
 
+# Single source of truth for any random seed in the project. Every model,
+# train/test split, sampler, and shuffle should use this — never a literal.
+SEED = 42
+
+
+def set_global_seeds(seed: int = SEED) -> None:
+    """Seed Python, NumPy, and (if installed) PyTorch for reproducibility.
+
+    Call this at the top of every entry-point script. Model classes that
+    accept their own seed (LightGBM, sklearn) still need it passed
+    explicitly — this only covers process-level RNG state.
+    """
+    import os as _os
+    import random as _random
+
+    _random.seed(seed)
+    _os.environ["PYTHONHASHSEED"] = str(seed)
+    try:
+        import numpy as _np
+        _np.random.seed(seed)
+    except ImportError:
+        pass
+    try:
+        import torch as _torch  # noqa
+        _torch.manual_seed(seed)
+        if _torch.cuda.is_available():
+            _torch.cuda.manual_seed_all(seed)
+    except ImportError:
+        pass
+
 
 @dataclass
 class Config:

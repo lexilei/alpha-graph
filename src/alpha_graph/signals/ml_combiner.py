@@ -69,7 +69,10 @@ def _get_lgb():
         return None
 
 
-# Model hyperparameters (conservative to prevent overfitting on small universe)
+# Model hyperparameters (conservative to prevent overfitting on small universe).
+# `deterministic=True` + `n_jobs=1` are required for bit-identical fits across
+# runs and machines — without them LightGBM's parallel histogram aggregation
+# produces non-reproducible Sharpe ratios.
 LGBM_PARAMS = {
     "objective": "regression",
     "metric": "mae",
@@ -85,6 +88,8 @@ LGBM_PARAMS = {
     "n_estimators": 200,
     "verbose": -1,
     "random_state": 42,
+    "deterministic": True,     # bit-reproducible histogram aggregation
+    "n_jobs": 1,               # single-threaded for cross-machine determinism
 }
 
 # Walk-forward settings

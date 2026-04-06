@@ -32,6 +32,9 @@ report/*.aux
 report/*.log
 report/*.out
 
+# Docs
+docs/
+
 # OS
 .DS_Store
 Thumbs.db

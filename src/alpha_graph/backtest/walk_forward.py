@@ -279,6 +279,9 @@ def _print_results(results: pd.DataFrame, title: str, spy_returns: pd.Series):
 
 
 def main():
+    from alpha_graph.config import set_global_seeds
+    set_global_seeds()
+
     # Run both versions
     results_raw = run_walk_forward(use_regime_filter=False)
     results_regime = run_walk_forward(use_regime_filter=True)

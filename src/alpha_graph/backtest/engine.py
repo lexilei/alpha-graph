@@ -294,15 +294,25 @@ def walk_forward_backtest(
     return pd.DataFrame(results)
 
 
-def compute_performance_metrics(returns: pd.Series, risk_free_rate: float = 0.05) -> dict:
+def compute_performance_metrics(
+    returns: pd.Series,
+    risk_free_rate: float = 0.05,
+    n_trials: int = 1,
+) -> dict:
     """Compute comprehensive performance metrics from a return series.
 
     Args:
         returns: Series of period returns (e.g., monthly)
         risk_free_rate: annualized risk-free rate
+        n_trials: number of strategies tested in selection. Used to apply
+            Bailey & Lopez de Prado (2014) deflation for multiple testing.
+            Pass the *real* number of variants you compared (e.g. 5 for
+            baseline + 4 extensions), not 1, otherwise the p-value is biased
+            optimistic.
 
     Returns:
-        Dict with Sharpe, Sortino, max drawdown, etc.
+        Dict with Sharpe, Sortino, max drawdown, DSR p-value, Bonferroni-
+        adjusted p-value, etc.
     """
     # Flatten to a plain 1-D Series of floats
     returns = pd.Series(returns.values.flatten(), dtype=float)
@@ -330,20 +340,39 @@ def compute_performance_metrics(returns: pd.Series, risk_free_rate: float = 0.05
     drawdowns = (cumulative - running_max) / running_max
     max_drawdown = drawdowns.min()
 
-    # Deflated Sharpe Ratio (Bailey & López de Prado, 2014)
-    # Accounts for skewness, kurtosis, and number of trials
+    # Deflated Sharpe Ratio (Bailey & Lopez de Prado, 2014)
+    # Accounts for skewness, kurtosis, and (now) number of trials.
     T = len(returns)
     skew = returns.skew()
     kurt = returns.kurtosis()  # excess kurtosis
     sr = sharpe / np.sqrt(periods_per_year)  # per-period Sharpe
 
-    # Standard error of Sharpe ratio
+    # Standard error of Sharpe ratio adjusted for higher moments
     sr_std = np.sqrt((1 + 0.5 * sr**2 - skew * sr + (kurt / 4) * sr**2) / T)
 
-    # DSR: probability that the Sharpe is genuine (not from luck/multiple testing)
     from scipy import stats
 
+    # Raw DSR p-value (assumes 1 trial)
     dsr_pvalue = stats.norm.cdf(sr / sr_std) if sr_std > 0 else 0.5
+
+    # Bailey-Lopez de Prado multi-trial deflation: the expected maximum SR
+    # under the null of N independent strategies grows like
+    #   E[max SR] ≈ sqrt(2 ln N) - (gamma + ln ln N) / sqrt(2 ln N)
+    # where gamma ≈ 0.5772 is Euler-Mascheroni. We subtract this from the
+    # observed SR before computing the z-score.
+    if n_trials > 1:
+        gamma = 0.5772156649
+        ln_n = np.log(n_trials)
+        e_max_sr = np.sqrt(2 * ln_n) - (gamma + np.log(ln_n)) / np.sqrt(2 * ln_n)
+        sr_deflated = sr - e_max_sr * sr_std
+        dsr_pvalue_multi = stats.norm.cdf(sr_deflated / sr_std) if sr_std > 0 else 0.5
+    else:
+        dsr_pvalue_multi = dsr_pvalue
+
+    # Simple Bonferroni adjustment for the one-tailed p-value: p_bonf = min(1, p * N)
+    # Note: this is a more conservative correction than DSR's exact form.
+    one_tailed_p = 1 - dsr_pvalue
+    bonferroni_p = min(1.0, one_tailed_p * n_trials)
 
     return {
         "total_return": float((1 + returns).prod() - 1),
@@ -355,6 +384,9 @@ def compute_performance_metrics(returns: pd.Series, risk_free_rate: float = 0.05
         "skewness": float(skew),
         "kurtosis": float(kurt),
         "deflated_sharpe_pvalue": float(dsr_pvalue),
+        "deflated_sharpe_pvalue_multi": float(dsr_pvalue_multi),
+        "bonferroni_pvalue": float(bonferroni_p),
+        "n_trials": int(n_trials),
         "n_periods": T,
         "pct_positive": float((returns > 0).mean()),
     }

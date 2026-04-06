@@ -22,6 +22,21 @@ from loguru import logger
 from alpha_graph.config import CACHE_DIR
 
 # ---------------------------------------------------------------------------
+# Reproducibility — single source of truth for all model seeds.
+# `deterministic=True` + single-threaded LightGBM is the only way to get
+# bit-identical fits across machines and runs.
+# ---------------------------------------------------------------------------
+LGBM_EXT_PARAMS = dict(
+    n_estimators=150, num_leaves=15, max_depth=5,
+    learning_rate=0.03, subsample=0.7, colsample_bytree=0.7,
+    reg_alpha=0.1, reg_lambda=1.0, min_child_samples=10,
+    verbose=-1,
+    random_state=42,
+    deterministic=True,
+    n_jobs=1,
+)
+
+# ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
 
@@ -37,8 +52,15 @@ def _load_data():
 
 
 def _run_ls(preds: pd.DataFrame, long_exp=None, short_exp=None,
-            top_n=10, sector_neutral=False, sector_map=None):
-    """Run long/short backtest with optional exposure scaling and sector neutrality."""
+            top_n=10, sector_neutral=False, sector_map=None,
+            cost_per_month: float = 0.002):
+    """Run long/short backtest with optional exposure scaling and sector neutrality.
+
+    Args:
+        cost_per_month: all-in transaction cost per month, expressed as a
+            decimal (default 0.002 = 20 bps). Subtracted from net return each
+            period. Use this to sweep cost assumptions.
+    """
     months = sorted(preds["month"].unique())
     results = []
     for month in months:
@@ -65,7 +87,7 @@ def _run_ls(preds: pd.DataFrame, long_exp=None, short_exp=None,
         le = long_exp.get(ms, 1.0) if long_exp else 1.0
         se = short_exp.get(ms, 1.0) if short_exp else 1.0
 
-        net = le * long_r - se * short_r - 0.002
+        net = le * long_r - se * short_r - cost_per_month
         results.append({
             "month": month.to_timestamp(), "net": net,
             "long": long_r, "short": short_r, "le": le, "se": se,
@@ -149,14 +171,10 @@ def ext1_anti_momentum_features(preds, market, regimes):
         X_te = test[feature_cols].values
 
         if lgb is not None:
-            model = lgb.LGBMRegressor(
-                n_estimators=150, num_leaves=15, max_depth=5,
-                learning_rate=0.03, subsample=0.7, colsample_bytree=0.7,
-                reg_alpha=0.1, reg_lambda=1.0, min_child_samples=10,
-                verbose=-1,
-            )
+            model = lgb.LGBMRegressor(**LGBM_EXT_PARAMS)
         else:
-            model = lgb(n_estimators=150, max_depth=5, learning_rate=0.03)
+            model = lgb(n_estimators=150, max_depth=5, learning_rate=0.03,
+                        random_state=42)
 
         model.fit(X_tr, y_tr)
         test = test.copy()
@@ -194,39 +212,38 @@ def ext2_sector_neutral(preds, market, regimes):
 
 
 def _build_sector_map(tickers):
-    """Simple sector mapping for S&P 500 tickers."""
-    # Hardcoded major sectors for the tickers we know
-    tech = {"AAPL", "MSFT", "GOOGL", "GOOG", "NVDA", "AVGO", "ADBE", "AMD", "AMAT",
-            "ADSK", "ANET", "CDNS", "AKAM", "ADI", "APP", "AXON", "TECH"}
-    finance = {"BRK-B", "BLK", "BX", "BAC", "COF", "AXP", "AIG", "ALL", "AFL",
-               "ACGL", "AIZ", "AMP", "APO", "ARES", "BK", "BRO", "CBOE", "SCHW"}
-    health = {"ABBV", "ABT", "AMGN", "BIIB", "BAX", "BDX", "BMY", "BSX", "CNC",
-              "COR", "CRL", "ALGN"}
-    consumer = {"AMZN", "ABNB", "BKNG", "CCL", "BBY", "CPB", "CVNA", "CDW"}
-    industrial = {"BA", "CAT", "APH", "APTV", "CARR", "AME", "AOS", "ALLE", "BLDR",
-                  "BG", "CHRW", "A"}
-    energy = {"APA", "AES", "AEP", "AEE", "BKR", "CF", "ATO", "AWK", "CNP", "LNT"}
-    realestate = {"AMT", "ARE", "AVB", "BXP", "CPT"}
-    comm = {"T", "CHTR", "GOOGL", "GOOG"}
-    materials = {"ALB", "APD", "AMCR", "AVY", "BALL", "ADM"}
-    other = {"MO", "MMM", "ACN", "ADP", "AJG", "AON", "CAH", "BF-B", "BR", "XYZ"}
+    """Real GICS sector mapping via yfinance, cached to disk.
 
-    mapping = {}
-    for sector_name, sector_set in [
-        ("Tech", tech), ("Finance", finance), ("Health", health),
-        ("Consumer", consumer), ("Industrial", industrial), ("Energy", energy),
-        ("RealEstate", realestate), ("Comm", comm), ("Materials", materials),
-        ("Other", other),
-    ]:
-        for t in sector_set:
-            mapping[t] = sector_name
+    Pulls `Ticker.info['sector']` for each ticker once, persists the result
+    to data/cache/sector_map.parquet, and reuses the cache on subsequent runs.
+    Tickers that fail the lookup (delisted, network error, missing field)
+    fall back to "Unknown" — never silently misclassified into "Other".
+    """
+    cache_path = CACHE_DIR / "sector_map.parquet"
+    cached = {}
+    if cache_path.exists():
+        df = pd.read_parquet(cache_path)
+        cached = dict(zip(df["ticker"], df["sector"]))
 
-    # Assign Unknown to any unmapped ticker
-    for t in tickers:
-        if t not in mapping:
-            mapping[t] = "Other"
+    missing = [t for t in tickers if t not in cached]
+    if missing:
+        import yfinance as yf
+        logger.info(f"Fetching GICS sectors for {len(missing)} new tickers")
+        for t in missing:
+            try:
+                info = yf.Ticker(t).info
+                cached[t] = info.get("sector") or "Unknown"
+            except Exception as e:
+                logger.warning(f"sector lookup failed for {t}: {e}")
+                cached[t] = "Unknown"
 
-    return mapping
+        # Persist cache
+        out = pd.DataFrame(
+            [{"ticker": k, "sector": v} for k, v in sorted(cached.items())]
+        )
+        out.to_parquet(cache_path, index=False)
+
+    return {t: cached.get(t, "Unknown") for t in tickers}
 
 
 # ---------------------------------------------------------------------------
@@ -303,15 +320,12 @@ def ext3_regime_conditional(preds, market, regimes):
         X_te = test[feature_cols].values
 
         if lgb is not None:
-            model = lgb.LGBMRegressor(
-                n_estimators=150, num_leaves=15, max_depth=5,
-                learning_rate=0.03, subsample=0.7, colsample_bytree=0.7,
-                reg_alpha=0.1, reg_lambda=1.0, min_child_samples=10,
-                verbose=-1,
-            )
+            model = lgb.LGBMRegressor(**LGBM_EXT_PARAMS)
         else:
             from sklearn.ensemble import GradientBoostingRegressor
-            model = GradientBoostingRegressor(n_estimators=150, max_depth=5)
+            model = GradientBoostingRegressor(
+                n_estimators=150, max_depth=5, random_state=42,
+            )
 
         model.fit(X_tr, y_tr)
         test = test.copy()
@@ -400,6 +414,10 @@ def ext4_momentum_hedge(preds, market, regimes):
 
 def run_all_extensions():
     """Run all 4 extensions and compare against baseline."""
+    from alpha_graph.config import set_global_seeds
+    from alpha_graph.backtest.engine import compute_performance_metrics
+    set_global_seeds()
+
     preds, market, regimes = _load_data()
 
     # Baseline
@@ -434,6 +452,37 @@ def run_all_extensions():
             f"{name:<28s} {m['cum']:>+7.1%} {m['ann']:>+7.1%} "
             f"{m['sharpe']:>+7.2f} {m['maxdd']:>7.1%} {m['win']:>5.0%}"
         )
+
+    # Multiple-testing-corrected significance for all strategies.
+    # We tested N strategies and want to report the honest p-value, not the
+    # one that pretends only the winner was tried.
+    n_trials = len(results)
+    print("\n" + "=" * 75)
+    print(f"DEFLATED SHARPE — multiple-testing-corrected ({n_trials} trials)")
+    print("=" * 75)
+    print(
+        f"{'Strategy':<28s} {'Sharpe':>8s} {'DSR p (1)':>10s} "
+        f"{'DSR p (N)':>10s} {'Bonf p':>9s} {'pass α=0.01':>13s}"
+    )
+    print("-" * 75)
+    for name, df, _m in results:
+        # rf=0 to match the top table's gross Sharpe convention.
+        full = compute_performance_metrics(
+            df["net"], risk_free_rate=0.0, n_trials=n_trials,
+        )
+        passes = "YES" if full["bonferroni_pvalue"] < 0.01 else "no"
+        print(
+            f"{name:<28s} {full['sharpe']:>+7.2f} "
+            f"{full['deflated_sharpe_pvalue']:>10.4f} "
+            f"{full['deflated_sharpe_pvalue_multi']:>10.4f} "
+            f"{full['bonferroni_pvalue']:>9.4f} "
+            f"{passes:>13s}"
+        )
+    print("-" * 75)
+    print("  DSR p (1) = single-trial Bailey-Lopez de Prado p-value (optimistic)")
+    print(f"  DSR p (N) = N-trial deflation, N={n_trials}")
+    print("  Bonf p    = one-tailed p-value × N (most conservative)")
+    print("=" * 75)
 
     # Jan 2025 comparison
     print("\n--- January 2025 ---")
