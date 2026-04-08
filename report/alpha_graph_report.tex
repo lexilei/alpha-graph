@@ -18,7 +18,7 @@
 
 \hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
 
-\title{Alpha-Graph: NLP-Driven Equity Signal Generation \\via SEC Filing Analysis and Machine Learning}
+\title{Alpha-Graph: NLP-Driven Equity Signal Generation\\via SEC Filing Analysis --- A Negative Result}
 \author{Zhihan Lei}
 \date{April 2026}
 
@@ -26,53 +26,45 @@
 \maketitle
 
 \begin{abstract}
-We present Alpha-Graph, a quantitative equity signal generation framework that extracts forward-looking information from SEC regulatory filings using a combination of natural language processing, large language model (LLM) agents, and gradient-boosted machine learning. The system ingests 10-K annual reports, 10-Q quarterly filings, and 8-K material event disclosures for 102 S\&P~500 constituents, generating cross-sectional return predictions via a walk-forward LightGBM combiner. Over a 24-month out-of-sample period (March~2024 to February~2026), the top-10/bottom-10 long/short portfolio achieves an annualized Sharpe ratio of \textbf{1.77}, cumulative return of \textbf{+80.5\%}, and maximum drawdown of \textbf{$-$13.3\%}, compared to $-$25.3\% and Sharpe $-$1.49 for the baseline Lazy Prices signal alone. The dominant predictive features are 8-K event scores and 21-day price momentum, confirming that high-frequency filing events contain material alpha beyond the annual filing change anomaly.
+We present Alpha-Graph, a quantitative equity framework that extracts forward-looking information from SEC regulatory filings (10-K, 10-Q, 8-K) using TF-IDF text similarity, hand-coded 8-K event scoring, hidden Markov regime detection, a walk-forward LightGBM combiner, and an optional multi-agent LLM pipeline. The system was originally designed as a market-neutral long/short equity strategy. After running the full walk-forward backtest on 499 tickers across 168 months (2011--2026, $\sim$1.66 million ticker-months), the long/short construction does not work: the top10/bottom10 long/short portfolio achieves an annualized Sharpe of only $+0.32$ with a maximum drawdown of $-58.4\%$, statistically indistinguishable from a one-line 12-1 momentum factor (Sharpe $+0.31$). Eight alternative L/S variants --- rank-weighted, decile, vol-targeted, multi-factor, sector-neutral, regime-conditional, momentum-hedged, and a cross-factor hedge --- either match or worsen the baseline. The structural reason is a diagnostic finding that the Lazy Prices signal of Cohen, Malloy \& Nguyen (2020) is \emph{U-shaped, not monotonic}, in our 2011--2026 panel: the lowest-similarity decile (heavy filing rewriters) actually slightly outperforms the middle decile in subsequent months. The original short-side thesis of the Lazy Prices paper does not replicate. The only variant that survives is a long-only top-decile book (Method E), which delivers Sharpe $1.08$, annualized $+29.7\%$, and an annualized SPY-adjusted alpha of $+33.6\%$ (t-statistic $4.35$, p $= 2.3 \times 10^{-5}$, Mag~7 share $4.3\%$). We document the failure modes, the U-shape diagnostic, the cost-sensitivity analysis, the permutation test that retracts a previously claimed Anti-Momentum Sharpe of 1.91, and the conditions under which the long-only book remains a defensible weak alpha rather than disguised market exposure.
 \end{abstract}
 
 \section{Introduction}
 
-Public companies in the United States are required to file periodic disclosures with the Securities and Exchange Commission (SEC). These filings---annual reports (10-K), quarterly reports (10-Q), and material event disclosures (8-K)---contain information about business operations, risk factors, litigation, management changes, and financial performance that is often overlooked by the market.
+Public companies in the United States are required to file periodic disclosures with the SEC: annual reports (10-K), quarterly reports (10-Q), and material event disclosures (8-K). These filings contain information about business operations, risk factors, litigation, management changes, and financial performance that may be slow to incorporate into prices.
 
-\citet{cohen2020lazy} documented the ``Lazy Prices'' anomaly: firms that substantially change the language of their annual filings subsequently underperform, suggesting that the market is slow to incorporate textual information from regulatory disclosures. While the original study relied exclusively on cosine similarity between consecutive 10-K filings, we extend this approach in three directions:
+\citet{cohen2020lazy} documented the ``Lazy Prices'' anomaly: firms that substantially change the language of their annual filings subsequently underperform, suggesting that the market underreacts to textual information from regulatory disclosures. Their reported strategy --- long the most stable filers, short the heaviest rewriters --- earned approximately 188 basis points per month of risk-adjusted alpha in their sample.
 
+This report documents an attempt to extend Cohen, Malloy \& Nguyen's framework to a 14-year panel of S\&P~500 constituents, with three additions:
 \begin{enumerate}[noitemsep]
-    \item \textbf{8-K event-driven signals}: We score material events from 8-K filings by item type, providing signal updates multiple times per month rather than once per year.
-    \item \textbf{Multi-agent LLM analysis}: We deploy specialized LLM agents (filing analyst, news synthesizer) to extract qualitative assessments of filing changes.
-    \item \textbf{Machine learning signal combination}: We train a walk-forward LightGBM model to predict cross-sectional forward returns from heterogeneous signal features.
+    \item \textbf{8-K event-driven signals}, scoring 25 different 8-K item types and exponentially weighting recent events. The signal updates approximately 40 times per year per ticker, versus once per year for 10-K filings.
+    \item \textbf{Multi-agent LLM analysis} via a LangGraph fan-out/fan-in pipeline of specialized agents (Filing Analyst, News Synthesizer, Research Coordinator) backed by DeepSeek-V3.
+    \item \textbf{Machine learning signal combination} via a walk-forward LightGBM model that combines filing text features, event scores, market regime, and price features to predict cross-sectional forward returns.
 \end{enumerate}
 
+\textbf{The result of this attempt is negative.} The long/short market-neutral strategy this work was originally built to deliver does not achieve a deployable Sharpe ratio in our 14-year out-of-sample window, and we show in Section~\ref{sec:ushape} that the failure is structural: the Lazy Prices signal is not monotonic in forward return in our panel, so any L/S construction that assumes monotonicity is fighting the data.
+
+The report is organized to make the negative result transparent and reproducible. Section~\ref{sec:data} describes the data. Section~\ref{sec:signals} describes the signal generation pipeline (still in the codebase, unchanged). Section~\ref{sec:ml} describes the ML combiner. Section~\ref{sec:results} reports the 14-year results across ten portfolio variants. Section~\ref{sec:ushape} presents the U-shape diagnostic that explains why the L/S variants fail. Section~\ref{sec:methode} presents the long-only Method~E result and its beta-attribution analysis. Section~\ref{sec:retraction} documents what previous versions of this report claimed and retracts the inflated numbers. Section~\ref{sec:limitations} lists the honest caveats. Section~\ref{sec:conclusion} concludes.
+
 \section{Data}
+\label{sec:data}
 
 \subsection{SEC Filings}
 
-We download filings from the SEC EDGAR database for 102 S\&P~500 constituents over a 3-year lookback period. Table~\ref{tab:filings} summarizes the dataset.
+We download filings from the SEC EDGAR database for 499 S\&P~500 constituents over a 14-year window (2011--2026) using the \texttt{edgartools} library. For 10-K and 10-Q filings, we extract three sections: Item 1A (Risk Factors), Item 7 (MD\&A), and Item 1 (Business Description). For 8-K filings, we parse the item numbers from the filing metadata.
 
-\begin{table}[H]
-\centering
-\caption{SEC filing dataset summary.}
-\label{tab:filings}
-\begin{tabular}{lrrr}
-\toprule
-Filing Type & Count & Avg.\ per Ticker & Description \\
-\midrule
-10-K & 401 & 3.9 & Annual report \\
-10-Q & 935 & 9.2 & Quarterly report \\
-8-K  & 4{,}146 & 40.6 & Material event disclosure \\
-\midrule
-\textbf{Total} & \textbf{5{,}482} & \textbf{53.7} & \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-For 10-K and 10-Q filings, we extract three key sections: \emph{Item~1A---Risk Factors}, \emph{Item~7---Management's Discussion and Analysis} (MD\&A), and \emph{Item~1---Business Description}. For 8-K filings, we parse the item numbers from the filing metadata to identify the type of material event.
+The full panel after filtering for tickers with usable text and price coverage contains approximately 1.66 million ticker-month observations across 168 monthly walk-forward folds.
 
 \subsection{Market Data}
 
-We obtain daily OHLCV price data via Yahoo Finance for 94 tickers with complete coverage, spanning March~29, 2023 to March~27, 2026 (70{,}688 observations). Forward 21-trading-day returns serve as the prediction target. We compute rolling 21-day realized volatility, 5-day and 21-day momentum, and volume z-scores as auxiliary features.
+We obtain daily OHLCV price data via Yahoo Finance for 499 S\&P~500 constituents. Forward 21-trading-day returns serve as the prediction target. We also compute trailing 5-day and 21-day momentum, 21-day realized volatility, 60-day realized volatility, 12-1 momentum (12-month return excluding the most recent month), distance from 252-day high, and volume z-scores as auxiliary features.
+
+A critical implementation detail: the \texttt{ret\_1d}, \texttt{ret\_5d}, and \texttt{ret\_21d} columns in our cached \texttt{market\_data.parquet} are \emph{forward}-looking (they are the prediction targets). When constructing backward-looking momentum and volatility features, we recompute them directly from \texttt{close} via \texttt{pct\_change}, never reusing the forward columns. This avoided a leakage bug that briefly inflated earlier results.
 
 \section{Signal Generation}
+\label{sec:signals}
 
-Our framework produces four categories of signals, summarized in Figure~\ref{fig:pipeline}.
+The signal generation pipeline produces four categories of features that feed into the LightGBM combiner.
 
 \begin{figure}[H]
 \centering
@@ -83,6 +75,7 @@ Our framework produces four categories of signals, summarized in Figure~\ref{fig
 10-K Filings & $\rightarrow$ & TF-IDF Cosine Similarity & $\rightarrow$ & Lazy Prices Score \\
 8-K Filings & $\rightarrow$ & Item-Type Scoring & $\rightarrow$ & Event Score \\
 Market Data & $\rightarrow$ & Gaussian HMM & $\rightarrow$ & Regime State \\
+Market Data & $\rightarrow$ & Momentum / Vol / Volume & $\rightarrow$ & Price Features \\
 All Features & $\rightarrow$ & Walk-Forward LightGBM & $\rightarrow$ & \textbf{Predicted Return}
 \end{tabular}
 }}
@@ -93,24 +86,18 @@ All Features & $\rightarrow$ & Walk-Forward LightGBM & $\rightarrow$ & \textbf{P
 \subsection{Lazy Prices: TF-IDF Cosine Similarity}
 \label{sec:lazy}
 
-Following \citet{cohen2020lazy}, we measure the textual similarity between consecutive 10-K filings for each company. For each filing pair $(d_{t-1}, d_t)$, we:
+For each pair of consecutive 10-K filings $(d_{t-1}, d_t)$ from the same company, we compute TF-IDF vectors with bigrams, a 10{,}000-term vocabulary, and English stop-word removal, then take the cosine similarity:
+\begin{equation}
+    \text{sim}(d_{t-1}, d_t) = \frac{\mathbf{v}_{t-1} \cdot \mathbf{v}_t}{\|\mathbf{v}_{t-1}\| \, \|\mathbf{v}_t\|}.
+\end{equation}
+The mean similarity across 299 filing pairs in our sample is $0.896$ (std $0.204$), with extremes ranging from $0.10$ (Altria Group, near-complete rewrite) to $0.99$. Higher similarity means less change. Per the Cohen/Malloy/Nguyen thesis, higher similarity is the long signal. We assign cross-sectional quintile ranks: top quintile $\rightarrow +1$, bottom quintile $\rightarrow -1$.
 
-\begin{enumerate}[noitemsep]
-    \item Tokenize and compute TF-IDF vectors with $n$-grams up to order 2, a vocabulary of 10{,}000 terms, and English stop-word removal.
-    \item Compute cosine similarity:
-    \begin{equation}
-        \text{sim}(d_{t-1}, d_t) = \frac{\mathbf{v}_{t-1} \cdot \mathbf{v}_t}{\|\mathbf{v}_{t-1}\| \, \|\mathbf{v}_t\|}
-    \end{equation}
-\end{enumerate}
-
-Across 299 filing pairs, the mean cosine similarity is $0.896$ (std $0.204$), with a minimum of $0.102$ (Altria Group, indicating a near-complete rewrite) and a maximum of $0.994$. We assign cross-sectional quintile ranks: the top quintile (highest similarity, least change) receives signal $+1$, and the bottom quintile receives signal $-1$.
+The fundamental limitation of this signal --- which we knew from the start but underestimated --- is that it updates approximately once per year per ticker, so the cross-sectional rank is essentially stale for 11 of every 12 months.
 
 \subsection{8-K Event-Driven Signal}
 \label{sec:events}
 
-The Lazy Prices signal updates only at 10-K filing frequency (approximately annual). To capture intra-year information, we introduce an 8-K event signal that updates whenever a company files a material event disclosure.
-
-We assign a base score to each 8-K item type based on its expected impact on equity value:
+To capture intra-year information, we score 8-K material event filings by item type. Each item has a hand-coded prior score reflecting expected market impact:
 
 \begin{table}[H]
 \centering
@@ -124,35 +111,30 @@ Item & Description & Score \\
 1.02 & Termination of material agreement & $-0.50$ \\
 2.01 & Completion of acquisition/disposition & $+0.20$ \\
 2.05 & Costs associated with exit/restructuring & $-0.40$ \\
+2.06 & Material impairment & $-0.60$ \\
 4.01 & Changes in registrant's certifying accountant & $-0.70$ \\
+4.02 & Non-reliance on previously issued financials & $-0.80$ \\
 5.02 & Departure of directors or principal officers & $-0.30$ \\
-7.01 & Regulation FD disclosure & $0.00$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-For each ticker, we compute an exponentially-weighted average of recent event scores with decay parameter $\lambda = 0.9$ per month:
+For each ticker we compute an exponentially weighted average with monthly decay $\lambda = 0.9$:
 \begin{equation}
     s_i = \frac{\sum_{k} w_k \cdot \text{score}(e_k)}{\sum_k w_k}, \quad w_k = \lambda^{\Delta t_k / 30}
 \end{equation}
-where $\Delta t_k$ is the number of days since event $e_k$. Across 102 tickers, the mean event score is $-0.005$ (std $0.062$), with 1{,}296 total 8-K events parsed.
+where $\Delta t_k$ is the number of days since event $e_k$.
+
+In the LightGBM combiner this is the highest-importance feature; the cosine similarity feature has zero importance. The 8-K event signal effectively subsumes the annual Lazy Prices signal once both are available.
 
 \subsection{HMM Market Regime Detection}
 \label{sec:regime}
 
-We fit a 3-state Gaussian Hidden Markov Model to daily market features to classify the regime as \emph{Trending}, \emph{Mean-Reverting}, or \emph{Crisis}. Features include:
-
-\begin{itemize}[noitemsep]
-    \item 5-day rolling return of the S\&P~500 index
-    \item 21-day rolling realized volatility
-    \item Volatility ratio (5-day / 21-day)
-\end{itemize}
-
-All features are standardized prior to fitting. The HMM is estimated with full covariance matrices and 200 EM iterations. Regime labels are assigned post-hoc by volatility percentile of each state. Over the sample period, the market spent 76.1\% of days in the \emph{Trending} regime, 12.3\% in \emph{Mean-Reverting}, and 11.6\% in \emph{Crisis} (Table~\ref{tab:regimes}).
+We fit a Gaussian Hidden Markov Model on standardized market features (5-day return, 21-day vol, vol ratio, market breadth) to classify each trading day as Trending, Mean-Reverting, or Crisis. We use BIC-based model selection between 3- and 4-state variants and standardize features prior to fitting.
 
 \begin{table}[H]
 \centering
-\caption{HMM regime distribution (731 trading days).}
+\caption{HMM regime distribution (731 trading days in the original 24-month evaluation; the 14-year panel has comparable Trending dominance).}
 \label{tab:regimes}
 \begin{tabular}{lrr}
 \toprule
@@ -165,26 +147,25 @@ Crisis & 85 & 11.6\% \\
 \end{tabular}
 \end{table}
 
+The dominant fact is that 76\% of days were classified Trending. Any short-leg strategy was structurally disadvantaged for the entire test period.
+
 \subsection{Multi-Agent LLM Pipeline}
 
-We deploy three specialized LLM agents (powered by DeepSeek-V3 via Together AI) in a fan-out/fan-in architecture built on LangGraph:
-
+We deploy three LLM agents (DeepSeek-V3 via Together AI) in a fan-out/fan-in architecture using LangGraph:
 \begin{enumerate}[noitemsep]
-    \item \textbf{Filing Analyst}: Compares current and previous 10-K filing text, identifies material changes in risk factors and MD\&A, and produces a signal in $[-1, +1]$ with a confidence score. The prompt explicitly asks for both risk assessment (negative signals) and opportunity detection (positive signals) to avoid bearish bias.
-    \item \textbf{News Synthesizer}: Analyzes recent 8-K filings and categorizes events by materiality. Returns a signal and list of identified events.
-    \item \textbf{Research Coordinator}: Combines agent signals using confidence-weighted averaging with an agreement penalty:
-    \begin{equation}
-        s_{\text{combined}} = \frac{\sum_i w_i \cdot c_i \cdot s_i}{\sum_i w_i \cdot c_i}, \quad c_{\text{final}} = \bar{c} \cdot (0.5 + 0.5 \cdot \text{agreement})
-    \end{equation}
-    where $w_i$ are agent weights, $c_i$ are confidence scores, and agreement measures directional consensus.
+    \item \textbf{Filing Analyst}: Compares the current and previous 10-K filing text, identifies material changes in risk factors and MD\&A, and produces a signal in $[-1, +1]$ with a confidence score. The prompt explicitly asks for both risk and opportunity to avoid bearish bias.
+    \item \textbf{News Synthesizer}: Analyzes recent 8-K filings and categorizes events by materiality.
+    \item \textbf{Research Coordinator}: Combines agent signals using confidence-weighted averaging with an agreement penalty.
 \end{enumerate}
+
+The Earnings Analyst is implemented but inactive (Finnhub free tier does not provide transcripts). The pipeline was used to produce a single one-period snapshot signal in \texttt{pipeline\_signals.parquet}; it is not part of the 14-year walk-forward backtest in \texttt{improvements.py}, which uses only the LightGBM combiner output. There is no longitudinal evaluation of the LLM pipeline because we never accumulated enough monthly snapshots.
 
 \section{Machine Learning Signal Combination}
 \label{sec:ml}
 
 \subsection{Feature Panel}
 
-We construct a daily cross-sectional panel of 94 tickers $\times$ 731 trading days (68{,}714 observations) with the following features:
+We construct a daily cross-sectional panel with the following features:
 
 \begin{table}[H]
 \centering
@@ -192,606 +173,249 @@ We construct a daily cross-sectional panel of 94 tickers $\times$ 731 trading da
 \label{tab:features}
 \begin{tabular}{llr}
 \toprule
-Feature & Source & Coverage \\
+Feature & Source & LGBM importance (split) \\
 \midrule
-\texttt{cosine\_similarity} & Lazy Prices (Section~\ref{sec:lazy}) & 66.1\% \\
-\texttt{event\_score} & 8-K events (Section~\ref{sec:events}) & 100.0\% \\
-\texttt{event\_count} & 8-K events & 100.0\% \\
-\texttt{regime\_state} & HMM (Section~\ref{sec:regime}) & 97.1\% \\
-\texttt{regime\_prob} & HMM posterior probability & 97.1\% \\
-\texttt{momentum\_21d} & 21-day price return & 97.1\% \\
-\texttt{momentum\_5d} & 5-day price return & 99.3\% \\
-\texttt{volatility\_21d} & 21-day realized volatility & 97.1\% \\
-\texttt{volume\_zscore} & Volume relative to 63-day average & 91.5\% \\
+\texttt{event\_score} & 8-K events (Section~\ref{sec:events}) & 6 \\
+\texttt{event\_count} & 8-K events & 3 \\
+\texttt{momentum\_21d} & 21-day price return & 2 \\
+\texttt{regime\_state} & HMM (Section~\ref{sec:regime}) & 1 \\
+\texttt{momentum\_5d} & 5-day price return & 1 \\
+\texttt{volume\_zscore} & Volume relative to 63-day average & 1 \\
+\texttt{cosine\_similarity} & Lazy Prices (Section~\ref{sec:lazy}) & 0 \\
+\texttt{volatility\_21d} & 21-day realized volatility & 0 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Missing features are handled natively by LightGBM's NaN-aware split algorithm, avoiding the need for imputation.
+Missing features are handled natively by LightGBM's NaN-aware split algorithm. The graph-spillover signal from \texttt{signals/graph\_signal.py} was tested as a feature but consistently hurt OOS Sharpe and is disabled.
 
 \subsection{Walk-Forward Training}
 
 To avoid lookahead bias, we train the model using a strict walk-forward protocol:
-
 \begin{itemize}[noitemsep]
     \item \textbf{Training window}: 12 rolling months
     \item \textbf{Test window}: 1 calendar month
-    \item \textbf{Purge gap}: 5 trading days between training end and test start
+    \item \textbf{Purge gap}: 5 trading days between train end and test start
     \item \textbf{Target}: Forward 21-day return
-    \item \textbf{Total folds}: 24 (March 2024 -- February 2026)
+    \item \textbf{Total folds}: 168 (2011--2026)
 \end{itemize}
 
-\subsection{Model Specification}
+LightGBM hyperparameters are conservative: 15 leaves, learning rate 0.05, L1 = 0.1, L2 = 1.0, min child samples = 10. Critically, we set \texttt{deterministic=True} and \texttt{n\_jobs=1} so that walk-forward fits are bit-reproducible across runs and machines.
 
-We use LightGBM \citep{ke2017lightgbm} with conservative hyperparameters designed to prevent overfitting:
+\section{Results: the 14-Year Walk-Forward}
+\label{sec:results}
+
+All numbers below come from \texttt{data/cache/improvements\_results.parquet}, computed on the full 168-month panel by \texttt{python -m alpha\_graph.backtest.improvements}. Costs are 20 bps per month flat for the L/S variants and 10 bps per month for the long-only Method~E (no short leg).
 
 \begin{table}[H]
 \centering
-\caption{LightGBM hyperparameters.}
-\begin{tabular}{lr}
+\caption{Portfolio variant comparison on the full 168-month walk-forward panel.}
+\label{tab:improvements}
+\begin{tabular}{lrrrrr}
 \toprule
-Parameter & Value \\
+Method & Sharpe & Cumulative & Annualized & MaxDD & Win \\
 \midrule
-\texttt{num\_leaves} & 15 \\
-\texttt{max\_depth} & 5 \\
-\texttt{n\_estimators} & 200 \\
-\texttt{learning\_rate} & 0.03 \\
-\texttt{subsample} & 0.7 \\
-\texttt{colsample\_bytree} & 0.7 \\
-\texttt{reg\_alpha} (L1) & 0.1 \\
-\texttt{reg\_lambda} (L2) & 1.0 \\
-\texttt{min\_child\_samples} & 10 \\
+Baseline: top10/bot10 (Lazy Prices L/S) & $+0.32$ & $+90.4\%$ & $+4.7\%$ & $-58.4\%$ & 54\% \\
+A. Rank-weighted L/S & $-0.12$ & $-21.6\%$ & $-1.7\%$ & $-44.9\%$ & 54\% \\
+B. Decile (top 10\% / bot 10\%) & $+0.31$ & $+60.1\%$ & $+3.4\%$ & $-37.9\%$ & 60\% \\
+C. Vol-targeted (10\% ann vol) & $+0.27$ & $+40.7\%$ & $+2.5\%$ & $-36.3\%$ & 53\% \\
+D. Multi-factor (Lazy + Mom + LowVol) & $-0.52$ & $-58.7\%$ & $-6.1\%$ & $-64.2\%$ & 45\% \\
+\textbf{E. Long-only top10 (no short)} & $\mathbf{+1.08}$ & $\mathbf{+3{,}732\%}$ & $\mathbf{+29.7\%}$ & $\mathbf{-32.4\%}$ & $\mathbf{65\%}$ \\
+F. Long top10 / Short MIDDLE10 (U-shape) & $+0.61$ & $+341.6\%$ & $+11.2\%$ & $-34.1\%$ & 55\% \\
+G. Pure 12-1 Momentum (no Lazy Prices) & $+0.31$ & $+85.9\%$ & $+4.5\%$ & $-72.7\%$ & 55\% \\
+H. 12-1 Mom + Low-Vol composite & $-0.43$ & $-96.1\%$ & $-20.7\%$ & $-98.0\%$ & 50\% \\
+I. Long Lazy / Short low-Mom (cross-factor) & $-0.04$ & $-43.8\%$ & $-4.0\%$ & $-72.6\%$ & 52\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Feature Importance}
+The headline is in row 1: the L/S baseline that this entire framework was designed to deliver achieves a 14-year out-of-sample Sharpe of $+0.32$ with a $-58\%$ maximum drawdown. That is worse than holding T-bills, with risk well above what any institutional allocator would tolerate.
 
-Table~\ref{tab:importance} reports LightGBM split-based feature importance from the final trained model. The 8-K event score is the dominant feature, confirming that high-frequency filing events carry the strongest predictive signal.
+The other things to notice in this table:
+
+\begin{itemize}
+    \item \textbf{Pure 12-1 Momentum (Method G) gives Sharpe $+0.31$.} This is essentially the same number as our text-derived L/S signal. In other words, 14 years of work, $\sim$5,400 SEC filings parsed, and a multi-feature LightGBM model produce a long/short signal that is statistically indistinguishable from a one-line price-momentum factor any sophomore could implement in five minutes.
+    \item \textbf{All multi-factor combinations are worse, not better.} Method D (Lazy + Mom + LowVol z-score average, rank-weighted) is Sharpe $-0.52$. Method H (Mom + LowVol) is $-0.43$. Method I (cross-factor hedge) is $-0.04$. The intuition that combining ``diversifying'' factors should improve Sharpe is wrong here, because the Lazy Prices signal carries no information beyond what momentum already provides, so averaging it in adds noise without alpha.
+    \item \textbf{Method F (long top10 / short middle10) gets Sharpe $+0.61$,} almost double the standard top10/bot10. We discuss this in Section~\ref{sec:ushape}; it is a diagnostic confirmation of the U-shape problem rather than a deployable strategy.
+    \item \textbf{Method E (long-only top10) gives Sharpe $+1.08$.} This is the only variant that survives, and the long-only construction is the punchline of this report (Section~\ref{sec:methode}).
+\end{itemize}
+
+\subsection{Cost Sensitivity for the L/S Baseline}
+
+From \texttt{cost\_sensitivity.parquet}:
 
 \begin{table}[H]
 \centering
-\caption{Feature importance (split count) from final LightGBM model.}
-\label{tab:importance}
-\begin{tabular}{lr}
+\caption{Cost sensitivity sweep for the top10/bot10 L/S baseline.}
+\label{tab:costs}
+\begin{tabular}{rrrr}
 \toprule
-Feature & Importance \\
+Cost (bps/mo) & Sharpe & Cumulative & Max DD \\
 \midrule
-\texttt{event\_score} & 6 \\
-\texttt{event\_count} & 3 \\
-\texttt{momentum\_21d} & 2 \\
-\texttt{regime\_state} & 1 \\
-\texttt{momentum\_5d} & 1 \\
-\texttt{volume\_zscore} & 1 \\
-\texttt{cosine\_similarity} & 0 \\
-\texttt{volatility\_21d} & 0 \\
+0   & $+0.43$ & $+166\%$ & $-54\%$ \\
+5   & $+0.40$ & $+145\%$ & $-55\%$ \\
+10  & $+0.37$ & $+125\%$ & $-56\%$ \\
+15  & $+0.35$ & $+107\%$ & $-57\%$ \\
+\textbf{20 (assumed)} & $\mathbf{+0.32}$ & $\mathbf{+90\%}$ & $\mathbf{-58\%}$ \\
+30  & $+0.26$ & $+61\%$ & $-61\%$ \\
+50  & $+0.15$ & $+15\%$ & $-65\%$ \\
+75  & $+0.02$ & $-24\%$ & $-71\%$ \\
+100 & $-0.12$ & $-50\%$ & $-77\%$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Notably, the Lazy Prices cosine similarity feature has zero importance in the final model, suggesting that the 8-K event signal subsumes the information content of annual filing changes when both are available.
+Breakeven (Sharpe = 0) is approximately 75 bps/month. The 20 bps/month assumption is on the optimistic end of plausible round-trip costs for monthly rebalancing of bottom-decile S\&P~500 names that include illiquid and hard-to-borrow stocks. Realistic transaction costs would push the L/S Sharpe well below the headline $+0.32$, possibly negative.
 
-\section{Portfolio Construction}
+\section{The U-Shape Diagnostic}
+\label{sec:ushape}
 
-We construct a monthly-rebalanced long/short equity portfolio:
+When every reasonable variant of a strategy fails, the question is whether the failure is in the implementation or in the signal. We tested the latter directly. We binned all ticker-months in the 14-year panel into deciles by Lazy Prices signal strength and computed the average forward 21-day return per decile. The result:
+
+\begin{table}[H]
+\centering
+\caption{Decile-by-decile forward return for the Lazy Prices signal in the full 14-year panel.}
+\label{tab:ushape}
+\begin{tabular}{lll}
+\toprule
+Decile & Interpretation & Avg forward return / month \\
+\midrule
+9 (highest cosine sim, no filing changes) & strong long & $\mathbf{+2.10\%}$ \\
+4--5 (middle, ambiguous) & neutral & $+1.19\%$ \\
+0 (lowest cosine sim, filing rewritten) & ``strong short'' per Cohen/Malloy/Nguyen & $+1.37\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The original Lazy Prices paper assumes the bottom decile underperforms; that is the alpha that motivates shorting it. \textbf{In our 2011--2026 panel the bottom decile slightly outperforms the middle.} The signal is U-shaped, not monotonic.
+
+The implications follow mechanically:
 
 \begin{enumerate}[noitemsep]
-    \item Rank all tickers by the ML combiner's predicted return signal.
-    \item Go long the top 10 tickers (equal-weighted, 10\% each).
-    \item Go short the bottom 10 tickers (equal-weighted, 10\% each).
-    \item Apply transaction costs of 20 basis points per rebalance (conservative estimate for S\&P~500 constituents).
+    \item \textbf{Rank-weighted L/S} (Method A) puts negative weight on the bottom decile, which has positive expected return. You are paying alpha to short a positive-EV bucket. Sharpe $-0.12$ --- exactly as predicted.
+    \item \textbf{Top10/Bot10} has the same problem at smaller scale. The bot10 has slightly positive expected return; shorting it adds noise without alpha. The entire L/S Sharpe of $+0.32$ comes from the long top10, with the short side dragging it down.
+    \item \textbf{Long top10 / Short MIDDLE10} (Method F) is Sharpe $+0.61$, almost double the top10/bot10. This confirms the U-shape diagnosis: shorting the actually-bad bucket (the middle) instead of the rewriter bucket helps. But ``long top10 / short middle10'' is not a defensible production strategy --- there is no economic reason to short the middle decile, and Sharpe $0.61$ is still well below any deployment threshold.
+    \item \textbf{Long-only top10} (Method E) is Sharpe $+1.08$ because it drops the broken short side entirely. This is just acknowledging that the long signal works and the short signal doesn't.
 \end{enumerate}
 
-We also implement signal-weighted position sizing, a 5\% per-stock cap, and a 30\% per-sector cap for the production portfolio, though the backtest results reported below use equal weights for simplicity.
+The short side of the original Cohen/Malloy/Nguyen finding does not replicate in our universe over 2011--2026. We do not have a definitive explanation for why; possibilities include (a) the post-2011 era differs structurally from their pre-GFC sample, (b) S\&P~500 large-caps behave differently from the broader universe their study used, (c) sample period overlap with quantitative crowding into NLP-driven equity strategies has eroded the original anomaly. Whatever the cause, the empirical fact in our panel is that the bottom decile slightly beats the middle, and once that is true no L/S construction that assumes monotonicity can work.
 
-\section{Results}
+\section{The Method E Long-Only Result}
+\label{sec:methode}
 
-\subsection{Information Coefficient Analysis}
+The one variant in Table~\ref{tab:improvements} with a Sharpe above 1 is Method E, the long-only top10 portfolio. This is just the long leg of the L/S baseline with the broken short side removed. We took it seriously enough to run a beta-attribution analysis (\texttt{backtest/attribution.py}) to check whether the result is real alpha or disguised market exposure.
 
-The walk-forward out-of-sample information coefficient (Spearman rank correlation between predicted and realized 21-day returns) is reported in Table~\ref{tab:ic}.
+\subsection{Beta Attribution}
+
+We regress Method E's monthly net returns on SPY's monthly total returns: $r_E = \alpha + \beta \cdot r_\text{SPY} + \varepsilon$.
 
 \begin{table}[H]
 \centering
-\caption{Walk-forward IC statistics (24 months OOS).}
-\label{tab:ic}
+\caption{Method E beta attribution against SPY (167-month regression).}
+\label{tab:attribution}
 \begin{tabular}{lr}
 \toprule
 Metric & Value \\
 \midrule
-Mean IC & 0.062 \\
-IC Standard Deviation & 0.103 \\
-ICIR (IC / IC Std) & 0.609 \\
-Positive IC Months & 18 / 24 (75\%) \\
+Months in regression & 167 \\
+Method E raw Sharpe & $+1.08$ \\
+Method E annualized return & $+29.7\%$ \\
+SPY raw Sharpe & $+0.99$ \\
+SPY annualized return & $+13.7\%$ \\
+\midrule
+$\alpha$ (annualized, arithmetic) & $\mathbf{+33.6\%}$ \\
+$\beta$ vs SPY & $\mathbf{-0.19}$ \\
+$R^2$ & $0.009$ \\
+$\alpha$ standard error (monthly) & $0.64\%$ \\
+$\alpha$ t-statistic & $\mathbf{+4.35}$ \\
+$\alpha$ p-value (two-sided) & $\mathbf{2.3 \times 10^{-5}}$ \\
+$\beta$ t-statistic & $-1.23$ \\
+\midrule
+Residual std (monthly) & $6.4\%$ \\
+Residual Sharpe $(\alpha/\sigma_\varepsilon)\sqrt{12}$ & $\mathbf{+1.21}$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-An ICIR of 0.61 exceeds the $0.5$ threshold commonly considered indicative of a useful cross-sectional signal in equity markets.
+\textbf{The alpha is statistically distinguishable from market exposure.} The $\beta$ is essentially zero ($-0.19$, t-stat $-1.23$, not significantly different from zero). $R^2$ is essentially zero ($0.9\%$). The $\alpha$ t-statistic is $4.35$ (p $= 2.3 \times 10^{-5}$). The residual Sharpe of $1.21$ slightly exceeds the raw Sharpe, so beta-adjusting strengthens rather than weakens the result.
 
-\subsection{Long/Short Portfolio Performance}
+\subsection{Holdings Concentration}
 
-Figure~\ref{fig:cumret} compares the cumulative performance of the ML combiner long/short portfolio against the Lazy Prices baseline and the S\&P~500 index.
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{fig1_cumulative_return.png}
-\caption{Cumulative return comparison over 24 out-of-sample months. The ML combiner (blue) achieves +80.5\% cumulative return with Sharpe 1.77, versus $-$25.3\% for the Lazy Prices baseline (red) and +44.8\% for S\&P~500 long-only (green).}
-\label{fig:cumret}
-\end{figure}
-
-Table~\ref{tab:performance} compares the ML combiner portfolio against the baseline Lazy Prices signal and the S\&P~500 benchmark.
+A common failure mode for ``stock picking'' results is that they collapse to a basket of mega-cap names, which is just disguised quality/momentum beta. We checked this:
 
 \begin{table}[H]
 \centering
-\caption{Portfolio performance comparison (March 2024 -- February 2026).}
-\label{tab:performance}
-\begin{tabular}{lrrr}
+\caption{Method E holdings concentration over 168 months.}
+\label{tab:concentration}
+\begin{tabular}{lr}
 \toprule
-Metric & ML Combiner & Lazy Prices & S\&P~500 \\
+Metric & Value \\
 \midrule
-Cumulative Return & $+80.5\%$ & $-25.3\%$ & $+44.8\%$ \\
-Annualized Sharpe & $1.77$ & $-1.49$ & $1.41$ \\
-Max Drawdown & $-13.3\%$ & $-28.1\%$ & $-7.6\%$ \\
-Positive Months & 71\% & 37.5\% & --- \\
-Avg.\ Monthly Return & $+2.61\%$ & $-1.06\%$ & --- \\
-Best Month & $+11.7\%$ & $+4.5\%$ & --- \\
-Worst Month & $-9.0\%$ & $-8.3\%$ & --- \\
+Total ticker-month picks & 1{,}680 \\
+Months covered & 168 \\
+Unique tickers selected & 392 \\
+Avg distinct tickers per month & 10.0 \\
+Mag 7 picks share (AAPL, MSFT, GOOGL, GOOG, AMZN, META, NVDA, TSLA) & $\mathbf{4.3\%}$ \\
+Top 5 ticker concentration & $\mathbf{8.0\%}$ \\
+Top 10 ticker concentration & $\sim 14\%$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Monthly Return Decomposition}
+The 15 most-frequently-picked tickers are CVNA (42 months), BLDR (25), TSLA (23), NVDA (23), AXON (22), AMD (22), SMCI (20), BBY (19), APP (18), DXCM (17), and so on. Mag 7 contributes only 4.3\% of all picks, well below the 30\% threshold that would suggest a disguised mega-cap basket. Top-5 concentration is 8.0\%. The portfolio rotates through 392 distinct tickers across 168 months. This is reasonably diversified.
 
-Figure~\ref{fig:monthly} visualizes the monthly long and short leg contributions. The short leg (red) contributes substantial alpha from August~2025 onward.
+\subsection{What Method E Is (and Isn't)}
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{fig2_monthly_returns.png}
-\caption{Monthly return decomposition. Blue bars: long leg return. Red bars: short leg return. Black line: net long/short return after 20~bps transaction costs.}
-\label{fig:monthly}
-\end{figure}
+Combining the beta attribution and concentration check, Method E is a defensible weak alpha as a long-side stock-picking signal. Specifically:
+\begin{itemize}[noitemsep]
+    \item Alpha t-stat $4.35$ exceeds the conventional $|t| > 2$ threshold by a wide margin.
+    \item Beta to market is essentially zero, so the result is not just disguised SPY exposure.
+    \item Holdings are not concentrated in Mag 7, so it's not disguised mega-cap quality.
+    \item The signal works on the long side, where the underlying Lazy Prices intuition (companies that don't change their filings are stable) is the original Cohen/Malloy/Nguyen finding that does seem to replicate.
+\end{itemize}
 
-Table~\ref{tab:monthly} provides the full monthly return decomposition into long and short legs.
-
-\begin{table}[H]
-\centering
-\caption{Monthly return decomposition (top/bottom 10 tickers).}
-\label{tab:monthly}
-\small
-\begin{tabular}{lrrr}
-\toprule
-Month & Long Leg & Short Leg & Net Return \\
-\midrule
-2024-03 & $-5.44\%$ & $-2.48\%$ & $-3.16\%$ \\
-2024-04 & $+6.71\%$ & $+2.66\%$ & $+3.86\%$ \\
-2024-05 & $+3.67\%$ & $+4.72\%$ & $-1.25\%$ \\
-2024-06 & $+7.29\%$ & $+2.44\%$ & $+4.65\%$ \\
-2024-07 & $+1.74\%$ & $+1.04\%$ & $+0.51\%$ \\
-2024-08 & $+9.47\%$ & $+2.00\%$ & $+7.27\%$ \\
-2024-09 & $+5.62\%$ & $+3.17\%$ & $+2.26\%$ \\
-2024-10 & $+18.28\%$ & $+9.35\%$ & $+8.73\%$ \\
-2024-11 & $-2.47\%$ & $-4.60\%$ & $+1.94\%$ \\
-2024-12 & $+10.04\%$ & $-1.81\%$ & $+11.65\%$ \\
-2025-01 & $-15.52\%$ & $-6.75\%$ & $-8.97\%$ \\
-2025-02 & $-8.29\%$ & $-5.08\%$ & $-3.41\%$ \\
-2025-03 & $-0.56\%$ & $-0.93\%$ & $+0.17\%$ \\
-2025-04 & $+8.09\%$ & $+3.97\%$ & $+3.92\%$ \\
-2025-05 & $+4.95\%$ & $+6.74\%$ & $-1.98\%$ \\
-2025-06 & $+2.26\%$ & $+5.40\%$ & $-3.34\%$ \\
-2025-07 & $+7.03\%$ & $+4.88\%$ & $+1.94\%$ \\
-2025-08 & $+5.24\%$ & $-1.43\%$ & $+6.47\%$ \\
-2025-09 & $+2.14\%$ & $+1.89\%$ & $+0.05\%$ \\
-2025-10 & $+5.85\%$ & $-1.55\%$ & $+7.20\%$ \\
-2025-11 & $+5.77\%$ & $-0.51\%$ & $+6.08\%$ \\
-2025-12 & $+6.82\%$ & $-2.12\%$ & $+8.74\%$ \\
-2026-01 & $+4.55\%$ & $-5.97\%$ & $+10.32\%$ \\
-2026-02 & $-9.13\%$ & $-8.43\%$ & $-0.90\%$ \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The short leg contributes substantial alpha in the second half of the test period (August 2025 onward), correctly identifying underperforming stocks during a period of market rotation away from momentum names.
-
-\subsection{Information Coefficient and Feature Importance}
-
-Figure~\ref{fig:ic} shows the monthly out-of-sample IC. The signal is positive in 18 of 24 months (75\%), with a mean IC of 0.062 and ICIR of 0.61.
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{fig3_monthly_ic.png}
-\caption{Walk-forward Spearman IC by month. Blue: positive IC. Red: negative IC. Dashed line: mean IC = 0.062.}
-\label{fig:ic}
-\end{figure}
-
-Figure~\ref{fig:importance} shows the LightGBM feature importance. The 8-K event score dominates, followed by event count and 21-day momentum. The original Lazy Prices cosine similarity has zero importance, subsumed by the higher-frequency event signal.
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.75\textwidth]{fig4_feature_importance.png}
-\caption{LightGBM feature importance (split count). The 8-K event score is the dominant predictor.}
-\label{fig:importance}
-\end{figure}
-
-\subsection{Market Regime Analysis}
-
-Figure~\ref{fig:regime} shows the HMM regime classification over the sample period. The market spent 76\% of days in the \emph{Trending} regime (green), which explains the strong drag on short positions for the Lazy Prices baseline.
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{fig5_regime_timeline.png}
-\caption{HMM 3-state regime classification. Green: Trending (556 days). Blue: Mean-Reverting (90 days). Red: Crisis (85 days).}
-\label{fig:regime}
-\end{figure}
-
-\subsection{Drawdown Analysis}
-
-Figure~\ref{fig:drawdown} compares the drawdown profiles. The ML combiner's maximum drawdown of $-$13.3\% is less than half that of the Lazy Prices baseline ($-$28.1\%).
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{fig6_drawdown.png}
-\caption{Drawdown comparison. The ML combiner (blue) maintains significantly shallower drawdowns than the Lazy Prices baseline (red).}
-\label{fig:drawdown}
-\end{figure}
-
-\subsection{Regime Filter Impact}
-
-The HMM regime filter applied to the baseline Lazy Prices signal (without the ML combiner) reduces short exposure during trending markets to 25\%. Table~\ref{tab:regime_impact} shows the improvement.
-
-\begin{table}[H]
-\centering
-\caption{Regime filter impact on Lazy Prices signal.}
-\label{tab:regime_impact}
-\begin{tabular}{lrr}
-\toprule
-Metric & No Filter & With HMM Filter \\
-\midrule
-Cumulative Return & $-25.3\%$ & $-19.9\%$ \\
-Sharpe Ratio & $-1.49$ & $-1.04$ \\
-Positive Months & 37.5\% & 50.0\% \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-While the regime filter improves the baseline by 30\%, it is insufficient to make the Lazy Prices signal profitable in isolation. The ML combiner approach supersedes both variants.
-
-\section{Discussion}
-
-\subsection{Why the ML Combiner Outperforms}
-
-The baseline Lazy Prices signal updates only at 10-K filing frequency---approximately once per year per company. Between filings, the signal is stale and the portfolio holds positions based on month-old or year-old information. The ML combiner addresses this by incorporating:
-
+But with several caveats that should be kept in mind:
 \begin{enumerate}[noitemsep]
-    \item \textbf{8-K event scores}: Updated whenever a material event is disclosed (average 40.6 8-K filings per ticker over 3 years), providing 40$\times$ higher signal frequency than 10-K filings alone.
-    \item \textbf{Price momentum}: 5-day and 21-day momentum capture short-term market sentiment that complements the fundamental filing signals.
-    \item \textbf{Market regime}: The HMM regime state conditions the model's predictions on the prevailing market environment.
+    \item \textbf{It is not the long/short market-neutral strategy this project was built to deliver.} A long-only book is a different product with different risk and capital implications.
+    \item \textbf{Survivorship bias is unmeasured.} The universe is current S\&P~500 constituents; companies removed from the index over 2011--2026 (typically after underperformance) are excluded. This mechanically inflates long-side returns by an unknown amount, possibly substantial.
+    \item \textbf{The 14-year annualized $29.7\%$ has to be compared against SPY's $13.7\%$ over the same window.} The spread is $16$ percentage points and the SPY-adjusted alpha t-stat is $4.35$, so the spread is unlikely to be pure noise --- but a single 14-year long book of US equities outperforming SPY is not by itself proof of alpha, and it is consistent with a quality/momentum tilt that we have only partially stripped out.
 \end{enumerate}
 
-Feature importance analysis confirms that \texttt{event\_score} is the dominant predictor, followed by \texttt{event\_count} and \texttt{momentum\_21d}. The original Lazy Prices cosine similarity contributes zero importance to the final model, suggesting it is subsumed by the higher-frequency 8-K event signal.
+\section{Retraction of Previous Numbers}
+\label{sec:retraction}
 
-\subsection{Limitations and Caveats}
+Earlier versions of this report claimed substantially better results:
+\begin{itemize}[noitemsep]
+    \item \textbf{``ML Combiner Sharpe 1.77, +80.5\% over 24 months.''} This was generated on a cherry-picked Mar~2024--Feb~2026 window. On the actual cached \texttt{walk\_forward\_results.parquet} for that period, the L/S strategy is $-44.9\%$ cumulative with Sharpe $-2.64$. The headline number was inconsistent with the cached data and is not reproducible. It is retracted.
+    \item \textbf{``Anti-Momentum Features Sharpe 1.91 over 18 months.''} This was a structural extension that added 52-week-high distance and 5-day reversal as additional ML features and was claimed as the production strategy in the previous version of this document. We ran a permutation test (\texttt{backtest/permutation\_test.py}, results in \texttt{permutation\_test\_null.parquet}) that jointly shuffles the two features within each month and re-runs the entire walk-forward training pipeline. The null distribution has mean $+0.016$, std $0.22$, range $[-0.37, +0.47]$. The 18-month subset on which the $1.91$ headline was generated happens to be the period (post-Jan-2025) when momentum reversal worked. On the full 14-year panel the same approach does not stand out from the null. The original headline relied on the lucky window. It is retracted.
+    \item \textbf{The post-hoc risk-management overlays} (Momentum Protection, Regime Sizing, Combined) and \textbf{the structural extensions} (Sector-Neutral, Regime-Conditional, Momentum Hedge) were all evaluated only on the same 24-month window and inherit the cherry-picking problem. Their headline Sharpes (1.94, 1.60, 1.91, 1.67, 1.47, 1.77) are not robust when re-evaluated on the 14-year panel and should be treated as post-hoc tuning artifacts rather than genuine improvements.
+\end{itemize}
+
+These claims are no longer made by this report. The code that generated them is still in the repository (\texttt{backtest/extensions.py}, \texttt{backtest/permutation\_test.py}, \texttt{trading/signal\_generator.py}) so that the retraction is reproducible. The \texttt{trading/} layer still runs an ``Anti-Momentum'' production wiring; readers should treat that wiring as a research artifact, not a deployable strategy.
+
+\section{Honest Limitations}
+\label{sec:limitations}
 
 \begin{enumerate}[noitemsep]
-    \item \textbf{Survivorship bias}: The universe consists of current S\&P~500 constituents only. Companies that were delisted or removed from the index during the sample period are excluded, which may upward-bias reported returns.
-    \item \textbf{Limited out-of-sample period}: 24 months of walk-forward results provides reasonable but not definitive evidence of alpha. A lucky streak in a few months can inflate the Sharpe ratio.
-    \item \textbf{Simplified transaction costs}: We model a flat 20~bps per monthly rebalance. Real-world costs include market impact, bid-ask spread, and short borrowing costs that vary by stock and market conditions.
-    \item \textbf{No short borrowing costs}: The short leg assumes costless borrowing, which is realistic for large-cap S\&P~500 names but would reduce net returns by approximately 30--50~bps annually.
-    \item \textbf{Capacity constraints}: A 10-stock equal-weight long/short portfolio within the S\&P~500 has limited capacity before market impact erodes alpha.
+    \item \textbf{The L/S strategy doesn't work.} Sharpe $0.32$, max drawdown $-58\%$, breakeven cost $\sim$75 bps/month. This is the central finding of this report.
+    \item \textbf{The long-only Method E result has alpha $\mathbf{t = 4.35}$ but lives with survivorship bias.} The universe is current S\&P~500 constituents; companies removed during the panel are excluded. Backfilling historical S\&P~500 membership would be the right next step, but we did not do it. Any reader should mentally discount the $+29.7\%$ annualized accordingly until that experiment is run.
+    \item \textbf{The earnings transcript signal was never tested.} Finnhub free tier doesn't include transcripts, so the Earnings Analyst agent is built but inactive. Academic literature suggests transcripts are the most likely source of additional alpha (\citealt{kim2025earnings} report 247 bps from transcript tone analysis), and we never got to evaluate it.
+    \item \textbf{The multi-agent LLM pipeline was never longitudinally evaluated.} It produces sensible per-ticker scores in a one-period snapshot, but we never accumulated enough monthly snapshots to compute its IC or run a walk-forward backtest of its output. Whatever the LLM agents are doing is currently undemonstrated as alpha.
+    \item \textbf{The knowledge graph spillover signal hurt OOS returns and is disabled.} It is implemented in \texttt{signals/graph\_signal.py} and \texttt{data/relationships.py} (LLM extracts inter-company relationships from 10-K Business Description sections, then propagates 8-K event scores along the graph), but every variant we tried that included it as a feature in the LightGBM combiner reduced Sharpe.
+    \item \textbf{No transaction-cost realism for the bottom decile.} 20 bps/month is plausible for top-of-book S\&P~500 names but not for the bottom decile, which often includes illiquid and hard-to-borrow stocks. The cost sensitivity in Table~\ref{tab:costs} shows that realistic costs (50--75 bps/month) take the L/S Sharpe to zero or negative.
+    \item \textbf{Determinism only inside LightGBM, not across the full pipeline.} The LightGBM model is bit-reproducible (\texttt{deterministic=True}, \texttt{n\_jobs=1}), but yfinance API responses, SEC EDGAR responses, and the LLM agent calls are not deterministic, so reproducing the exact numbers in this report requires re-using the cached parquet files.
 \end{enumerate}
-
-\subsection{Extensions}
-
-Several directions could strengthen the framework:
-\begin{itemize}[noitemsep]
-    \item \textbf{Earnings call transcripts}: The earnings analyst agent is implemented but inactive due to data limitations (Finnhub free tier). \citet{kim2025earnings} report 247~bps of alpha from transcript tone analysis.
-    \item \textbf{Expanded universe}: Extending to the full S\&P~500 (500 tickers) or Russell~1000 would improve statistical power and portfolio diversification.
-    \item \textbf{Knowledge graph}: Supply-chain and customer-supplier relationships could enable cross-firm signal propagation using graph neural networks.
-    \item \textbf{Intraday rebalancing}: The current monthly rebalance frequency leaves alpha on the table; more frequent rebalancing around 8-K filing dates could capture event-driven moves more efficiently.
-\end{itemize}
-
-\section{Risk Management Extensions}
-\label{sec:extensions}
-
-The baseline ML combiner achieves strong aggregate performance (Sharpe 1.77) but exhibits a concentrated $-$9.0\% loss in January~2025 driven by momentum factor reversal. We evaluate three post-hoc risk management overlays to assess whether tail risk can be reduced without sacrificing returns.
-
-\subsection{Motivation: The January 2025 Momentum Crash}
-
-In January~2025, the model's long portfolio was concentrated in high-beta growth names (APP, CVNA, AXON, ANET, BX) because the dominant features---\texttt{event\_score} and \texttt{momentum\_21d}---systematically favor recent winners with positive 8-K filings. During the risk-off episode:
-
-\begin{itemize}[noitemsep]
-    \item Long leg: $-15.5\%$ (ANET $-25.8\%$, CCL $-20.8\%$, AXON $-19.0\%$)
-    \item Short leg: $-6.8\%$ (defensive names held up: BAX $+7.4\%$, APTV $+0.6\%$)
-    \item The HMM oscillated between CRISIS and MEAN\_REVERTING daily, indicating extreme regime instability.
-\end{itemize}
-
-The root cause is implicit momentum factor exposure: when momentum reverses, both the event and momentum features point in the wrong direction simultaneously.
-
-\subsection{Three Risk Management Strategies}
-
-We test three overlays applied to the baseline ML combiner portfolio:
-
-\textbf{Strategy 1: Momentum Crash Protection.} We compute a pure momentum factor return each month (top-10 minus bottom-10 by trailing 21-day return). When the cumulative momentum factor drawdown exceeds 10\%, both long and short exposure are reduced to 50\% in the following month. This triggered in 5 of 24 months.
-
-\textbf{Strategy 2: Regime-Aware Sizing.} Position sizes are scaled by the HMM regime state: \emph{Trending} $\rightarrow$ 100\% long / 25\% short; \emph{Crisis} $\rightarrow$ 25\% long / 25\% short; \emph{Mean-Reverting} $\rightarrow$ 100\% / 100\%. Since 76\% of months were classified as \emph{Trending}, this effectively maintains a persistent net-long bias.
-
-\textbf{Strategy 3: Combined.} At each rebalance, exposure is set to the minimum of the momentum protection and regime sizing levels for each leg independently.
-
-\subsection{Results}
-
-Table~\ref{tab:extensions} compares all four variants.
-
-\begin{table}[H]
-\centering
-\caption{Risk management overlay comparison (24-month OOS).}
-\label{tab:extensions}
-\begin{tabular}{lrrrr}
-\toprule
-Strategy & Cumulative & Sharpe & Max DD & Win Rate \\
-\midrule
-Baseline & $+80.5\%$ & $1.77$ & $-13.3\%$ & 71\% \\
-Momentum Protection & $+75.0\%$ & $\mathbf{1.94}$ & $\mathbf{-9.1\%}$ & 71\% \\
-Regime Sizing & $+85.4\%$ & $1.60$ & $-20.3\%$ & 71\% \\
-Combined & $\mathbf{+86.3\%}$ & $1.91$ & $-13.1\%$ & 71\% \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Figure~\ref{fig:strat_cum} shows the cumulative return paths, and Figure~\ref{fig:strat_dd} shows the drawdown profiles.
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{fig7_strategy_comparison.png}
-\caption{Cumulative return comparison of four strategy variants. Momentum Protection (green) avoids the January~2025 drawdown. Combined (purple) achieves the highest cumulative return.}
-\label{fig:strat_cum}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{fig8_drawdown_comparison.png}
-\caption{Drawdown profiles. Momentum Protection (green) limits the maximum drawdown to $-9.1\%$, while Regime Sizing (red) worsens it to $-20.3\%$.}
-\label{fig:strat_dd}
-\end{figure}
-
-Figure~\ref{fig:strat_monthly} provides a panel comparison of monthly returns across all four variants, with the January~2025 loss annotated.
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{fig9_monthly_returns_comparison.png}
-\caption{Monthly returns for each strategy variant. Momentum Protection halves the January~2025 loss from $-9.0\%$ to $-4.6\%$.}
-\label{fig:strat_monthly}
-\end{figure}
-
-Figure~\ref{fig:exposure} shows the dynamic exposure levels over time for the two active overlays.
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{fig10_exposure_timeline.png}
-\caption{Dynamic exposure for Momentum Protection (top) and Regime Sizing (bottom). Momentum Protection triggers infrequently (5 months); Regime Sizing maintains persistently low short exposure.}
-\label{fig:exposure}
-\end{figure}
-
-\subsection{Analysis}
-
-\textbf{Momentum Protection} delivers the best risk-adjusted performance: Sharpe improves from 1.77 to 1.94 (+10\%) and maximum drawdown decreases from $-$13.3\% to $-$9.1\% ($-$32\%). The January~2025 loss is halved from $-$9.0\% to $-$4.6\%. The trade-off is a modest reduction in cumulative return ($+$75.0\% vs $+$80.5\%), because the filter also reduces exposure during some months that turn out to be profitable.
-
-\textbf{Regime Sizing} achieves the appearance of higher returns ($+$85.4\%) but this is attributable to net-long beta exposure, not additional alpha. By reducing short exposure to 25\% during 76\% of months (Trending regime), the portfolio effectively becomes 75\% net long, capturing the 2024--2025 bull market. However, when the market declines (January~2025), the long-heavy portfolio suffers a $-$14.0\% loss versus $-$9.0\% for the baseline. The Sharpe ratio decreases from 1.77 to 1.60, confirming that the additional return does not compensate for the increased risk.
-
-\textbf{Combined} inherits the best properties of both overlays: it achieves the highest cumulative return ($+$86.3\%) with a Sharpe of 1.91 and maximum drawdown comparable to the baseline ($-$13.1\%). This works because the two filters activate at different times---regime sizing captures the bull market upside in calm months, while momentum protection overrides it during crash episodes. The January~2025 loss is reduced to $-$6.3\%.
-
-\textbf{Recommendation.} For deployment, we recommend the Combined overlay as the default configuration. It preserves 97\% of the Momentum Protection's Sharpe improvement while delivering 15\% higher cumulative returns. However, if maximum drawdown minimization is the primary objective (e.g., for a risk-constrained mandate), Momentum Protection alone is preferred.
-
-\section{Structural Extensions}
-\label{sec:structural}
-
-The overlays in Section~\ref{sec:extensions} are post-hoc exposure adjustments that do not modify the underlying signal. We now evaluate four structural changes that address the root cause of momentum dependence: the model's feature space, portfolio construction, and training procedure.
-
-\subsection{Extension 1: Anti-Momentum Features}
-
-We augment the ML combiner's feature set with two anti-momentum signals:
-\begin{itemize}[noitemsep]
-    \item \textbf{Distance from 52-week high}: $(\text{price} / \max_{252d}(\text{price})) - 1$. Stocks near their 52-week high have elevated reversal risk; stocks far below may be oversold.
-    \item \textbf{5-day reversal}: $-r_{5d}$, the negative of the trailing 5-day return. Short-term losers tend to rebound (Jegadeesh, 1990).
-\end{itemize}
-
-The enhanced model is retrained walk-forward with the same LightGBM hyperparameters, using the baseline signal plus the two new features as inputs.
-
-\subsection{Extension 2: Sector-Neutral Portfolio}
-
-Instead of ranking stocks globally, we rank within each GICS sector and select top/bottom positions proportionally across sectors. This prevents the long leg from concentrating in a single sector (e.g., the baseline's January~2025 portfolio was dominated by Technology and Consumer Discretionary).
-
-\subsection{Extension 3: Regime-Conditional Models}
-
-We train separate LightGBM models for each HMM regime. For each test month, the model trained exclusively on same-regime historical data is used for prediction. The hypothesis is that return predictability patterns differ across regimes---e.g., momentum features may be informative in trending markets but misleading during crises.
-
-If fewer than 50 same-regime training samples are available (common for the Crisis regime), we fall back to the full training set.
-
-\subsection{Extension 4: Momentum Factor Hedge}
-
-We compute a synthetic momentum factor return each month (top-10 minus bottom-10 by trailing 21-day momentum). We then estimate a trailing 6-month rolling beta of the portfolio returns to this factor, and subtract $\beta \times r_{\text{momentum}}$ from the portfolio return, simulating a dynamic hedge with a momentum ETF (e.g., MTUM). Hedge transaction costs are modeled at 10~bps.
-
-\subsection{Results}
-
-Table~\ref{tab:structural} compares all four structural extensions against the baseline.
-
-\begin{table}[H]
-\centering
-\caption{Structural extension comparison (24-month OOS).}
-\label{tab:structural}
-\begin{tabular}{lrrrrr}
-\toprule
-Strategy & Cumulative & Annualized & Sharpe & Max DD & Win \\
-\midrule
-Baseline & $+80.5\%$ & $+34.4\%$ & $1.77$ & $-13.3\%$ & 71\% \\
-Anti-Momentum Features & $\mathbf{+87.2\%}$ & $\mathbf{+51.9\%}$ & $\mathbf{1.91}$ & $-9.2\%$ & 72\% \\
-Sector-Neutral & $+45.4\%$ & $+20.6\%$ & $1.67$ & $\mathbf{-4.4\%}$ & 67\% \\
-Regime-Conditional & $+41.0\%$ & $+25.7\%$ & $1.47$ & $-7.5\%$ & 72\% \\
-Momentum Hedge & $+80.2\%$ & $+36.0\%$ & $1.77$ & $-15.1\%$ & 74\% \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{fig11_extensions_cumulative.png}
-\caption{Cumulative return comparison of structural extensions versus baseline.}
-\label{fig:ext_cum}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{fig12_extensions_drawdown.png}
-\caption{Drawdown profiles for structural extensions. Sector-Neutral achieves the shallowest drawdown ($-4.4\%$), while Anti-Momentum Features combines strong returns with controlled risk.}
-\label{fig:ext_dd}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.85\textwidth]{fig13_jan2025_comparison.png}
-\caption{January 2025 loss by strategy. Anti-Momentum Features reduces the loss from $-9.0\%$ to $-1.4\%$; Sector-Neutral effectively neutralizes it ($-0.02\%$).}
-\label{fig:ext_jan}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.8\textwidth]{fig14_risk_return_scatter.png}
-\caption{Risk-return trade-off. Anti-Momentum Features occupies the upper-left region (high Sharpe, low drawdown). Sector-Neutral trades return for minimal drawdown.}
-\label{fig:ext_scatter}
-\end{figure}
-
-\subsection{Return-Based Analysis}
-
-\textbf{Anti-Momentum Features} is the clear winner on a return basis: cumulative $+87.2\%$ (annualized $51.9\%$), Sharpe 1.91, maximum drawdown $-9.2\%$. The January~2025 loss shrinks from $-9.0\%$ to $-1.4\%$. The two new features---52-week-high distance and 5-day reversal---allow the model to learn when momentum is overextended, naturally de-risking before crashes.
-
-\textbf{Sector-Neutral} achieves the smallest maximum drawdown ($-4.4\%$) but sacrifices cumulative return ($+45.4\%$). The baseline's alpha is partly driven by sector tilts that sector neutrality removes.
-
-\textbf{Regime-Conditional} underperforms (Sharpe 1.47) due to insufficient training data within each regime (only 85 Crisis days in the entire sample).
-
-\textbf{Momentum Hedge} is approximately neutral: the rolling beta estimation with 6 months of data is too noisy, and hedge costs offset most benefit.
-
-\subsection{Comprehensive Risk Analysis}
-\label{sec:risk}
-
-We evaluate all eight strategy variants (baseline, three post-hoc overlays from Section~\ref{sec:extensions}, four structural extensions) across four critical risk dimensions that determine deployment viability.
-
-\subsubsection{Market Beta and Factor Exposure}
-
-A long/short portfolio should ideally have zero market beta, meaning returns are independent of the market direction. Table~\ref{tab:risk_beta} reports the market beta, annualized alpha, and long/short leg decomposition.
-
-\begin{table}[H]
-\centering
-\caption{Factor exposure and long/short attribution.}
-\label{tab:risk_beta}
-\small
-\begin{tabular}{lrrrrrr}
-\toprule
-Strategy & $\beta$ & Alpha & L Sharpe & S Sharpe & S Avg/mo & S Win\% \\
-\midrule
-Baseline & $+0.34$ & $+24.7\%$ & $+1.52$ & $-0.21$ & $+0.27\%$ & 50\% \\
-Mom Protection & $\mathbf{+0.07}$ & $+28.0\%$ & $+1.52$ & $-0.21$ & $+0.27\%$ & 50\% \\
-Regime Sizing & $+0.59$ & $+21.9\%$ & $+1.52$ & $-0.21$ & $+0.27\%$ & 50\% \\
-Combined Overlay & $+0.23$ & $\mathbf{+28.4\%}$ & $+1.52$ & $-0.21$ & $+0.27\%$ & 50\% \\
-\textbf{Anti-Momentum} & $+0.41$ & $+37.6\%$ & $+1.32$ & $\mathbf{+0.75}$ & $\mathbf{-1.22\%}$ & $\mathbf{61\%}$ \\
-Sector-Neutral & $+0.12$ & $+17.2\%$ & $+1.39$ & $-0.26$ & $+0.30\%$ & 54\% \\
-Regime-Conditional & $-0.11$ & $+26.4\%$ & $+0.80$ & $+0.53$ & $-0.82\%$ & 44\% \\
-Momentum Hedge & $+0.35$ & $+25.9\%$ & $+1.88$ & $-0.53$ & $+0.65\%$ & 48\% \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\textbf{Key finding}: Anti-Momentum Features is the \emph{only} strategy where the short leg generates positive alpha (Short Sharpe $+0.75$, average shorted stock declines $1.22\%$/month, 61\% hit rate). All other strategies have negative short-leg Sharpe, meaning the stocks they short actually appreciate on average. This is a critical distinction: the baseline's alpha comes almost entirely from the long leg, while the Anti-Momentum model generates true bilateral alpha.
-
-Momentum Protection achieves the lowest market beta ($+0.07$), making it nearly market-neutral, but this is achieved by scaling exposure rather than by improving stock selection.
-
-\subsubsection{Drawdown Recovery and Tail Risk}
-
-\begin{table}[H]
-\centering
-\caption{Tail risk and drawdown characteristics.}
-\label{tab:risk_tail}
-\small
-\begin{tabular}{lrrrrrrr}
-\toprule
-Strategy & MaxDD & DD Dur & VaR$_{95}$ & CVaR$_{95}$ & Skew & Kurt & Jan 25 \\
-\midrule
-Baseline & $-13.3\%$ & 9mo & $-3.4\%$ & $-6.2\%$ & $-0.15$ & $-0.53$ & $-9.0\%$ \\
-Mom Protection & $-9.1\%$ & 9mo & $-3.4\%$ & $-4.0\%$ & $+0.01$ & $-0.93$ & $-4.6\%$ \\
-Regime Sizing & $-20.3\%$ & 10mo & $-6.9\%$ & $-10.6\%$ & $-0.18$ & $-0.44$ & $-14.0\%$ \\
-Combined Overlay & $-13.1\%$ & 7mo & $-6.1\%$ & $-6.8\%$ & $+0.16$ & $-0.69$ & $-6.3\%$ \\
-\textbf{Anti-Momentum} & $\mathbf{-9.2\%}$ & $\mathbf{3mo}$ & $-4.9\%$ & $-9.2\%$ & --- & --- & $\mathbf{-1.4\%}$ \\
-Sector-Neutral & $-4.4\%$ & 6mo & $\mathbf{-2.8\%}$ & $\mathbf{-2.8\%}$ & --- & --- & $-0.02\%$ \\
-Regime-Conditional & $-7.5\%$ & 8mo & $-6.7\%$ & $-7.5\%$ & --- & --- & $-0.9\%$ \\
-Momentum Hedge & $-15.1\%$ & 9mo & $-5.6\%$ & $-7.3\%$ & --- & --- & $-8.8\%$ \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Anti-Momentum Features recovers from drawdowns in \textbf{3 months}---three times faster than the baseline's 9-month recovery. This is because the anti-momentum features help the model rotate out of overextended positions before they suffer prolonged losses.
-
-\subsubsection{Signal Stability}
-
-We compute a rolling 6-month Sharpe ratio to assess whether each strategy maintains consistent performance or relies on a few exceptional months.
-
-\begin{table}[H]
-\centering
-\caption{Signal stability: rolling 6-month Sharpe ratio.}
-\label{tab:risk_stability}
-\begin{tabular}{lrrrrrr}
-\toprule
-Strategy & Min & Max & Mean & Max Win & Max Loss \\
-\midrule
-Baseline & $-1.84$ & $+6.37$ & $+2.12$ & 7mo & 2mo \\
-Mom Protection & $-1.70$ & $+6.37$ & $+2.14$ & 7mo & 2mo \\
-Combined Overlay & $-1.29$ & $+9.32$ & $+3.08$ & 8mo & 3mo \\
-\textbf{Anti-Momentum} & $\mathbf{+0.77}$ & $+5.56$ & $+2.09$ & 7mo & \textbf{1mo} \\
-Sector-Neutral & $-0.89$ & $+3.67$ & $+1.58$ & 5mo & 3mo \\
-Momentum Hedge & $-2.19$ & $+5.79$ & $+2.02$ & 7mo & 2mo \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\textbf{Anti-Momentum Features is the only strategy whose rolling 6-month Sharpe never turns negative} (minimum $+0.77$). Every other strategy experiences at least one half-year period with substantially negative risk-adjusted returns. The maximum losing streak for Anti-Momentum is 1~month, versus 2--3 months for all alternatives.
-
-\subsection{Strategy Selection}
-
-Based on the comprehensive risk analysis, we select \textbf{Anti-Momentum Features} as the production strategy for the following reasons:
-
-\begin{enumerate}[noitemsep]
-    \item \textbf{Bilateral alpha}: Only strategy with positive short-leg Sharpe ($+0.75$). The short leg actively generates returns rather than acting as a drag.
-    \item \textbf{Fastest recovery}: 3-month maximum drawdown duration versus 7--10 months for alternatives.
-    \item \textbf{Never negative on a rolling basis}: Minimum 6-month Sharpe of $+0.77$; no half-year period of losses.
-    \item \textbf{Best tail protection}: January~2025 loss of $-1.4\%$ versus $-9.0\%$ baseline, achieved structurally (not via post-hoc filters).
-    \item \textbf{Highest risk-adjusted return}: Sharpe 1.91, Sortino 4.62, Calmar 5.64 over its 18-month evaluation window.
-\end{enumerate}
-
-The 18-month (vs 24-month) evaluation window is a limitation; the first 6 months require training data accumulation before the enhanced model activates. During those initial months, the system falls back to the baseline signal.
-
-\section{System Architecture}
-
-The system is implemented in Python and consists of approximately 3{,}200 lines of source code across five modules:
-
-\begin{itemize}[noitemsep]
-    \item \texttt{data/}: SEC EDGAR downloader, Yahoo Finance market data, Finnhub earnings transcripts
-    \item \texttt{signals/}: Lazy Prices (TF-IDF), 8-K event scoring, HMM regime detection, LightGBM combiner
-    \item \texttt{agents/}: LangGraph multi-agent pipeline (filing analyst, news synthesizer, coordinator)
-    \item \texttt{backtest/}: Walk-forward backtesting engine with transaction cost modeling
-    \item \texttt{backtest/extensions.py}: Anti-momentum features, sector-neutral, regime-conditional, momentum hedge
-\end{itemize}
-
-LLM inference uses DeepSeek-V3 via the Together AI API. The full pipeline processes 100 tickers in approximately 15 minutes. The ML combiner trains in under 15 seconds per fold on a single CPU core.
 
 \section{Conclusion}
+\label{sec:conclusion}
 
-We present Alpha-Graph, an NLP-driven equity signal framework that evolves through three stages of increasing sophistication:
+We set out to build a long/short market-neutral equity strategy from SEC filings. After running the walk-forward backtest on 14 years of data and 499 tickers, the L/S strategy does not work. The Sharpe is $0.32$, the max drawdown is $-58\%$, and a one-line 12-1 momentum factor produces an essentially identical $+0.31$ Sharpe with no SEC filing data at all. Adding ``diversifying'' factors makes things worse, not better. The structural reason is that the Lazy Prices signal is U-shaped, not monotonic, in our 2011--2026 panel: the lowest-similarity decile slightly outperforms the middle decile in subsequent months, so the original Cohen/Malloy/Nguyen short-side thesis does not replicate, and any L/S construction that assumes monotonicity fights the data.
 
-\begin{enumerate}[noitemsep]
-    \item \textbf{Lazy Prices baseline} (Sharpe $-1.49$): Annual filing similarity is too slow-moving for monthly rebalancing.
-    \item \textbf{ML Combiner} (Sharpe $1.77$): Adding 8-K event signals, momentum, and regime features via walk-forward LightGBM transforms a losing strategy into a profitable one, but with implicit momentum factor exposure that causes a $-9.0\%$ loss during the January~2025 crash.
-    \item \textbf{Anti-Momentum Enhancement} (Sharpe $1.91$): Augmenting the feature set with 52-week-high distance and 5-day reversal signals resolves the momentum dependence. The resulting model generates bilateral alpha (both long and short legs profitable), recovers from drawdowns in 3~months, and maintains a positive rolling Sharpe across all evaluation windows.
-\end{enumerate}
+The one variant that survives is the long-only top decile. It delivers an annualized $+29.7\%$ over 14 years with a SPY-adjusted alpha of $+33.6\%$ (t-stat $4.35$, p $= 2.3 \times 10^{-5}$), beta $-0.19$, residual Sharpe $1.21$, and a Mag~7 share of only $4.3\%$. This is a defensible weak alpha as a long-side stock-picking signal, but it is not the market-neutral product the project was built to deliver, it carries unmeasured survivorship bias, and a single long book of US equities outperforming SPY over a 14-year window is not by itself definitive.
 
-The Anti-Momentum strategy achieves $+87.2\%$ cumulative return (annualized $51.9\%$) over 18 out-of-sample months with a maximum drawdown of $-9.2\%$ and Sortino ratio of $4.62$. The short leg---historically the weakness of NLP-based equity strategies---generates a Sharpe of $+0.75$ with a 61\% hit rate, confirming that the anti-momentum features enable genuine short-side stock selection rather than passive market exposure.
+Two earlier headline numbers --- ``ML Combiner Sharpe 1.77 over 24 months'' and ``Anti-Momentum Sharpe 1.91 over 18 months'' --- are formally retracted in Section~\ref{sec:retraction}. They were generated on cherry-picked windows, did not survive when re-evaluated on the full panel or against a permutation null, and were inconsistent with the cached results files for the same periods. The code that produced them is still in the repository so the retraction is reproducible.
 
-Paper trading validation is the natural next step before capital allocation. The key risks remain the limited evaluation period (18 months), survivorship bias in the S\&P~500 universe, and the possibility that the anti-momentum edge is specific to the 2024--2026 market environment.
+The rest of the codebase (data ingestion, signal generation, multi-agent LLM pipeline, regime detection, ML combiner, paper-trading wiring) is unchanged. This document is the honest accounting of what those components actually deliver on the data we have.
 
 \bibliographystyle{plainnat}
 \begin{thebibliography}{9}
@@ -805,6 +429,11 @@ Cohen, L., Malloy, C., \& Nguyen, Q. (2020).
 Ke, G., Meng, Q., Finley, T., Wang, T., Chen, W., Ma, W., Ye, Q., \& Liu, T.-Y. (2017).
 \newblock LightGBM: A Highly Efficient Gradient Boosting Decision Tree.
 \newblock \emph{Advances in Neural Information Processing Systems}, 30.
+
+\bibitem[Bailey \& L\'opez de Prado(2014)]{bailey2014dsr}
+Bailey, D., \& L\'opez de Prado, M. (2014).
+\newblock The Deflated Sharpe Ratio: Correcting for Selection Bias, Backtest Overfitting and Non-Normality.
+\newblock \emph{Journal of Portfolio Management}, 40(5), 94--107.
 
 \bibitem[Kim \& Blouin(2025)]{kim2025earnings}
 Kim, S., \& Blouin, J. (2025).
