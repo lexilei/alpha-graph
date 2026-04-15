@@ -37,7 +37,7 @@ The docs are now honest about what the 14-year backtest says. The next step is *
 - ❌ Trying to get a better Sharpe by tweaking hyperparameters / adding features / picking a different cost assumption.
 - ❌ Re-running the Anti-Momentum extension on a different subset hoping for a better number.
 - ❌ "Fixing" the L/S strategy. The U-shape is a property of the data, not a bug we can engineer around without overfitting.
-- ❌ Touching core code (signals/, agents/, backtest/, trading/). Tomorrow is analysis and visualization only — produce plots in `report/fig*.png` and a short notebook in `notebooks/` if needed. The cached parquets in `data/cache/` already have everything required.
+- ❌ Re-adding components that were removed in the 2026-04-15 cleanup (multi-agent LLM pipeline, paper-trading layer, knowledge graph spillover, LLM filing-change detector, fundamentals feature, transcripts pipeline). They produced no validated alpha.
 
 ## Done today (2026-04-08)
 

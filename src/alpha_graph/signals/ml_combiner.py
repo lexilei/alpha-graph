@@ -97,7 +97,6 @@ TRAIN_MONTHS = 12
 PURGE_DAYS = 5
 FEATURE_COLS = [
     "cosine_similarity",
-    "llm_overall_score",
     "event_score",
     "event_count",
     "regime_state",
@@ -106,8 +105,6 @@ FEATURE_COLS = [
     "momentum_5d",
     "volatility_21d",
     "volume_zscore",
-    # "spillover_event",      # Knowledge graph — disabled, hurts OOS returns
-    # "spillover_momentum",   # Knowledge graph — disabled, hurts OOS returns
 ]
 
 
@@ -170,23 +167,6 @@ def build_feature_panel() -> pd.DataFrame:
     else:
         panel["cosine_similarity"] = np.nan
         logger.debug("No Lazy Prices data — feature will be NaN")
-
-    # --- Merge LLM filing change scores ---
-    llm_path = CACHE_DIR / "filing_changes_10K.parquet"
-    if llm_path.exists():
-        llm = pd.read_parquet(llm_path)
-        llm["filing_date"] = pd.to_datetime(llm["filing_date"])
-        llm = llm[["ticker", "filing_date", "overall_score"]].rename(
-            columns={"overall_score": "llm_overall_score"}
-        )
-        panel = _merge_asof_signal(
-            panel, llm,
-            left_date="date", right_date="filing_date",
-            on="ticker", cols=["llm_overall_score"],
-        )
-    else:
-        panel["llm_overall_score"] = np.nan
-        logger.debug("No LLM filing change data — feature will be NaN")
 
     # --- Merge 8-K event signals ---
     event_path = CACHE_DIR / "event_signals.parquet"

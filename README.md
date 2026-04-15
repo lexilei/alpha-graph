@@ -93,16 +93,14 @@ So the L/S baseline has no margin: 50 bps/mo (well within real-world short-borro
 
 ## What the code in this repo is
 
-The code is unchanged from when the strategy was producing the inflated numbers — this update is documentation only. The repo still contains the full pipeline:
+On 2026-04-15 the repo was cleaned up: the multi-agent LLM pipeline, paper-trading layer, knowledge-graph spillover, LLM filing-change detector, fundamentals feature, and transcripts pipeline were removed. They either produced no validated alpha or wired to retracted signals. The `pre-cleanup-2026-04-15` git tag preserves the prior state.
 
-- **Data layer** (`src/alpha_graph/data/`): SEC EDGAR downloader, yfinance market data, fundamentals, an LLM-extracted inter-company relationship graph.
-- **Signals** (`src/alpha_graph/signals/`): Lazy Prices TF-IDF cosine similarity, 8-K item-type event scoring, Gaussian HMM regime detector, walk-forward LightGBM combiner, knowledge-graph spillover (disabled — hurt OOS).
-- **Multi-agent LLM pipeline** (`src/alpha_graph/agents/`): LangGraph fan-out/fan-in over Filing Analyst, Earnings Analyst (inactive — no transcript data), News Synthesizer, Research Coordinator. This produces a per-ticker BUY/SELL/HOLD with confidence-weighted scoring, and was used for one snapshot run; it is not part of the 14-year backtest.
-- **Backtest** (`src/alpha_graph/backtest/`): walk-forward engine, cost-sensitivity sweep, ten alternative method variants in `improvements.py`, beta attribution in `attribution.py`, permutation test in `permutation_test.py`, the four post-hoc and four structural extensions in `extensions.py`.
-- **Trading** (`src/alpha_graph/trading/`): Alpaca paper-trading executor, daily pipeline, monitor dashboard. Wired to an "Anti-Momentum" signal that was the headline of the previous README; that signal's headline Sharpe (~1.91) was generated on a 23-month subset and **did not survive the permutation test on the full panel** — see `permutation_test_null.parquet`.
-- **Tests** (`tests/`): 8 unit-test modules covering signal generation, portfolio construction, coordinator logic, and graph operations.
+What remains:
 
-The project structure tree, dataset counts, and "how to run" commands are unchanged from earlier versions of this README; the only thing that changed today is that the result claims now match the cached data.
+- **Data layer** (`src/alpha_graph/data/`): SEC EDGAR filing downloader, yfinance market data.
+- **Signals** (`src/alpha_graph/signals/`): Lazy Prices TF-IDF cosine similarity, 8-K item-type event scoring, Gaussian HMM regime detector, walk-forward LightGBM combiner.
+- **Backtest** (`src/alpha_graph/backtest/`): walk-forward engine, cost-sensitivity sweep, ten alternative method variants in `improvements.py`, beta attribution in `attribution.py`, permutation test in `permutation_test.py`, four structural extensions in `extensions.py`.
+- **Tests** (`tests/`): 5 unit-test modules covering signals, portfolio construction, ML combiner, and backtest engine.
 
 ## Setup
 
@@ -149,6 +147,5 @@ pytest tests/ -v
 3. **Survivorship bias.** Universe is current S&P 500 constituents only. Companies that were removed from the index over the 14-year window are excluded, which mechanically inflates long-side returns.
 4. **No short borrowing costs.** All numbers above assume costless shorting. Realistic borrow + market impact for the bottom-decile names would push the L/S Sharpe further negative.
 5. **The previous "Anti-Momentum Sharpe 1.91" headline does not survive the permutation test on the full 14-year panel.** The earlier 23-month finding was inside a regime where momentum-reversal features happened to fit the post-Jan-2025 rotation; the null distribution from `permutation_test_null.parquet` (mean 0.016, std 0.22) shows that random feature shuffles produce Sharpes of similar magnitude often enough that the original number can't be defended.
-6. **The earnings transcript signal was never tested** — Finnhub free tier doesn't include transcripts, so the Earnings Analyst agent is built but inactive. This is worth noting because earnings transcripts are the one major signal source that academic literature suggests would actually add value, and we never got to evaluate it.
 
 See `METHODOLOGY.md` for the longer methodology writeup with the same updated numbers, and `report/alpha_graph_report.tex` for the full LaTeX writeup (also updated).

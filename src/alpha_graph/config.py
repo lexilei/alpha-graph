@@ -13,7 +13,6 @@ load_dotenv()
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 FILINGS_DIR = DATA_DIR / "filings"
-TRANSCRIPTS_DIR = DATA_DIR / "transcripts"
 CACHE_DIR = DATA_DIR / "cache"
 
 # Single source of truth for any random seed in the project. Every model,

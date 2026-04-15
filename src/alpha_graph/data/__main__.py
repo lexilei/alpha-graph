@@ -9,11 +9,6 @@ def main():
 
     download_filings()
 
-    logger.info("=== Downloading earnings transcripts ===")
-    from alpha_graph.data.transcripts import download_all as download_transcripts
-
-    download_transcripts()
-
     logger.info("=== All data pipelines complete ===")
 
 
