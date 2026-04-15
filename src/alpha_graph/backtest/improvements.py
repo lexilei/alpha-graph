@@ -289,6 +289,101 @@ def method_h_mom_lowvol(preds: pd.DataFrame, market: pd.DataFrame) -> dict:
 # Method I: Cross-factor hedge — Long LP top10, Short Mom bot10
 # ---------------------------------------------------------------------------
 
+def method_j_beta_hedged(
+    preds: pd.DataFrame,
+    market: pd.DataFrame,
+    lookback_months: int = 24,
+) -> dict:
+    """Beta-hedged Method E: long top10 Lazy Prices picks, short β·SPY.
+
+    Method E is long-only; the original project promised market-neutral. This
+    variant reframes Method E as a market-neutral book by subtracting a
+    rolling-beta-weighted short SPY leg.
+
+    For each month t:
+      1. Take long top10 gross weight 1.0 (same picks as Method E).
+      2. Estimate β_t of the long basket's monthly returns against SPY using
+         the trailing `lookback_months` months of OOS Method E returns.
+         First 24 months use β = 1.0 as a safe default.
+      3. Short SPY with weight β_t. Net exposure = (1.0 - β_t) (often near 0).
+      4. Apply cost 10 bps on long leg + 5 bps on SPY leg = 15 bps/month.
+
+    Honest caveat: β is estimated from rolling OOS Method E returns only, so
+    it's not forward-looking. But the long picks themselves come from a
+    walk-forward model, so the whole pipeline is PIT-correct.
+    """
+    logger.info("Method J: Beta-hedged Method E (long top10 - β·SPY)")
+
+    # SPY monthly returns from market data (we already have SPY's own history in
+    # the cached parquet if the downloader included it; otherwise fetch).
+    spy_rows = market[market["ticker"] == "SPY"].sort_values("date")
+    if len(spy_rows) < 100:
+        import yfinance as yf
+        spy_raw = yf.download(
+            "SPY",
+            start=market["date"].min().strftime("%Y-%m-%d"),
+            end=(market["date"].max() + pd.Timedelta(days=5)).strftime("%Y-%m-%d"),
+            auto_adjust=True, progress=False,
+        )
+        if hasattr(spy_raw.columns, "levels"):
+            spy_raw.columns = spy_raw.columns.get_level_values(0)
+        spy_monthly = spy_raw["Close"].resample("ME").last().pct_change().dropna()
+    else:
+        spy_rows = spy_rows.copy()
+        spy_rows["month"] = spy_rows["date"].dt.to_period("M")
+        spy_monthly = (
+            spy_rows.groupby("month")["close"].last().pct_change().dropna()
+        )
+        spy_monthly.index = spy_monthly.index.to_timestamp(how="end")
+
+    spy_map = pd.Series(spy_monthly.values, index=pd.to_datetime(spy_monthly.index).to_period("M"))
+
+    months = sorted(preds["month"].unique())
+    # First pass: compute long-only monthly returns for rolling β estimation.
+    long_returns = {}
+    for month in months:
+        m = preds[preds["month"] == month].drop_duplicates("ticker", keep="last")
+        if len(m) < 20:
+            continue
+        sorted_m = m.sort_values("signal", ascending=False)
+        long_returns[month] = float(sorted_m.head(10)["actual_return"].mean())
+
+    long_series = pd.Series(long_returns).sort_index()
+
+    rows = []
+    for month in months:
+        if month not in long_series.index:
+            continue
+        long_r = long_series.loc[month]
+        spy_r = spy_map.get(month, np.nan)
+        if pd.isna(spy_r):
+            continue
+        history = long_series.loc[:month].iloc[:-1].tail(lookback_months)
+        spy_hist = spy_map.reindex(history.index).dropna()
+        history = history.loc[spy_hist.index]
+        if len(history) >= 12 and spy_hist.var() > 0:
+            beta = float(np.cov(history.values, spy_hist.values, ddof=0)[0, 1] / spy_hist.var())
+        else:
+            beta = 1.0
+        beta = max(0.0, min(2.0, beta))
+        cost = 0.0015
+        net = long_r - beta * spy_r - cost
+        rows.append({
+            "month": month.to_timestamp(),
+            "net": net,
+            "beta": beta,
+            "long_r": long_r,
+            "spy_r": spy_r,
+        })
+
+    df = pd.DataFrame(rows)
+    metrics = _metrics(df)
+    metrics["name"] = "J. Beta-hedged Method E (long - β·SPY)"
+    metrics["n_months"] = len(df)
+    metrics["avg_beta"] = float(df["beta"].mean()) if not df.empty else float("nan")
+    return metrics
+
+
 def method_i_cross_factor(preds: pd.DataFrame, market: pd.DataFrame) -> dict:
     """Long the top10 by Lazy Prices signal, short the bot10 by 12-1 momentum.
 
@@ -524,6 +619,7 @@ def main():
         method_g_momentum_only(preds, market),
         method_h_mom_lowvol(preds, market),
         method_i_cross_factor(preds, market),
+        method_j_beta_hedged(preds, market),
     ]
 
     print()

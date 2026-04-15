@@ -34,17 +34,20 @@ The short side of the original Lazy Prices paper does not replicate in our unive
 
 ## What does survive: long-only top decile
 
-The one thing that does survive 14 years of out-of-sample evaluation is the **long-only top10** book (Method E in `backtest/improvements.py`):
+The one thing that does survive 14 years of out-of-sample evaluation is the **long-only top10** book (Method E in `backtest/improvements.py`).
 
-| Metric | Value |
-|---|---|
-| Cumulative return (168 months) | **+3,732%** |
-| Annualized return | **+29.7%** |
-| Sharpe | **1.08** |
-| Max drawdown | **-32.4%** |
-| Win rate | **65%** |
+On the full (current-constituent) universe the numbers look strong:
 
-After running a SPY-beta attribution (`backtest/attribution.py`) on Method E:
+| Metric | Full universe | PIT S&P 500 universe |
+|---|---|---|
+| Cumulative return (168 months) | +3,732% | **+888%** |
+| Annualized return | +29.7% | **+17.8%** |
+| Sharpe | 1.08 | **0.81** |
+| Max drawdown | -32.4% | -41.8% |
+
+**The PIT column is the honest number.** Forward survivorship bias (using 2026-constituent tickers in 2012, before they were in the index) inflated the annualized return by about 12 percentage points. Survivor bias from tickers removed before 2026 is not corrected here and remains an open caveat. See `report/u_shape_note.pdf` for details.
+
+After running a SPY-beta attribution (`backtest/attribution.py`) on Method E (full universe):
 
 | Beta-attribution metric | Value |
 |---|---|
@@ -57,9 +60,11 @@ After running a SPY-beta attribution (`backtest/attribution.py`) on Method E:
 | Mag 7 share of all picks | **4.3%** |
 | Top-5 ticker concentration | **8.0%** |
 
-So the long-only book has an alpha t-stat above 4, near-zero market beta, and is not a disguised mega-cap basket (Mag 7 contributes only 4.3% of all picks; top-5 names are 8% combined). This is a defensible weak alpha as a stock-picking signal, **but it is not the long/short market-neutral strategy this project was originally built to deliver**, and a single +29.7% annualized number on a US equity long book over 2011–2026 needs to be weighed against the fact that SPY itself returned +13.7% annualized over the same window with a Sharpe of 0.99.
+On the full-universe regression Method E has an alpha t-stat above 4 and near-zero market beta; on the PIT universe the FF5+MOM alpha drops to **+20.6% annualized** with **t = +3.00** (`backtest/ff_attribution.py` rerun on PIT predictions). Still statistically significant at 1%, but economically two-thirds of the unadjusted number.
 
-In other words: the "win" here is that the signal correctly identifies a quality/persistence basket on the long side. There is no working short side, no working market-neutral combination, and the gross outperformance over SPY is partly real alpha and partly a high-beta-like exposure that we've only partially stripped out.
+`backtest/ff_attribution.py` (full universe) also rules out factor exposure: across CAPM, FF3, FF5, and FF5+MOM specifications, no factor loading has |t| > 2. The alpha does not come from disguised market, size, value, profitability, investment, or momentum exposure. `backtest/feature_stability.py` shows that across 156 walk-forward folds no single feature dominates — importance is bursty, with `cosine_similarity` selected in 68% of folds. Earlier claims that it was "subsumed" by the 8-K event score were based on a single-snapshot importance and are retracted. `backtest/realistic_slippage.py` shows Method E's Sharpe drops only from 1.08 to 1.04 under a per-ticker ADV-ranked cost model (avg 20.7 bps/month vs 10 bps flat), so the result is not fragile to cost assumptions. A market-neutral reframing (Method J: long top10 minus β·SPY, β estimated over trailing 24 months) delivers Sharpe 1.00 — confirming Method E was approximately market-neutral by construction (average hedging β = 0.10).
+
+In other words: the "win" here is that the signal correctly identifies a quality/persistence basket on the long side. There is no working short side, no working market-neutral L/S combination, and the gross outperformance over SPY is partly real alpha (~18% ann on PIT) and partly forward survivorship bias.
 
 ## What the cached data actually says
 
@@ -144,7 +149,7 @@ pytest tests/ -v
 
 1. **The L/S strategy doesn't work.** This is the main finding. The 14-year baseline Sharpe is 0.32, far below any deployment threshold, and the cost-sensitivity curve shows it goes to zero around 75 bps/month round-trip. Several "diversifying" multi-factor variants made things actively worse.
 2. **The long-only book has alpha but isn't market-neutral.** Method E's t-stat-4.35 alpha is real, but the project was conceived as a long/short alpha capture, not a long-bias stock picker. Reframing it as a stock picker is honest but is not what was originally promised.
-3. **Survivorship bias.** Universe is current S&P 500 constituents only. Companies that were removed from the index over the 14-year window are excluded, which mechanically inflates long-side returns.
+3. **Survivorship bias: partially corrected.** `backtest/pit_universe.py` applies a point-in-time S&P 500 membership filter (from the fja05680 GitHub dataset) which drops Method E's Sharpe from 1.08 to 0.81 and annualized return from +29.7% to +17.8%. This fixes the *forward-bias* component. The *survivor-bias* component (tickers removed from the index before 2026 and absent from our 499-ticker download) is not corrected and is the largest remaining caveat. The honest numbers to quote are the PIT-corrected ones.
 4. **No short borrowing costs.** All numbers above assume costless shorting. Realistic borrow + market impact for the bottom-decile names would push the L/S Sharpe further negative.
 5. **The previous "Anti-Momentum Sharpe 1.91" headline does not survive the permutation test on the full 14-year panel.** The earlier 23-month finding was inside a regime where momentum-reversal features happened to fit the post-Jan-2025 rotation; the null distribution from `permutation_test_null.parquet` (mean 0.016, std 0.22) shows that random feature shuffles produce Sharpes of similar magnitude often enough that the original number can't be defended.
 
