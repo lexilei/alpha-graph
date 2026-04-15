@@ -100,8 +100,28 @@ def load_ff5_plus_mom() -> pd.DataFrame:
     return factors
 
 
-def multivariate_ols(y: np.ndarray, X: np.ndarray, factor_names: list[str]) -> dict:
+def _newey_west_lag(n: int) -> int:
+    """Andrews (1991) automatic bandwidth, simplified to L = floor(4*(n/100)^(2/9)).
+    For n=167 monthly returns this gives L=4, which is the standard choice in
+    finance papers using monthly data.
+    """
+    return int(np.floor(4 * (n / 100.0) ** (2.0 / 9.0)))
+
+
+def multivariate_ols(
+    y: np.ndarray,
+    X: np.ndarray,
+    factor_names: list[str],
+    hac_lags: int | None = None,
+) -> dict:
     """y = X @ beta + eps, where X's first column is ones (intercept = alpha).
+
+    If `hac_lags` is None, uses classical OLS standard errors (i.i.d. residuals).
+    If a non-negative integer, uses Newey-West HAC standard errors with that
+    Bartlett-window lag length, robust to heteroskedasticity and serial
+    correlation (e.g. monthly portfolio returns are mildly autocorrelated;
+    classical SE understates uncertainty by ~10-20%).
+
     Returns coefficients, se, t-stats, p-values, R², residual std.
     """
     n, k = X.shape
@@ -116,7 +136,26 @@ def multivariate_ols(y: np.ndarray, X: np.ndarray, factor_names: list[str]) -> d
     adj_r_squared = 1 - (1 - r_squared) * (n - 1) / (n - k)
     resid_var = sse / (n - k)
     resid_std = float(np.sqrt(resid_var))
-    cov_beta = resid_var * XtX_inv
+
+    if hac_lags is None:
+        cov_beta = resid_var * XtX_inv
+        se_label = "OLS"
+    else:
+        # Newey-West HAC: cov(β) = (X'X)^-1 · S · (X'X)^-1
+        # where S = sum_h w_h (X_t' u_t u_{t-h} X_{t-h} + transpose)
+        # and w_h = 1 - h/(L+1) is the Bartlett weight.
+        u = resid.reshape(-1, 1)
+        Xu = X * u  # n × k
+        S = Xu.T @ Xu  # lag 0 contribution
+        for h in range(1, hac_lags + 1):
+            w = 1.0 - h / (hac_lags + 1.0)
+            Gamma_h = Xu[h:].T @ Xu[:-h]
+            S = S + w * (Gamma_h + Gamma_h.T)
+        # Small-sample correction (Stata-style) to match standard reference impl
+        S = S * n / (n - k)
+        cov_beta = XtX_inv @ S @ XtX_inv
+        se_label = f"NW({hac_lags})"
+
     se = np.sqrt(np.diag(cov_beta))
     t = beta / se
     p = 2 * (1 - stats.t.cdf(np.abs(t), df=n - k))
@@ -126,6 +165,8 @@ def multivariate_ols(y: np.ndarray, X: np.ndarray, factor_names: list[str]) -> d
         "r_squared": r_squared,
         "adj_r_squared": adj_r_squared,
         "resid_std": resid_std,
+        "se_method": se_label,
+        "hac_lags": hac_lags,
         "coef": dict(zip(names, beta)),
         "se": dict(zip(names, se)),
         "t": dict(zip(names, t)),
@@ -161,91 +202,61 @@ def _print_regression(label: str, fit: dict, factors: list[str]) -> None:
     print(f"  Residual (alpha) Sharpe:    {resid_sharpe:+.3f}")
 
 
-def main():
-    set_global_seeds()
-    preds, _market, _regimes = _load_data()
+def _build_method_e_returns(preds: pd.DataFrame) -> pd.DataFrame:
     me_df, _ = reproduce_method_e(preds)
     me_df = me_df.sort_values("month").reset_index(drop=True)
     me_df["month_period"] = me_df["month"].dt.to_period("M")
+    return me_df
 
-    factors = load_ff5_plus_mom()
 
-    aligned = me_df.merge(factors, on="month_period", how="inner")
-    logger.info(f"Aligned {len(aligned)} months for FF attribution")
-    if len(aligned) < 36:
-        logger.error(f"Only {len(aligned)} aligned months — abort")
-        return
-
-    # Excess return = Method E net return minus risk-free rate
-    aligned["ret_excess"] = aligned["ret_net"] - aligned["RF"]
-
+def _run_all_specs(
+    aligned: pd.DataFrame,
+    label_prefix: str,
+    hac_lags: int | None,
+) -> list[tuple[str, dict, list[str]]]:
     y = aligned["ret_excess"].values
     ones = np.ones(len(aligned))
+    specs = [
+        ("CAPM",     ["Mkt_RF"]),
+        ("FF3",      ["Mkt_RF", "SMB", "HML"]),
+        ("FF5",      ["Mkt_RF", "SMB", "HML", "RMW", "CMA"]),
+        ("FF5+MOM",  ["Mkt_RF", "SMB", "HML", "RMW", "CMA", "MOM"]),
+    ]
+    out = []
+    for name, factors in specs:
+        X = np.column_stack([ones] + [aligned[f].values for f in factors])
+        fit = multivariate_ols(y, X, factors, hac_lags=hac_lags)
+        _print_regression(f"{label_prefix} — {name} ({fit['se_method']} SE)", fit, factors)
+        out.append((name, fit, factors))
+    return out
 
-    # Model 1: CAPM (Mkt-RF only)
-    X1 = np.column_stack([ones, aligned["Mkt_RF"].values])
-    fit1 = multivariate_ols(y, X1, ["Mkt_RF"])
-    _print_regression(
-        "FF1 (CAPM): r_E - RF = α + β_MKT·(Mkt-RF) + ε",
-        fit1, ["Mkt_RF"],
-    )
 
-    # Model 2: FF3 (Mkt-RF, SMB, HML)
-    X2 = np.column_stack([
-        ones, aligned["Mkt_RF"].values, aligned["SMB"].values, aligned["HML"].values
-    ])
-    fit2 = multivariate_ols(y, X2, ["Mkt_RF", "SMB", "HML"])
-    _print_regression(
-        "FF3: add size (SMB) and value (HML)",
-        fit2, ["Mkt_RF", "SMB", "HML"],
-    )
-
-    # Model 3: FF5 (Mkt-RF, SMB, HML, RMW, CMA)
-    X3 = np.column_stack([
-        ones,
-        aligned["Mkt_RF"].values, aligned["SMB"].values, aligned["HML"].values,
-        aligned["RMW"].values, aligned["CMA"].values,
-    ])
-    fit3 = multivariate_ols(y, X3, ["Mkt_RF", "SMB", "HML", "RMW", "CMA"])
-    _print_regression(
-        "FF5: add profitability (RMW) and investment (CMA)",
-        fit3, ["Mkt_RF", "SMB", "HML", "RMW", "CMA"],
-    )
-
-    # Model 4: FF5 + Momentum (Carhart-style)
-    X4 = np.column_stack([
-        ones,
-        aligned["Mkt_RF"].values, aligned["SMB"].values, aligned["HML"].values,
-        aligned["RMW"].values, aligned["CMA"].values, aligned["MOM"].values,
-    ])
-    fit4 = multivariate_ols(y, X4, ["Mkt_RF", "SMB", "HML", "RMW", "CMA", "MOM"])
-    _print_regression(
-        "FF5 + MOM: add Carhart momentum factor",
-        fit4, ["Mkt_RF", "SMB", "HML", "RMW", "CMA", "MOM"],
-    )
-
-    # ---- Verdict ----
+def _print_verdict(rows: list[tuple[str, dict, list[str]]], label: str) -> None:
     print()
     print("=" * 80)
-    print("  VERDICT — DOES METHOD E ALPHA SURVIVE FACTOR CONTROLS?")
+    print(f"  VERDICT — {label}")
     print("=" * 80)
-    for label, fit in [("CAPM", fit1), ("FF3", fit2), ("FF5", fit3), ("FF5+MOM", fit4)]:
+    for name, fit, _ in rows:
         a_m = fit["coef"]["alpha"]
         t_a = fit["t"]["alpha"]
         rs = a_m / fit["resid_std"] * np.sqrt(12)
-        status = "✓" if (t_a >= 2.0 and rs >= 0.3) else "⚠️"
+        status = "OK" if (t_a >= 2.0 and rs >= 0.3) else "WEAK"
         print(
-            f"  {status} {label:<10s}  α(ann)={a_m*12*100:+6.2f}%  "
-            f"t(α)={t_a:+5.2f}  resid Sharpe={rs:+5.3f}"
+            f"  [{status}] {name:<10s}  α(ann)={a_m*12*100:+6.2f}%  "
+            f"t(α)={t_a:+5.2f} ({fit['se_method']})  resid Sharpe={rs:+5.3f}"
         )
     print("=" * 80)
 
-    # Save summary
+
+def _rows_for_save(specs: list[tuple[str, dict, list[str]]], universe: str) -> list[dict]:
     rows = []
-    for label, fit in [("CAPM", fit1), ("FF3", fit2), ("FF5", fit3), ("FF5+MOM", fit4)]:
+    for name, fit, _ in specs:
         a_m = fit["coef"]["alpha"]
         row = {
-            "model": label,
+            "universe": universe,
+            "model": name,
+            "se_method": fit["se_method"],
+            "hac_lags": fit["hac_lags"],
             "n_months": fit["n"],
             "r_squared": fit["r_squared"],
             "adj_r_squared": fit["adj_r_squared"],
@@ -254,16 +265,68 @@ def main():
             "alpha_annual": a_m * 12,
             "alpha_t_stat": fit["t"]["alpha"],
             "alpha_p_value": fit["p"]["alpha"],
+            "alpha_se": fit["se"]["alpha"],
             "residual_sharpe": a_m / fit["resid_std"] * np.sqrt(12),
         }
         for f in ["Mkt_RF", "SMB", "HML", "RMW", "CMA", "MOM"]:
             row[f"beta_{f}"] = fit["coef"].get(f, np.nan)
             row[f"t_{f}"] = fit["t"].get(f, np.nan)
         rows.append(row)
-    out = pd.DataFrame(rows)
+    return rows
+
+
+def main():
+    from alpha_graph.backtest.pit_universe import fetch_membership, filter_preds_pit
+
+    set_global_seeds()
+    preds, _market, _regimes = _load_data()
+    factors = load_ff5_plus_mom()
+
+    # ----- Full universe -----
+    me_full = _build_method_e_returns(preds)
+    aligned_full = me_full.merge(factors, on="month_period", how="inner")
+    aligned_full["ret_excess"] = aligned_full["ret_net"] - aligned_full["RF"]
+    n_full = len(aligned_full)
+    L = _newey_west_lag(n_full)
+    logger.info(f"Full universe: aligned {n_full} months, Newey-West lag L = {L}")
+
+    print("\n\n##### FULL UNIVERSE — classical OLS SE #####")
+    full_ols = _run_all_specs(aligned_full, "FULL", hac_lags=None)
+    _print_verdict(full_ols, "FULL UNIVERSE — classical OLS SE")
+
+    print("\n\n##### FULL UNIVERSE — Newey-West HAC SE #####")
+    full_hac = _run_all_specs(aligned_full, "FULL", hac_lags=L)
+    _print_verdict(full_hac, "FULL UNIVERSE — Newey-West HAC SE")
+
+    # ----- PIT universe -----
+    membership = fetch_membership()
+    pit_preds = filter_preds_pit(preds, membership)
+    me_pit = _build_method_e_returns(pit_preds)
+    aligned_pit = me_pit.merge(factors, on="month_period", how="inner")
+    aligned_pit["ret_excess"] = aligned_pit["ret_net"] - aligned_pit["RF"]
+    n_pit = len(aligned_pit)
+    L_pit = _newey_west_lag(n_pit)
+    logger.info(f"PIT universe: aligned {n_pit} months, Newey-West lag L = {L_pit}")
+
+    print("\n\n##### PIT UNIVERSE — classical OLS SE #####")
+    pit_ols = _run_all_specs(aligned_pit, "PIT", hac_lags=None)
+    _print_verdict(pit_ols, "PIT UNIVERSE — classical OLS SE")
+
+    print("\n\n##### PIT UNIVERSE — Newey-West HAC SE #####")
+    pit_hac = _run_all_specs(aligned_pit, "PIT", hac_lags=L_pit)
+    _print_verdict(pit_hac, "PIT UNIVERSE — Newey-West HAC SE")
+
+    # ----- Combined save -----
+    all_rows = (
+        _rows_for_save(full_ols, "full_OLS")
+        + _rows_for_save(full_hac, "full_HAC")
+        + _rows_for_save(pit_ols, "pit_OLS")
+        + _rows_for_save(pit_hac, "pit_HAC")
+    )
+    out = pd.DataFrame(all_rows)
     path = CACHE_DIR / "method_e_ff_attribution.parquet"
     out.to_parquet(path, index=False)
-    logger.info(f"Saved FF attribution to {path}")
+    logger.info(f"Saved FF attribution (full+PIT × OLS+HAC) to {path}")
 
 
 if __name__ == "__main__":

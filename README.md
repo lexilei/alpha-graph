@@ -45,7 +45,13 @@ On the full (current-constituent) universe the numbers look strong:
 | Sharpe | 1.08 | **0.81** |
 | Max drawdown | -32.4% | -41.8% |
 
-**The PIT column is the honest number.** Forward survivorship bias (using 2026-constituent tickers in 2012, before they were in the index) inflated the annualized return by about 12 percentage points. Survivor bias from tickers removed before 2026 is not corrected here and remains an open caveat. See `report/u_shape_note.pdf` for details.
+**The PIT column is the honest aggregate number, but it hides a major decay pattern.** Forward survivorship bias (using 2026-constituent tickers in 2012, before they were in the index) inflated the annualized return by about 12 percentage points. Three additional rigour checks (`backtest/ff_attribution.py` HAC mode, `backtest/deflated_sharpe.py`, `backtest/subperiod_stability.py`) substantially weaken even the PIT number:
+
+- **Newey-West HAC SE**: PIT FF5+MOM α t-stat moves from 3.00 (OLS) to 3.07 (HAC, lag 4). Negligible change — residuals are not autocorrelated. Full-universe HAC actually tightens t-stats slightly (3.94 → 4.73 for FF5+MOM).
+- **Deflated Sharpe Ratio (Bailey-López de Prado)**: We selected Method E from 11 portfolio variants. After selection-bias adjustment, full-universe DSR is 82% (weak), **PIT DSR is 45.6%** — indistinguishable from a multiple-testing artifact. The 11 trial Sharpes have std 0.52, giving E[max SR | N=11] ≈ 0.84, which is above PIT Method E's 0.81.
+- **Sub-period stability**: PIT Sharpe by period — P1 (2012–15): 1.37, P2 (2016–19): 1.71, P3 (2020–22): 0.50, **P4 (2023–26): 0.04**. The strategy worked strongly pre-2020 and is essentially dead in the most recent three years on a controlled universe. The full-universe P4 Sharpe of 1.05 is entirely from current-mega-cap exposure, not from the underlying signal.
+
+The honest read-out is **a real signal that has decayed**, consistent with the Cohen-Malloy-Nguyen anomaly being arbitraged away as NLP-driven equity strategies have proliferated post-2020. See `report/u_shape_note.pdf` (7 pages) for the full statistical apparatus.
 
 After running a SPY-beta attribution (`backtest/attribution.py`) on Method E (full universe):
 
