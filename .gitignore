@@ -15,6 +15,7 @@ venv/
 data/filings/
 data/transcripts/
 data/cache/
+data/logs/
 *.parquet
 *.csv
 !tests/fixtures/*.csv
