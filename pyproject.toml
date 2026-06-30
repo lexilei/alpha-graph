@@ -29,6 +29,8 @@ dependencies = [
     "python-dotenv>=1.0",
     "tqdm>=4.66",
     "loguru>=0.7",
+    "pysentiment2>=0.1",          # factor 12: Loughran-McDonald lexicon
+    "sentence-transformers>=3.0", # factors 11/13: 10-K embedding similarity
 ]
 
 [project.optional-dependencies]
