@@ -5,7 +5,7 @@ number always means the same factor. New factors append the next free ID;
 numbers are never reused or renumbered, even if a factor is rejected. Refer to
 factors by ID everywhere else (logs, reports, commit messages).
 
-Next free ID: **14**
+Next free ID: **15**
 
 Status legend: `candidate` (under evaluation) · `accepted` (in the model) ·
 `rejected` (tested, no incremental signal — ID retained as a tombstone) ·
@@ -30,6 +30,7 @@ Prediction target for all factors: `fwd_return_21d` (next 21 trading-day return)
 | 11 | `embed_sim_10k` | 10-K | candidate | **Semantic** similarity between consecutive 10-Ks: cosine of sentence-transformer embeddings, finance-tuned model `FinLang/finance-embeddings-investopedia` (pinned, local, deterministic; long sections chunked + mean-pooled). The modern alternative to factor 1's bag-of-words TF-IDF — added to A/B test whether finance-semantic embeddings beat TF-IDF (incremental IC of 11 over 1). |
 | 12 | `tone_shift_10k` | 10-K | candidate | **Tone/direction** axis: change in Loughran-McDonald financial-sentiment word proportions (negative, uncertainty) vs the prior 10-K. Captures direction of change, which cosine ignores. PIT-safe (lexicon lookup, deterministic). |
 | 13 | `embed_sim_10k_bge` | 10-K | candidate | Same as factor 11 but with the **general-purpose** `BAAI/bge-base-en-v1.5` encoder. Forms a 3-way A/B with factors 1 (TF-IDF) and 11 (finance-tuned): bag-of-words vs general-semantic vs finance-semantic similarity for the same 10-K change. |
+| 14 | `new_content_frac` | 10-K | candidate | **Change detection**, not similarity: align the new 10-K's paragraph chunks against the prior filing's, count the share with no good match (cosine < thresh) → fraction of genuinely **added** content. Targets the saturation that defeats 11/13 (a single new paragraph survives instead of being pooled away). Embedding-space version of Lazy Prices "added text". `signals/change_detect_10k.py`. |
 
 ## Known issues (carry into any evaluation)
 
