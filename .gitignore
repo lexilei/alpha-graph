@@ -12,6 +12,7 @@ build/
 venv/
 
 # Data (large files, download locally)
+/data
 data/filings/
 data/transcripts/
 data/cache/
