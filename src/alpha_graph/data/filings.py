@@ -56,9 +56,13 @@ def _extract_10k_sections(filing) -> dict[str, str]:
         except Exception:
             pass
 
-    if not sections:
+    # Fall back to full text when sections are empty OR just cross-reference
+    # stubs (see _extract_10q_sections — combined multi-registrant filers).
+    if sum(len(v) for v in sections.values()) < 500:
         try:
-            sections["full_text"] = filing.text()[:500_000]
+            full = filing.text()[:500_000]
+            if len(full) >= 500:
+                return {"full_text": full}
         except Exception:
             pass
     return sections
@@ -88,9 +92,14 @@ def _extract_10q_sections(filing) -> dict[str, str]:
         except Exception:
             pass
 
-    if not sections:
+    # Fall back to full text when sections are empty OR just cross-reference
+    # stubs (combined multi-registrant filers like AEP put "see combined MD&A"
+    # under the item key; a ~280-char stub is not a usable section).
+    if sum(len(v) for v in sections.values()) < 500:
         try:
-            sections["full_text"] = filing.text()[:500_000]
+            full = filing.text()[:500_000]
+            if len(full) >= 500:
+                return {"full_text": full}
         except Exception:
             pass
     return sections
