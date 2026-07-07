@@ -1,20 +1,5 @@
-"""Factors 11 / 13 — 10-K semantic similarity via sentence-transformer embeddings.
-
-The semantic counterpart to factor 1 (TF-IDF cosine). Same question — "how
-much did the 10-K change?" — but in embedding space, so paraphrase and word
-reordering don't count as change. One module, swappable encoder, so factors 1
-(bag-of-words), 11 (finance-tuned), and 13 (general bge) form a clean 3-way A/B
-on the SAME filing pairs; `factor_orthogonality.py` then says which encoder, if
-any, carries incremental IC the others miss.
-
-10-K bodies far exceed the 512-token model limit, so each filing is split into
-~350-word chunks, every chunk embedded and L2-normalized, then mean-pooled into
-one document vector. Similarity = cosine between consecutive filings' document
-vectors (same consecutive pairing as factor 1).
-
-Determinism: CPU inference with a pinned model is reproducible. `--device mps`
-is faster on Apple Silicon at the cost of tiny float nondeterminism (immaterial
-to the signal). Model name/revision is recorded in the output for provenance.
+"""Factors 11/13 — embedding cosine between consecutive 10-Ks (chunked +
+mean-pooled; swappable encoder for the A/B vs factor 1's TF-IDF).
 
 Usage:
     python -m alpha_graph.signals.embed_sim_10k --tag fin \

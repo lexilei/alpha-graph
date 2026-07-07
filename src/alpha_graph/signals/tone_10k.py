@@ -1,19 +1,5 @@
-"""Factor 12 — 10-K tone shift (Loughran-McDonald sentiment).
-
-cosine (factor 1) measures HOW MUCH a 10-K changed but is unsigned — it can't
-tell "no material litigation" -> "facing class action" from the reverse. This
-factor adds the DIRECTION axis: the year-over-year change in financial-sentiment
-word density, using the Loughran-McDonald dictionary (the finance-standard
-lexicon; general-purpose sentiment lists misclassify words like "liability"
-or "tax").
-
-Per 10-K we compute the proportion of LM Negative words; the factor is the
-change vs the firm's prior 10-K. Positive `tone_shift_10k` = the filing got
-more negative. Sign of the return relationship is left to the IC test.
-
-Fully PIT-safe and deterministic: a static lexicon lookup, no model.
-
-Output column: `tone_shift_10k` (factor 12). Also stores `neg_prop` (level).
+"""Factor 12 — change in Loughran-McDonald negative-word density vs the prior
+10-K. Positive = filing got more negative. Static lexicon: PIT-safe.
 
 Usage:
     python -m alpha_graph.signals.tone_10k [--tickers AAPL MSFT]

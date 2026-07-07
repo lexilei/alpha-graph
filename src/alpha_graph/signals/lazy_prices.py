@@ -1,11 +1,5 @@
-"""Lazy Prices signal — detect meaningful language changes between consecutive filings.
-
-Based on Cohen, Malloy & Nguyen (2020) "Lazy Prices": companies that change their
-10-K/10-Q language substantially tend to underperform. Portfolios shorting high-change
-companies and buying low-change ones earn ~188 bps/month.
-
-The signal: compute TF-IDF cosine similarity between consecutive filings of the same
-type (10-K vs 10-K, 10-Q vs 10-Q). Low similarity = large changes = bearish signal.
+"""Factor 1 — TF-IDF cosine between consecutive same-type filings
+(Cohen-Malloy-Nguyen 2020 "Lazy Prices").
 
 Usage:
     python -m alpha_graph.signals.lazy_prices [--tickers AAPL MSFT] [--form 10-K]

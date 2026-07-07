@@ -1,24 +1,6 @@
-"""Factor 14 — 10-K new-content fraction (chunk-alignment change detection).
-
-The embedding-similarity factors (11/13) saturate near 1.0 because pooling a
-whole 10-K into one vector is dominated by "which company is this", not the
-year-over-year edits. This factor measures the edits directly: it aligns the
-NEW filing's paragraphs against the PRIOR filing's paragraphs and counts how
-much of the new filing has no good match in the old one — i.e. genuinely added
-content. This is the embedding-space version of the Lazy Prices "added text"
-idea, and it targets the exact failure mode we observed (a single added risk-
-factor paragraph is 1/80 of the doc and gets averaged away by pooling; here it
-is surfaced as an unmatched chunk).
-
-Per consecutive 10-K pair (old, new):
-  - split each into ~paragraph-sized chunks, embed + L2-normalize;
-  - for each NEW chunk, best cosine match against any OLD chunk;
-  - `new_content_frac` = share of new chunks whose best match < MATCH_THRESH
-    (factor 14, threshold form);
-  - `mean_novelty`    = 1 - mean(best match)   (threshold-free companion col).
-
-MATCH_THRESH is a hyperparameter — pre-register it; defaults are a starting
-point, not a tuned value.
+"""Factor 14 — fraction of the new 10-K's paragraph chunks with no good
+embedding match in the prior filing (genuinely added content). Avoids the
+whole-doc similarity saturation that defeats factors 11/13.
 
 Usage:
     python -m alpha_graph.signals.change_detect_10k [--tickers AAPL MSFT] \

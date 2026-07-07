@@ -1,32 +1,6 @@
-"""ML Signal Combiner — LightGBM model that learns optimal signal weights.
-
-Replaces the hardcoded coordinator weights with a data-driven approach.
-Uses walk-forward training (12-month window) to predict 21-day forward returns
-from all available alpha signals.
-
-Features:
-  - Lazy Prices cosine similarity (annual, slow)
-  - LLM filing change scores (annual, qualitative)
-  - 8-K event scores (high-frequency, event-driven)
-  - HMM regime state (market context)
-  - 21-day momentum (price trend)
-  - 21-day realized volatility (risk)
-  - 5-day return (short-term momentum)
-  - Volume z-score (liquidity/attention)
-
-Target: forward 21-day return (continuous regression)
-
-Model: LightGBM regressor — chosen because:
-  - Handles missing features natively (NaN-aware splits)
-  - Robust to overfitting with proper regularization
-  - Fast training even with 100+ features
-  - Feature importance for interpretability
-
-Walk-forward protocol:
-  - 12-month training window
-  - 1-month test window
-  - Purge 5 days between train and test (prevent leakage from overlapping returns)
-  - Re-train monthly (no optimization on test set)
+"""LightGBM walk-forward combiner: predicts 21-day forward returns from the
+factor panel (see FACTORS.md). 12-month train window, 1-month test, 31-day
+purge (labels span 21 trading days). Also builds the shared feature panel.
 
 Usage:
     python -m alpha_graph.signals.ml_combiner [--train] [--predict]
@@ -94,7 +68,7 @@ LGBM_PARAMS = {
 
 # Walk-forward settings
 TRAIN_MONTHS = 12
-PURGE_DAYS = 5
+PURGE_DAYS = 31  # labels are 21 TRADING days forward (~31 calendar)
 FEATURE_COLS = [
     "cosine_similarity",
     "event_score",
@@ -189,21 +163,6 @@ def build_feature_panel() -> pd.DataFrame:
         panel["event_score"] = np.nan
         panel["event_count"] = np.nan
         logger.debug("No 8-K event data — feature will be NaN")
-
-    # --- Merge graph spillover signals ---
-    spillover_path = CACHE_DIR / "graph_spillover.parquet"
-    if spillover_path.exists():
-        spillover = pd.read_parquet(spillover_path)
-        spillover["date"] = pd.to_datetime(spillover["date"])
-        panel = _merge_asof_signal(
-            panel, spillover,
-            left_date="date", right_date="date",
-            on="ticker", cols=["spillover_event", "spillover_momentum"],
-        )
-    else:
-        panel["spillover_event"] = np.nan
-        panel["spillover_momentum"] = np.nan
-        logger.debug("No graph spillover data — feature will be NaN")
 
     # --- Merge HMM regime ---
     regime_path = CACHE_DIR / "regimes.parquet"
@@ -332,14 +291,10 @@ def walk_forward_train_predict(
         X_test = test_data[available_features]
         y_test = test_data["fwd_return_21d"]
 
-        # Train model
+        # Train model (fixed n_estimators; never early-stop on the test month)
         if lgb is not None:
             model = lgb.LGBMRegressor(**LGBM_PARAMS)
-            model.fit(
-                X_train, y_train,
-                eval_set=[(X_test, y_test)],
-                callbacks=[lgb.early_stopping(stopping_rounds=20, verbose=False)],
-            )
+            model.fit(X_train, y_train)
         else:
             # Fallback to sklearn
             from sklearn.ensemble import GradientBoostingRegressor

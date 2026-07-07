@@ -1,26 +1,12 @@
-"""Rigorous, resumable SEC EDGAR filing downloader with manifest checkpointing.
-
-Why this exists (over `alpha_graph.data.filings`):
-  - The original skip logic only checked `path.exists()`, so a filing whose
-    section extraction failed (empty / fallback) was cached as "done" and
-    never retried. This validates content before skipping.
-  - No checkpoint above the file level: a crash re-listed every ticker from
-    EDGAR. This keeps a manifest of per-(ticker, form) status so re-runs
-    resume instantly and skip the EDGAR listing call for completed work.
-  - No retry/backoff on transient EDGAR errors (they were swallowed).
-  - The historical corpus is lopsided: ~150 tickers have full 2011-2026
-    history, ~309 only have 2023+. This backfills the gap idempotently.
-
-Output format is byte-for-byte compatible with the original downloader
-(same filename `{form}_{date}_{accession}.json`, same JSON record schema,
-same section extraction), so lazy_prices.py / event_signal.py are unaffected.
+"""Resumable SEC EDGAR downloader: manifest checkpointing, content-validated
+skip (re-fetches corrupt/thin files), retry with backoff. Output format is
+identical to alpha_graph.data.filings.
 
 Usage:
     python scripts/download_filings_v2.py --forms 10-K --start-year 2011 --end-year 2026
-    python scripts/download_filings_v2.py --forms 10-K 10-Q 8-K            # all forms
-    python scripts/download_filings_v2.py --tickers MSFT JPM --forms 10-K  # specific
-    python scripts/download_filings_v2.py --revalidate                     # recheck on-disk files
-    python scripts/download_filings_v2.py --coverage-only                  # just print coverage
+    python scripts/download_filings_v2.py --tickers MSFT JPM --forms 10-K
+    python scripts/download_filings_v2.py --revalidate
+    python scripts/download_filings_v2.py --coverage-only
 """
 
 from __future__ import annotations

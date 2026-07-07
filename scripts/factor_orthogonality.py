@@ -1,40 +1,11 @@
-"""Factor orthogonality + incremental-IC tester.
-
-Workflow this supports: treat every factor as a *candidate*; start with an
-empty *accepted* set; repeatedly ask "does this candidate predict forward
-returns BEYOND what the accepted set already explains?" Keep the ones that
-do, drop the redundant ones.
-
-Two notions of "orthogonal" — kept distinct on purpose:
-  - spanned_R2 : fraction of the candidate's cross-sectional variation that
-    the accepted factors already explain (high = redundant). 1 - spanned_R2
-    is the "orthogonality score" you asked for.
-  - incremental IC : the IC of the candidate *after* residualizing it against
-    the accepted set. THIS is what decides inclusion. A factor can be
-    correlated with accepted ones (low orthogonality) yet still carry
-    incremental IC — correlation != redundancy. Only near-zero incremental
-    IC means redundant.
-
-Everything is cross-sectional (per date) then aggregated over months, so an
-"IC" here is the rank correlation between a factor and the next-21d return
-within each month's universe, averaged across months.
-
-Method discipline: this is an in-sample selector. Pre-register your candidate
-list and decision threshold (e.g. accept if incremental-IC t > 2) BEFORE
-running greedy mode, and record how many factors you tried — that count is
-your multiple-testing N.
+"""Incremental-IC factor selector: residualize a candidate against the
+accepted set per monthly cross-section, test whether the residual still
+predicts fwd_return_21d. In-sample tool — pre-register thresholds and count
+every variant tried (see reports/factor_preregistration.md).
 
 Usage:
-  # score one candidate against an accepted set
-  python scripts/factor_orthogonality.py evaluate \
-      --accepted momentum_21d --candidate cosine_similarity
-
-  # forward stepwise build from empty, over all 9 (or any subset)
-  python scripts/factor_orthogonality.py greedy \
-      --candidates cosine_similarity event_score event_count regime_state \
-                   regime_prob momentum_21d momentum_5d volatility_21d volume_zscore
-
-  # supply your own factor panel (must have date, ticker, fwd_return_21d + factor cols)
+  python scripts/factor_orthogonality.py evaluate --accepted momentum_21d --candidate cosine_similarity
+  python scripts/factor_orthogonality.py greedy [--candidates ...] [--t 2.0]
   python scripts/factor_orthogonality.py greedy --panel data/cache/my_factors.parquet --candidates ...
 """
 

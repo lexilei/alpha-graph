@@ -1,28 +1,8 @@
-"""8-K event-driven signal — high-frequency updates from material events.
-
-Unlike the Lazy Prices signal (annual 10-K updates), this signal updates
-whenever a company files an 8-K, which can be multiple times per month.
-This dramatically increases signal frequency and reduces staleness.
-
-Each 8-K item type has a prior score based on academic research and
-empirical evidence of market impact:
-
-  - Item 1.01 (material agreements):         +0.3  (new business)
-  - Item 1.02 (termination of agreements):   -0.5  (lost business)
-  - Item 2.01 (asset acquisition):           +0.2  (growth signal)
-  - Item 2.02 (results of operations):       +0.1  (neutral-positive, preannouncement)
-  - Item 2.05 (costs/restructuring):         -0.4  (short-term pain)
-  - Item 2.06 (material impairments):        -0.6  (asset writedown, very negative)
-  - Item 4.01 (auditor change):              -0.7  (red flag)
-  - Item 4.02 (non-reliance on financials):  -0.8  (restatement risk, severe)
-  - Item 5.02 (departure of directors):      -0.3  (leadership instability)
-  - Item 7.01/8.01 (Reg FD/other):            0.0  (neutral, catch-all)
-
-The signal for each ticker is an exponentially-weighted average of recent
-event scores, with lambda=0.9 decay per month. More recent events matter more.
+"""Factors 2/3 — 8-K item-type prior scores (see ITEM_SCORES), exponentially
+weighted per ticker (lambda=0.9/month).
 
 Usage:
-    python -m alpha_graph.signals.event_signal [--tickers AAPL MSFT]
+    python -m alpha_graph.signals.event_signal [--tickers AAPL MSFT] [--timeseries]
 """
 
 from __future__ import annotations

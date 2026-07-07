@@ -1,162 +1,68 @@
-# Alpha-Graph
+# alpha-graph
 
-NLP-driven equity signal generation from SEC filings (10-K, 10-Q, 8-K), tested on a 14-year cross-section of S&P 500 stocks.
+Text factors from SEC filings (10-K, 10-Q, 8-K), evaluated cross-sectionally
+on an S&P 500 panel (499 tickers, 2011–2026, monthly).
 
-## Honest summary: the long/short version of this strategy does not work
+Results claimed by pre-2026-06 versions of this repo were retracted after an
+internal audit and are not claimed here. Current state is below; every number
+reproduces from `data/cache/`.
 
-The original goal was a market-neutral long/short portfolio built on filing-text changes plus 8-K events. After running the backtest on the full 14-year panel (168 months, 499 tickers, ~1.66M ticker-months), the answer is unambiguous:
+## Data
 
-- **Top10/Bot10 long/short on the ML combiner signal**: cumulative **+90%** over 14 years (annualized **+4.7%**), Sharpe **0.32**, max drawdown **-58%**. That is worse than holding T-bills and dramatically worse than holding SPY.
-- **Rank-weighted L/S** (the "obvious" generalization): Sharpe **-0.12**. Rank weighting assumes the signal is monotonic in forward return; it isn't.
-- **Multi-factor combiner** (Lazy Prices + 12-1 Momentum + Low-Vol z-score average): Sharpe **-0.52**, cumulative **-59%**. Adding "diversifying" factors made it worse.
-- **Pure 12-1 Momentum L/S** (sanity check): Sharpe **0.31**, cumulative **+86%**. So this universe isn't completely factor-hostile — momentum works at about the same level as the Lazy Prices L/S signal, which means our text-derived signal carries no useful information beyond what a trivial price-momentum factor already provides.
-
-The 24-month "Sharpe 1.77 / +80.5%" headline that earlier versions of this README and the LaTeX report advertised was a cherry-picked window. On the actual cached `walk_forward_results.parquet`, the L/S strategy on the same period is **-44.9% cumulative, Sharpe -2.64**. The headline number was never reproducible.
-
-## Why the L/S version fails: the signal is U-shaped, not monotonic
-
-The diagnostic that broke the strategy is straightforward. We binned all ticker-months into deciles by Lazy Prices signal strength and measured the average forward 21-day return per decile:
-
-| Decile | Signal | Avg Forward Return / Month |
+| Corpus | Files | Coverage |
 |---|---|---|
-| 9 (highest cosine sim, no filing changes) | strong long | **+2.10%** |
-| 4–5 (middle, ambiguous) | neutral | **+1.19%** |
-| 0 (lowest cosine sim, filing rewritten) | "strong short" | **+1.37%** |
+| 10-K | 7,646 | 83–100% of tickers per year, 2012+ |
+| 10-Q | 21,487 | 83–100% per year, 2011+ |
+| 8-K | 33,490 | recency-skewed, backfill pending |
+| Prices | 499 tickers daily OHLCV, 2011-04 → 2026-04 | complete |
 
-The original Cohen, Malloy & Nguyen (2020) "Lazy Prices" thesis says the bottom decile should have the *worst* forward return — that's the alpha that motivates shorting them. In our 2011–2026 panel **the bottom decile beats the middle**. Companies that dramatically rewrite their filings do not underperform on average; they outperform the ambiguous middle.
+Remaining per-year gaps are late IPOs, not missing downloads. Downloads are
+manifest-checkpointed and resumable (`scripts/download_filings_v2.py`).
 
-This makes the long/short construction structurally broken:
-- Rank-weighted L/S puts negative weight on the bottom decile, which has positive expected return → you are paying alpha to go *short* a positive-EV bucket.
-- Top10/Bot10 has the same problem at smaller scale.
-- Any "diversifying multi-factor" approach that assumes monotonicity dilutes the only working part of the signal (the long top decile) into the broken middle and short legs.
+## Factors
 
-The short side of the original Lazy Prices paper does not replicate in our universe, and once you accept that, no combination of features, regime filters, or position-sizing tricks rescues the L/S strategy.
+Registered with permanent IDs in `FACTORS.md`. Selection protocol (IS/OOS
+split, incremental-IC thresholds, trial counting for multiple-testing) is
+pre-registered in `reports/factor_preregistration.md` — committed before
+results were examined.
 
-## What does survive: long-only top decile
+Evaluation tool: `scripts/factor_orthogonality.py` — residualizes a candidate
+against the accepted set per monthly cross-section and tests whether the
+residual still predicts 21-day forward returns.
 
-The one thing that does survive 14 years of out-of-sample evaluation is the **long-only top10** book (Method E in `backtest/improvements.py`).
+## Current results
 
-On the full (current-constituent) universe the numbers look strong:
-
-| Metric | Full universe | PIT S&P 500 universe |
-|---|---|---|
-| Cumulative return (168 months) | +3,732% | **+888%** |
-| Annualized return | +29.7% | **+17.8%** |
-| Sharpe | 1.08 | **0.81** |
-| Max drawdown | -32.4% | -41.8% |
-
-**The PIT column is the honest aggregate number, but it hides a major decay pattern.** Forward survivorship bias (using 2026-constituent tickers in 2012, before they were in the index) inflated the annualized return by about 12 percentage points. Three additional rigour checks (`backtest/ff_attribution.py` HAC mode, `backtest/deflated_sharpe.py`, `backtest/subperiod_stability.py`) substantially weaken even the PIT number:
-
-- **Newey-West HAC SE**: PIT FF5+MOM α t-stat moves from 3.00 (OLS) to 3.07 (HAC, lag 4). Negligible change — residuals are not autocorrelated. Full-universe HAC actually tightens t-stats slightly (3.94 → 4.73 for FF5+MOM).
-- **Deflated Sharpe Ratio (Bailey-López de Prado)**: We selected Method E from 11 portfolio variants. After selection-bias adjustment, full-universe DSR is 82% (weak), **PIT DSR is 45.6%** — indistinguishable from a multiple-testing artifact. The 11 trial Sharpes have std 0.52, giving E[max SR | N=11] ≈ 0.84, which is above PIT Method E's 0.81.
-- **Sub-period stability**: PIT Sharpe by period — P1 (2012–15): 1.37, P2 (2016–19): 1.71, P3 (2020–22): 0.50, **P4 (2023–26): 0.04**. The strategy worked strongly pre-2020 and is essentially dead in the most recent three years on a controlled universe. The full-universe P4 Sharpe of 1.05 is entirely from current-mega-cap exposure, not from the underlying signal.
-
-The honest read-out is **a real signal that has decayed**, consistent with the Cohen-Malloy-Nguyen anomaly being arbitraged away as NLP-driven equity strategies have proliferated post-2020. See `report/u_shape_note.pdf` (7 pages) for the full statistical apparatus.
-
-After running a SPY-beta attribution (`backtest/attribution.py`) on Method E (full universe):
-
-| Beta-attribution metric | Value |
-|---|---|
-| Months in regression | 167 |
-| α (annualized, arithmetic) | **+33.6%** |
-| β vs SPY | **-0.19** |
-| Alpha t-statistic | **+4.35** |
-| Alpha p-value (two-sided) | **0.000023** |
-| Residual Sharpe (α / σ_ε)·√12 | **+1.21** |
-| Mag 7 share of all picks | **4.3%** |
-| Top-5 ticker concentration | **8.0%** |
-
-On the full-universe regression Method E has an alpha t-stat above 4 and near-zero market beta; on the PIT universe the FF5+MOM alpha drops to **+20.6% annualized** with **t = +3.00** (`backtest/ff_attribution.py` rerun on PIT predictions). Still statistically significant at 1%, but economically two-thirds of the unadjusted number.
-
-`backtest/ff_attribution.py` (full universe) also rules out factor exposure: across CAPM, FF3, FF5, and FF5+MOM specifications, no factor loading has |t| > 2. The alpha does not come from disguised market, size, value, profitability, investment, or momentum exposure. `backtest/feature_stability.py` shows that across 156 walk-forward folds no single feature dominates — importance is bursty, with `cosine_similarity` selected in 68% of folds. Earlier claims that it was "subsumed" by the 8-K event score were based on a single-snapshot importance and are retracted. `backtest/realistic_slippage.py` shows Method E's Sharpe drops only from 1.08 to 1.04 under a per-ticker ADV-ranked cost model (avg 20.7 bps/month vs 10 bps flat), so the result is not fragile to cost assumptions. A market-neutral reframing (Method J: long top10 minus β·SPY, β estimated over trailing 24 months) delivers Sharpe 1.00 — confirming Method E was approximately market-neutral by construction (average hedging β = 0.10).
-
-In other words: the "win" here is that the signal correctly identifies a quality/persistence basket on the long side. There is no working short side, no working market-neutral L/S combination, and the gross outperformance over SPY is partly real alpha (~18% ann on PIT) and partly forward survivorship bias.
-
-## What the cached data actually says
-
-The numbers above all come from re-reading `data/cache/improvements_results.parquet`, `method_e_attribution.parquet`, `walk_forward_results.parquet`, and `cost_sensitivity.parquet`. The full table from `improvements.py`:
-
-| Method | Sharpe | Cumulative | Annualized | MaxDD | Win |
-|---|---|---|---|---|---|
-| Baseline: top10/bot10 (Lazy Prices L/S) | +0.32 | +90.4% | +4.7% | -58.4% | 54% |
-| A. Rank-weighted L/S | -0.12 | -21.6% | -1.7% | -44.9% | 54% |
-| B. Decile (top 10% / bot 10%) | +0.31 | +60.1% | +3.4% | -37.9% | 60% |
-| C. Vol-targeted (10% ann vol) | +0.27 | +40.7% | +2.5% | -36.3% | 53% |
-| D. Multi-factor (Lazy + Mom + LowVol, rank-wt) | -0.52 | -58.7% | -6.1% | -64.2% | 45% |
-| **E. Long-only top10 (no short)** | **+1.08** | **+3,732%** | **+29.7%** | **-32.4%** | **65%** |
-| F. Long top10 / Short MIDDLE10 (U-shape) | +0.61 | +341.6% | +11.2% | -34.1% | 55% |
-| G. Pure 12-1 Momentum (no Lazy Prices) | +0.31 | +85.9% | +4.5% | -72.7% | 55% |
-| H. 12-1 Mom + Low-Vol composite | -0.43 | -96.1% | -20.7% | -98.0% | 50% |
-| I. Long Lazy Prices / Short low-Mom (cross-factor) | -0.04 | -43.8% | -4.0% | -72.6% | 52% |
-
-Cost sensitivity for the L/S baseline (`cost_sensitivity.parquet`) — we currently assume 20 bps/month all-in:
-
-| Cost (bps/mo) | Sharpe | Cumulative |
-|---|---|---|
-| 0 | +0.43 | +166% |
-| 10 | +0.37 | +125% |
-| 20 (assumed) | +0.32 | +90% |
-| 50 | +0.15 | +15% |
-| 75 | +0.02 | -24% |
-| 100 | -0.12 | -50% |
-
-So the L/S baseline has no margin: 50 bps/mo (well within real-world short-borrow + impact for many of the bottom-decile names) zeroes the Sharpe.
-
-## What the code in this repo is
-
-On 2026-04-15 the repo was cleaned up: the multi-agent LLM pipeline, paper-trading layer, knowledge-graph spillover, LLM filing-change detector, fundamentals feature, and transcripts pipeline were removed. They either produced no validated alpha or wired to retracted signals. The `pre-cleanup-2026-04-15` git tag preserves the prior state.
-
-What remains:
-
-- **Data layer** (`src/alpha_graph/data/`): SEC EDGAR filing downloader, yfinance market data.
-- **Signals** (`src/alpha_graph/signals/`): Lazy Prices TF-IDF cosine similarity, 8-K item-type event scoring, Gaussian HMM regime detector, walk-forward LightGBM combiner.
-- **Backtest** (`src/alpha_graph/backtest/`): walk-forward engine, cost-sensitivity sweep, ten alternative method variants in `improvements.py`, beta attribution in `attribution.py`, permutation test in `permutation_test.py`, four structural extensions in `extensions.py`.
-- **Tests** (`tests/`): 5 unit-test modules covering signals, portfolio construction, ML combiner, and backtest engine.
+On the complete corpus, factor 1 (10-K TF-IDF cosine, the core Lazy Prices
+measure) has a standalone monthly IC of +0.0037 (t = 0.68) — not significant.
+The decile relation is U-shaped, so the paper's short side does not replicate
+in this universe. Evaluation of the remaining text factors (tone shift,
+embedding similarity, change detection, 10-Q YoY) is in progress under the
+pre-registered protocol.
 
 ## Setup
 
 ```bash
 pip install -e ".[dev]"
-cp .env.example .env  # SEC EDGAR identity, optional Together AI key, optional Alpaca keys
-```
+cp .env.example .env   # SEC EDGAR identity
 
-## Reproducing the honest numbers
+# data
+python scripts/download_filings_v2.py --forms 10-K 10-Q --start-year 2011 --end-year 2026
+python -m alpha_graph.data.market --max-tickers 500 --years-back 15
 
-```bash
-# Download data (one-time)
-python -m alpha_graph.data.filings  --max-tickers 500 --years-back 14
-python -m alpha_graph.data.market   --max-tickers 500 --years-back 14
+# factors
+python -m alpha_graph.signals.lazy_prices                 # 1
+python -m alpha_graph.signals.lazy_prices_10q             # 10
+python -m alpha_graph.signals.embed_sim_10k --tag fin --model FinLang/finance-embeddings-investopedia  # 11
+python -m alpha_graph.signals.tone_10k                    # 12
+python -m alpha_graph.signals.embed_sim_10k --tag bge --model BAAI/bge-base-en-v1.5                    # 13
+python -m alpha_graph.signals.change_detect_10k           # 14
 
-# Build signals
-python -m alpha_graph.signals.lazy_prices
-python -m alpha_graph.signals.event_signal
-python -m alpha_graph.signals.regime
-
-# Train ML combiner walk-forward (this writes ml_combiner_predictions.parquet)
-python -m alpha_graph.signals.ml_combiner --train
-
-# Run all 10 portfolio variants on the 168-month panel
-python -m alpha_graph.backtest.improvements
-
-# Beta attribution for Method E (long-only top10)
-python -m alpha_graph.backtest.attribution
-
-# Cost sensitivity sweep for the L/S baseline
-python -m alpha_graph.backtest.cost_sensitivity
+# evaluate
+python scripts/factor_orthogonality.py greedy
 ```
 
 ## Tests
 
 ```bash
-pytest tests/ -v
+pytest tests/ -q
 ```
-
-## Honest known limitations
-
-1. **The L/S strategy doesn't work.** This is the main finding. The 14-year baseline Sharpe is 0.32, far below any deployment threshold, and the cost-sensitivity curve shows it goes to zero around 75 bps/month round-trip. Several "diversifying" multi-factor variants made things actively worse.
-2. **The long-only book has alpha but isn't market-neutral.** Method E's t-stat-4.35 alpha is real, but the project was conceived as a long/short alpha capture, not a long-bias stock picker. Reframing it as a stock picker is honest but is not what was originally promised.
-3. **Survivorship bias: partially corrected.** `backtest/pit_universe.py` applies a point-in-time S&P 500 membership filter (from the fja05680 GitHub dataset) which drops Method E's Sharpe from 1.08 to 0.81 and annualized return from +29.7% to +17.8%. This fixes the *forward-bias* component. The *survivor-bias* component (tickers removed from the index before 2026 and absent from our 499-ticker download) is not corrected and is the largest remaining caveat. The honest numbers to quote are the PIT-corrected ones.
-4. **No short borrowing costs.** All numbers above assume costless shorting. Realistic borrow + market impact for the bottom-decile names would push the L/S Sharpe further negative.
-5. **The previous "Anti-Momentum Sharpe 1.91" headline does not survive the permutation test on the full 14-year panel.** The earlier 23-month finding was inside a regime where momentum-reversal features happened to fit the post-Jan-2025 rotation; the null distribution from `permutation_test_null.parquet` (mean 0.016, std 0.22) shows that random feature shuffles produce Sharpes of similar magnitude often enough that the original number can't be defended.
-
-See `METHODOLOGY.md` for the longer methodology writeup with the same updated numbers, and `report/alpha_graph_report.tex` for the full LaTeX writeup (also updated).

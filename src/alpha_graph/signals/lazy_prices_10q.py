@@ -1,20 +1,5 @@
-"""Factor 10 — Lazy Prices on 10-Q, year-over-year (seasonality-controlled).
-
-The original Cohen-Malloy-Nguyen (2020) "Lazy Prices" construction compares a
-10-Q to the SAME FISCAL QUARTER one year earlier, not to the previous quarter.
-Adjacent quarters (Q1 vs Q2) differ for seasonal/business reasons that have
-nothing to do with deliberate language change, so a consecutive comparison
-(what `lazy_prices.py --form 10-Q` does) conflates seasonality with the signal.
-
-This module matches each 10-Q to the prior 10-Q ~1 year earlier (filing-date
-gap in [MIN_GAP, MAX_GAP] days, closest to 365), then takes TF-IDF cosine
-similarity with the same vectorizer settings as factor 1. We match on the
-~365-day filing-date gap rather than an exact fiscal-quarter label because the
-cached filings store only filing_date; with the usual 3 10-Qs/year this lands
-on the same quarter a year prior and degrades gracefully when a filing is
-missing.
-
-Output column: `cos_10q_yoy` (factor 10). High = little YoY language change.
+"""Factor 10 — 10-Q TF-IDF cosine vs the filing ~365 days earlier (same fiscal
+quarter, controls seasonality; comparing adjacent quarters would not).
 
 Usage:
     python -m alpha_graph.signals.lazy_prices_10q [--tickers AAPL MSFT]

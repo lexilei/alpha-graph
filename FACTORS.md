@@ -34,22 +34,24 @@ Prediction target for all factors: `fwd_return_21d` (next 21 trading-day return)
 
 ## Known issues (carry into any evaluation)
 
-- **1** — corpus is incomplete pre-backfill (~30% of tickers had ≥2 consecutive
-  10-Ks before 2024 → ~40% panel coverage). Numbers are not trustworthy until
-  the 10-K backfill + cosine recompute lands.
-- **2, 3** — item prior scores are hand-coded, never calibrated against realized
-  forward returns.
-- **4, 5** — market-level: zero cross-sectional ranking content (confirmed —
-  `factor_orthogonality.py` cannot score them; they vanish on rank-standardization).
-  Useful only as conditioning/interaction variables, not as stock-pickers.
-- **10** — 10-Q corpus is incomplete pre-backfill (recency-skewed like 10-K was);
-  not evaluable until the 10-Q backfill lands. Computed YoY (lag ~365d, not
-  consecutive quarters) to avoid seasonality contamination.
-- **11, 12, 13** — depend on the 10-K backfill (same corpus as factor 1). The
-  embedding factors (11 finance, 13 general bge) are pretrained (mild non-PIT:
-  the encoder has seen text after some filing dates) — pin the model version;
-  their purpose is the 3-way A/B (1 TF-IDF vs 11 finance-semantic vs 13
-  general-semantic), not a standalone claim. 12 is fully PIT-safe (static lexicon).
+- **1** — corpus backfilled 2026-06-30 (7,146 pairs, 82–98% coverage 2012+).
+  Standalone monthly IC on the full corpus: +0.0037, t = 0.68 (insignificant).
+  Per-pair TF-IDF vocab refit means levels are not strictly comparable across
+  pairs; cross-sectional ranks are what get used.
+- **2, 3** — item prior scores are hand-coded, never calibrated; the cached
+  `event_signals.parquet` is a dateless 102-row snapshot (unusable — recompute
+  with `--timeseries` after an 8-K backfill).
+- **4, 5** — market-level: zero cross-sectional ranking content. Conditioning/
+  interaction use only.
+- **10** — computed on the complete 10-Q corpus (19,913 YoY pairs, 498 tickers).
+- **11, 13** — pretrained encoders (mild non-PIT); pin model versions. Purpose
+  is the 3-way A/B vs factor 1, not a standalone claim. Whole-doc similarity
+  saturates near 0.99 (motivated factor 14).
+- **12** — PIT-safe (static lexicon).
+- **14** — MATCH_THRESH and MAX_CHUNKS=150 (truncates very long filings) are
+  hyperparameters; count variants toward N.
+- Universe is current-constituent (survivorship): PIT membership filter not yet
+  applied to factor evaluation.
 
 ## Convention
 
