@@ -101,6 +101,41 @@ def test_neighbor_signal_missing_ticker():
     assert result == 0.0
 
 
+def test_neighbor_signal_in_edge_relation_reversed():
+    """In-edge relations are stated from the SOURCE's perspective and must flip.
+
+    S --supplier--> X means "X is S's supplier", so from X's side S is a
+    customer (weight 0.8), not a supplier (1.0). A second in-edge of a
+    self-symmetric type (partner) makes the normalized average detect the flip.
+    """
+    G = nx.DiGraph()
+    G.add_nodes_from(["X", "S", "P"])
+    G.add_edge("S", "X", relation="supplier", confidence=1.0)
+    G.add_edge("P", "X", relation="partner", confidence=1.0)
+
+    signals = {"S": 1.0, "P": -1.0}
+    result = compute_neighbor_signal(G, "X", signals)
+
+    # reversed: customer(0.8)*1 + partner(0.5)*(-1) = 0.3, weight total 1.3
+    assert result == pytest.approx(0.3 / 1.3)
+    # the unreversed (buggy) value would be 0.5 / 1.5
+    assert result != pytest.approx(0.5 / 1.5)
+
+
+def test_load_event_scores_pit_never_uses_static(tmp_path, monkeypatch):
+    """With as_of_date set and no timeseries cache, the dateless static
+    snapshot must NOT be used — it would leak today's scores into the past."""
+    import alpha_graph.signals.graph_signal as gs
+
+    static = pd.DataFrame({"ticker": ["AAPL"], "event_score": [0.7]})
+    static.to_parquet(tmp_path / "event_signals.parquet", index=False)
+    monkeypatch.setattr(gs, "CACHE_DIR", tmp_path)
+
+    assert gs._load_event_scores(pd.Timestamp("2020-01-31")) == {}
+    # without a date the static snapshot is still the intended source
+    assert gs._load_event_scores(None) == {"AAPL": 0.7}
+
+
 def test_build_graph_respects_as_of_date():
     from alpha_graph.data.relationships import build_graph
 

@@ -293,11 +293,14 @@ def compute_time_series(
     start_date: str | None = None,
     end_date: str | None = None,
     freq: str = "M",
+    lookback_months: int = 12,
 ) -> pd.DataFrame:
     """Compute event signal time series for walk-forward backtesting.
 
-    For each month-end in the date range, computes the event signal for
-    each ticker as of that date. This avoids lookahead bias.
+    Loads and scores each ticker's 8-K corpus ONCE, then sweeps the
+    month-end grid (the previous per-date recompute re-parsed the whole
+    corpus for every date, which made long histories infeasible). Values
+    match compute_event_signal(ticker, as_of_date=dt) exactly.
 
     Returns DataFrame with columns: date, ticker, event_score, event_count.
     """
@@ -309,7 +312,7 @@ def compute_time_series(
         )
 
     if start_date is None:
-        start_date = "2023-01-31"
+        start_date = "2012-01-31"
     if end_date is None:
         end_date = pd.Timestamp.now().strftime("%Y-%m-%d")
 
@@ -319,11 +322,31 @@ def compute_time_series(
     )
 
     rows = []
-    for dt in dates:
-        for ticker in tickers:
-            result = compute_event_signal(ticker, as_of_date=dt)
-            result["date"] = dt.strftime("%Y-%m-%d")
-            rows.append(result)
+    for i, ticker in enumerate(tickers, 1):
+        filings = _load_8k_filings(ticker)  # parse the corpus once per ticker
+        scored = [
+            (pd.Timestamp(f["filing_date"]), score_filing(f["items"])) for f in filings
+        ]
+        for dt in dates:
+            cutoff = dt - pd.DateOffset(months=lookback_months)
+            window = [(d, s) for d, s in scored if cutoff <= d <= dt]
+            if window:
+                weights = [DECAY_LAMBDA ** ((dt - d).days / 30.44) for d, _ in window]
+                total = sum(weights)
+                score = (
+                    sum(s * w for (_, s), w in zip(window, weights)) / total
+                    if total > 0 else 0.0
+                )
+            else:
+                score = 0.0
+            rows.append({
+                "date": dt,
+                "ticker": ticker,
+                "event_score": round(float(score), 6),
+                "event_count": len(window),
+            })
+        if i % 50 == 0:
+            logger.info(f"  {i}/{len(tickers)} tickers")
 
     df = pd.DataFrame(rows)
     if not df.empty:
@@ -352,10 +375,9 @@ def main():
 
     if not df.empty:
         print("\n--- 8-K Event Signals ---")
-        display_cols = ["ticker", "event_score", "event_count", "last_event_date"]
-        if "date" in df.columns:
-            display_cols = ["date"] + display_cols
-        print(df[display_cols].to_string())
+        display_cols = [c for c in ["date", "ticker", "event_score", "event_count", "last_event_date"]
+                        if c in df.columns]
+        print(df[display_cols].tail(30).to_string())
 
 
 if __name__ == "__main__":

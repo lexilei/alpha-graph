@@ -37,6 +37,16 @@ EDGE_WEIGHTS: dict[str, float] = {
     "competitor": -0.3,  # negative: competitor pain is your gain
 }
 
+# An edge (source -> target, rel) is stated from source's perspective:
+# "target is source's {rel}". Seen from the TARGET, the relation flips:
+# if I am your supplier, you are my customer.
+REVERSED_RELATION: dict[str, str] = {
+    "supplier": "customer",
+    "customer": "supplier",
+    "partner": "partner",
+    "competitor": "competitor",
+}
+
 
 def compute_neighbor_signal(
     graph,
@@ -67,13 +77,13 @@ def compute_neighbor_signal(
             weighted_sum += w * signal_values[neighbor]
             weight_total += abs(w)
 
-        # In-edges: neighbor -> ticker
+        # In-edges: neighbor -> ticker. The stored relation is from the
+        # neighbor's perspective ("ticker is my {rel}"), so flip it to get
+        # what the neighbor is to ticker before weighting.
         for neighbor, _, data in graph.in_edges(ticker, data=True):
             if neighbor not in signal_values:
                 continue
-            # Reverse the relation: if neighbor is a supplier TO ticker,
-            # then ticker is a customer OF neighbor
-            rel = data.get("relation", "partner")
+            rel = REVERSED_RELATION.get(data.get("relation", "partner"), "partner")
             conf = data.get("confidence", 0.5)
             w = edge_weights.get(rel, 0.0) * conf
             weighted_sum += w * signal_values[neighbor]
@@ -86,18 +96,29 @@ def compute_neighbor_signal(
 
 
 def _load_event_scores(as_of_date: pd.Timestamp | None = None) -> dict[str, float]:
-    """Load per-ticker event scores as of a given date."""
-    # Try time-series version first
+    """Load per-ticker event scores, PIT when as_of_date is given.
+
+    PIT mode never falls back to the static snapshot: that file is dateless
+    (today's scores), and using it for a historical date propagates the
+    present into the past.
+    """
     ts_path = CACHE_DIR / "event_signals_timeseries.parquet"
     static_path = CACHE_DIR / "event_signals.parquet"
 
-    if ts_path.exists() and as_of_date is not None:
+    if as_of_date is not None:
+        if not ts_path.exists():
+            logger.warning(
+                "No event_signals_timeseries.parquet — spillover_event will be "
+                "empty for PIT dates. Run: python -m alpha_graph.signals.event_signal --timeseries"
+            )
+            return {}
         df = pd.read_parquet(ts_path)
         df["date"] = pd.to_datetime(df["date"])
         df = df[df["date"] <= as_of_date]
-        if not df.empty:
-            latest = df.sort_values("date").groupby("ticker").tail(1)
-            return dict(zip(latest["ticker"], latest["event_score"]))
+        if df.empty:
+            return {}
+        latest = df.sort_values("date").groupby("ticker").tail(1)
+        return dict(zip(latest["ticker"], latest["event_score"]))
 
     if static_path.exists():
         df = pd.read_parquet(static_path)
