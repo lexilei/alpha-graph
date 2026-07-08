@@ -52,6 +52,10 @@ measurements of this single hypothesis, not independent bets.
 - Reference bars when deciding what is *interesting*: standalone t, incremental
   t over the price/volume baseline, and DSR against the ledger N. Thresholds
   are judgment calls made per decision, not fixed in advance.
+- The price/volume baseline is {6 mom21, 7 mom5, 8 vol21, 9 volz, 16 mom12-1,
+  17 log$vol} (16/17 added 2026-07-07). `--sector-neutral` demeans all rank-z
+  series within sector — report alongside raw as a robustness diagnostic.
+  Controls are conditioning variables, not ledger trials.
 
 ## Ledger (one line per thing tried — keep appending)
 
@@ -64,6 +68,7 @@ measurements of this single hypothesis, not independent bets.
 | 2026-07-07 | factor 15 combined freshest-filing stream | IS incr-IC t=0.64, standalone t=0.83 → rejected |
 | 2026-07-07 | diagnostic: factor-1 IC by sub-period (4 buckets) | no decay pattern; max bucket t=2.17 (post-hoc) |
 | 2026-07-07 | diagnostic: factor-1 IC by dollar-volume half | no attention gradient (t=0.5 / 0.9) |
+| 2026-07-07 | controls: +16 mom_252_21, +17 log_dollar_volume, sector-neutral mode | conditioning, not trials |
 
 Hyperparameter variants (e.g. factor-14 MATCH_THRESH, chunk size) get ledger
 lines too when swept.

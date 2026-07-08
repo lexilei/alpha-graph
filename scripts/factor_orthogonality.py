@@ -59,28 +59,48 @@ def _xs_rank_z(s: pd.Series) -> pd.Series:
     return (r - r.mean()) / r.std(ddof=0)
 
 
-def evaluate(panel_m: pd.DataFrame, accepted: list[str], candidate: str) -> dict:
-    """Per-month: residualize candidate on accepted, measure raw vs incremental IC."""
+def evaluate(
+    panel_m: pd.DataFrame,
+    accepted: list[str],
+    candidate: str,
+    sector_neutral: bool = False,
+) -> dict:
+    """Per-month: residualize candidate on accepted, measure raw vs incremental IC.
+
+    sector_neutral=True demeans every rank-z series (candidate, target, and
+    accepted controls) within sector before correlating — the IC then measures
+    within-sector stock picking, immune to "the factor just picks sectors".
+    """
     needed = [candidate, FWD_COL] + accepted
+    has_sector = sector_neutral and "sector" in panel_m.columns
     ic_raw, ic_resid, r2_list, n_xs = [], [], [], []
     # per-accepted correlation accumulators
     corr_acc = {a: [] for a in accepted}
 
     for _, g in panel_m.groupby("month"):
-        sub = g[needed].dropna()
+        cols = needed + (["sector"] if has_sector else [])
+        sub = g[cols].dropna(subset=needed)
         if len(sub) < MIN_XS:
             continue
 
-        cand = _xs_rank_z(sub[candidate])
-        fwd = _xs_rank_z(sub[FWD_COL])
+        def rz(col: str) -> pd.Series:
+            z = _xs_rank_z(sub[col])
+            if has_sector:
+                z = z - z.groupby(sub["sector"]).transform("mean")
+            return z
+
+        cand = rz(candidate)
+        fwd = rz(FWD_COL)
         if cand.isna().all() or fwd.isna().all():
+            continue
+        if cand.std(ddof=0) == 0 or fwd.std(ddof=0) == 0:
             continue
 
         # raw IC
         ic_raw.append(np.corrcoef(cand, fwd)[0, 1])
 
         if accepted:
-            X = np.column_stack([_xs_rank_z(sub[a]).values for a in accepted])
+            X = np.column_stack([rz(a).values for a in accepted])
             X = np.column_stack([np.ones(len(sub)), X])
             beta, *_ = np.linalg.lstsq(X, cand.values, rcond=None)
             fitted = X @ beta
@@ -88,10 +108,10 @@ def evaluate(panel_m: pd.DataFrame, accepted: list[str], candidate: str) -> dict
             ss_tot = np.sum((cand.values - cand.values.mean()) ** 2)
             r2 = 1 - np.sum(resid ** 2) / ss_tot if ss_tot > 0 else 0.0
             r2_list.append(r2)
-            rz = (resid - resid.mean()) / (resid.std(ddof=0) or 1.0)
-            ic_resid.append(np.corrcoef(rz, fwd)[0, 1])
+            rz_resid = (resid - resid.mean()) / (resid.std(ddof=0) or 1.0)
+            ic_resid.append(np.corrcoef(rz_resid, fwd)[0, 1])
             for a in accepted:
-                corr_acc[a].append(np.corrcoef(cand, _xs_rank_z(sub[a]))[0, 1])
+                corr_acc[a].append(np.corrcoef(cand, rz(a))[0, 1])
         else:
             r2_list.append(0.0)
             ic_resid.append(ic_raw[-1])
@@ -120,6 +140,7 @@ def evaluate(panel_m: pd.DataFrame, accepted: list[str], candidate: str) -> dict
         "ic_raw": float(raw_m), "ic_raw_t": float(raw_t), "ic_raw_icir": float(raw_icir),
         "ic_incremental": float(inc_m), "ic_incremental_t": float(inc_t),
         "ic_incremental_icir": float(inc_icir),
+        "sector_neutral": bool(has_sector),
         "ok": True,
     }
 
@@ -128,7 +149,8 @@ def _print_eval(res: dict) -> None:
     if not res.get("ok"):
         print(f"  {res['candidate']}: too few months ({res['n_months']}) — skip")
         return
-    print(f"\n  candidate: {res['candidate']}   accepted: {res['accepted'] or '[] (standalone)'}")
+    sn = "   [sector-neutral]" if res.get("sector_neutral") else ""
+    print(f"\n  candidate: {res['candidate']}   accepted: {res['accepted'] or '[] (standalone)'}{sn}")
     print(f"    months={res['n_months']}  avg cross-section={res['avg_xs']}")
     if res["accepted"]:
         print(f"    spanned R² by accepted : {res['spanned_r2']:.3f}   "
@@ -144,16 +166,22 @@ def _print_eval(res: dict) -> None:
 # Greedy forward stepwise build
 # --------------------------------------------------------------------------- #
 
-def greedy(panel_m: pd.DataFrame, candidates: list[str], t_threshold: float) -> None:
+def greedy(
+    panel_m: pd.DataFrame,
+    candidates: list[str],
+    t_threshold: float,
+    sector_neutral: bool = False,
+) -> None:
     accepted: list[str] = []
     remaining = list(candidates)
     print("=" * 78)
-    print(f"  GREEDY FORWARD BUILD  (accept if incremental-IC t > {t_threshold})")
+    print(f"  GREEDY FORWARD BUILD  (accept if incremental-IC t > {t_threshold}"
+          f"{', sector-neutral' if sector_neutral else ''})")
     print("=" * 78)
     rnd = 0
     while remaining:
         rnd += 1
-        scored = [evaluate(panel_m, accepted, c) for c in remaining]
+        scored = [evaluate(panel_m, accepted, c, sector_neutral=sector_neutral) for c in remaining]
         scored = [s for s in scored if s.get("ok")]
         if not scored:
             print("\n  no scorable candidates left — stop")
@@ -184,10 +212,17 @@ def greedy(panel_m: pd.DataFrame, candidates: list[str], t_threshold: float) -> 
 # CLI
 # --------------------------------------------------------------------------- #
 
-# Factor 1 + the price/volume baseline (factors 6-9). Text candidates must add
-# incremental IC over whatever greedy accepts from this pool.
+# Factor 1 + the price/volume baseline (factors 6-9, 16-17). Text candidates
+# must add incremental IC over whatever greedy accepts from this pool.
 DEFAULT_CANDIDATES = [
-    "cosine_similarity", "momentum_21d", "momentum_5d", "volatility_21d", "volume_zscore",
+    "cosine_similarity", "momentum_21d", "momentum_5d", "volatility_21d",
+    "volume_zscore", "momentum_252_21", "log_dollar_volume",
+]
+
+# The full control set, for `evaluate --accepted BASELINE` shorthand.
+BASELINE = [
+    "momentum_21d", "momentum_5d", "volatility_21d", "volume_zscore",
+    "momentum_252_21", "log_dollar_volume",
 ]
 
 
@@ -201,7 +236,11 @@ def main():
     p.add_argument("--t", type=float, default=2.0, help="incremental-IC t threshold to accept (greedy)")
     p.add_argument("--start", default=None, help="evaluation window start, e.g. 2012-01-01 (IS/OOS split)")
     p.add_argument("--end", default=None, help="evaluation window end (inclusive), e.g. 2020-12-31")
+    p.add_argument("--sector-neutral", action="store_true",
+                   help="demean all rank-z series within sector each month")
     args = p.parse_args()
+    if args.accepted == ["BASELINE"]:
+        args.accepted = list(BASELINE)
 
     panel = load_panel(args.panel)
     if args.start:
@@ -215,9 +254,10 @@ def main():
     if args.mode == "evaluate":
         if not args.candidate:
             p.error("evaluate mode needs --candidate")
-        _print_eval(evaluate(panel_m, args.accepted, args.candidate))
+        _print_eval(evaluate(panel_m, args.accepted, args.candidate,
+                             sector_neutral=args.sector_neutral))
     else:
-        greedy(panel_m, args.candidates, args.t)
+        greedy(panel_m, args.candidates, args.t, sector_neutral=args.sector_neutral)
 
 
 if __name__ == "__main__":

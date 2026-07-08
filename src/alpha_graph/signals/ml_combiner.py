@@ -104,6 +104,12 @@ def build_feature_panel() -> pd.DataFrame:
     panel["momentum_5d"] = panel.groupby("ticker")["close"].transform(
         lambda s: s.pct_change(5)
     )
+    # Factor 16: classic 12-1 momentum — return over t-252..t-21, skipping the
+    # most recent month (the standard academic definition; the June audit found
+    # the cosine signal resembles exactly this, so it must sit in the controls).
+    panel["momentum_252_21"] = panel.groupby("ticker")["close"].transform(
+        lambda s: s.shift(21) / s.shift(252) - 1.0
+    )
 
     # Realized volatility (backward-looking)
     panel["daily_ret"] = panel.groupby("ticker")["close"].transform(
@@ -118,7 +124,25 @@ def build_feature_panel() -> pd.DataFrame:
         lambda s: (s - s.rolling(63).mean()) / s.rolling(63).std()
     )
 
+    # Factor 17: size/liquidity proxy — log of 63d median dollar volume.
+    # NOT true market cap (no PIT shares outstanding yet); its job is to catch
+    # text factors that secretly rank by company size.
+    dv = (panel["close"] * panel["volume"]).replace(0, np.nan)
+    panel["log_dollar_volume"] = np.log(
+        dv.groupby(panel["ticker"]).transform(lambda s: s.rolling(63).median())
+    )
+
     panel = panel.drop(columns=["daily_ret", "close", "volume"], errors="ignore")
+
+    # Sector labels (current GICS snapshot — mildly non-PIT; used as controls,
+    # not as a ranking factor)
+    sector_path = CACHE_DIR / "sector_map.parquet"
+    if sector_path.exists():
+        sectors = pd.read_parquet(sector_path)
+        panel = panel.merge(sectors[["ticker", "sector"]], on="ticker", how="left")
+        panel["sector"] = panel["sector"].fillna("UNKNOWN")
+    else:
+        panel["sector"] = "UNKNOWN"
 
     # --- Merge Lazy Prices signals ---
     lazy_path = CACHE_DIR / "lazy_prices_signal_10K.parquet"

@@ -1,7 +1,7 @@
 # Factor Registry
 
 
-Next free ID: **16**
+Next free ID: **18**
 
 Status legend: `candidate` (under evaluation) · `accepted` (in the model) ·
 `rejected` (tested, no incremental signal — ID retained as a tombstone) ·
@@ -23,9 +23,16 @@ Prediction target for all factors: `fwd_return_21d` (next 21 trading-day return)
 | 13 | `embed_sim_10k_bge` | 10-K | candidate | Same as factor 11 but with the **general-purpose** `BAAI/bge-base-en-v1.5` encoder. Forms a 3-way A/B with factors 1 (TF-IDF) and 11 (finance-tuned): bag-of-words vs general-semantic vs finance-semantic similarity for the same 10-K change. |
 | 14 | `new_content_frac` | 10-K | candidate | **Change detection**, not similarity: align the new 10-K's paragraph chunks against the prior filing's, count the share with no good match (cosine < thresh) → fraction of genuinely **added** content. Targets the saturation that defeats 11/13 (a single new paragraph survives instead of being pooled away). Embedding-space version of Lazy Prices "added text". `signals/change_detect_10k.py`. |
 | 15 | `cos_latest_filing` | 10-K+10-Q | rejected | **Paper-faithful combined stream** (CMN 2020): at each date, the YoY same-type TF-IDF cosine of the firm's most recent periodic filing — union of factor 1's 10-K pairs and factor 10's 10-Q pairs, raw scores pooled (same vectorizer, comparable levels), as-of merged, no staleness cap. Pure construction from cached 1+10. **Rejected 2026-07-07**: IS 2012–2020 standalone IC t=0.83, incremental over price/volume baseline t=0.64 (rule needs t>3); OOS never touched. |
+| 16 | `momentum_252_21` | price | baseline | Classic 12-1 momentum: `close(t-21)/close(t-252) − 1` (skip the most recent month). Added 2026-07-07 — the June audit found the cosine signal resembles exactly this, so it belongs in the controls. |
+| 17 | `log_dollar_volume` | price+volume | baseline | Size/**liquidity proxy**: log of 63d median dollar volume. NOT true market cap (no PIT shares outstanding); its job is to catch text factors that secretly rank by company size. |
 
 IDs 2–5 (8-K event factors, HMM regime factors) were retired untested and
 removed from the codebase 2026-07-07; see git history. The IDs stay reserved.
+
+Sector controls: `build_feature_panel` attaches a `sector` column (current GICS
+snapshot, `sector_map.parquet` — mildly non-PIT). `factor_orthogonality.py
+--sector-neutral` demeans all rank-z series within sector per month; it is a
+control mode, not a factor.
 
 ## Known issues (carry into any evaluation)
 
