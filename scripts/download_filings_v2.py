@@ -156,7 +156,10 @@ def process_ticker_form(
     existing = index_existing(ticker_dir, form)
 
     try:
-        filings = with_retry(f"[{ticker}] list {form}", lambda: company.get_filings(form=form, year=years))
+        # amendments=False: /A refilings duplicate a period and, mislabeled as
+        # originals, inject spurious near-zero-gap pairs into the text factors.
+        filings = with_retry(f"[{ticker}] list {form}",
+                             lambda: company.get_filings(form=form, year=years, amendments=False))
     except Exception as e:  # noqa: BLE001
         manifest[key] = {**entry, "ticker": ticker, "form": form, "status": "failed",
                          "error": f"list: {e}", "last_attempt": _now()}

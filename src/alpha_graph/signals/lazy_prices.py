@@ -19,7 +19,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from alpha_graph.config import CACHE_DIR, FILINGS_DIR
 
 
-def _load_filing_texts(ticker: str, form_type: str) -> list[dict]:
+def _load_filing_texts(ticker: str, form_type: str, min_gap_days: int | None = None) -> list[dict]:
     """Load filing texts for a ticker, sorted chronologically.
 
     Returns list of dicts with keys: filing_date, text, accession_number.
@@ -28,20 +28,45 @@ def _load_filing_texts(ticker: str, form_type: str) -> list[dict]:
     if not ticker_dir.exists():
         return []
 
-    filings = []
+    # Minimum spacing between consecutive kept filings. Real cadence is ~365d
+    # (10-K) / ~90d (10-Q); anything closer is an amendment (10-K/A, 10-Q/A)
+    # re-filed days-to-weeks after the original — dropping it removes the
+    # duplicate-period rows and the spurious low-cosine "big change" pairs.
+    if min_gap_days is None:
+        min_gap_days = 45 if form_type == "10-Q" else 200
+
+    raw = []
     for f in sorted(ticker_dir.glob(f"{form_type}_*.json")):
         data = json.loads(f.read_text(encoding="utf-8"))
         sections = data.get("sections", {})
-        # Concatenate all extracted sections into one text block
+        # Extraction-mode filter: skip the `full_text` fallback (used when
+        # section parsing failed). Mixing a fallback filing with structured
+        # ones produces a ~0.7 spurious cosine drop that has nothing to do with
+        # the business — all such pairs land in the short leg. Keep like-with-like.
+        if set(sections) == {"full_text"}:
+            continue
         combined = "\n\n".join(sections.values())
         if len(combined) < 100:
-            logger.debug(f"[{ticker}] Skipping thin filing {f.name}")
             continue
-        filings.append({
+        raw.append({
             "filing_date": data["filing_date"],
+            "ts": pd.Timestamp(data["filing_date"]),
             "text": combined,
             "accession_number": data.get("accession_number", ""),
         })
+
+    # Same-day amendments: keep the longest text for each filing_date.
+    raw.sort(key=lambda r: (r["ts"], -len(r["text"])))
+    by_date = {}
+    for r in raw:
+        by_date.setdefault(r["ts"], r)  # first == longest for that date
+
+    # Greedy min-gap: drop filings too close to the previous kept one.
+    filings, last = [], None
+    for r in sorted(by_date.values(), key=lambda r: r["ts"]):
+        if last is None or (r["ts"] - last).days >= min_gap_days:
+            filings.append({k: r[k] for k in ("filing_date", "text", "accession_number")})
+            last = r["ts"]
 
     return filings
 
@@ -61,6 +86,12 @@ def compute_similarity_for_ticker(ticker: str, form_type: str = "10-K") -> list[
     results = []
 
     for i in range(1, len(filings)):
+        # Skip pairs spanning a dropped year (a filing was fallback-mode or
+        # thin): a >460d gap is not a real consecutive comparison.
+        gap = (pd.Timestamp(filings[i]["filing_date"])
+               - pd.Timestamp(filings[i - 1]["filing_date"])).days
+        if form_type == "10-K" and gap > 460:
+            continue
         prev_text = filings[i - 1]["text"]
         curr_text = filings[i]["text"]
 
