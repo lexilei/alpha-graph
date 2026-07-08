@@ -10,7 +10,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import re
 
 import numpy as np
 import pandas as pd
@@ -26,18 +25,13 @@ MATCH_THRESH = 0.90       # below this best-match cosine => "new" content
 
 
 def _chunks(text: str) -> list[str]:
-    paras = [p.strip() for p in re.split(r"\n+", text) if p.strip()]
-    chunks, cur, curw = [], [], 0
-    for p in paras:
-        w = p.split()
-        cur.extend(w)
-        curw += len(w)
-        if curw >= TARGET_WORDS:
-            chunks.append(" ".join(cur))
-            cur, curw = [], 0
-    if curw >= MIN_WORDS:
-        chunks.append(" ".join(cur))
-    return chunks[:MAX_CHUNKS]
+    # fixed word windows: bounded chunk size (paragraph accumulation produced
+    # unbounded "monster chunks" on newline-poor full_text filings)
+    w = text.split()
+    out = [" ".join(w[i:i + TARGET_WORDS]) for i in range(0, len(w), TARGET_WORDS)]
+    if out and len(out[-1].split()) < MIN_WORDS:
+        out.pop()
+    return out[:MAX_CHUNKS]
 
 
 def compute_for_ticker(model, ticker: str, thresh: float) -> list[dict]:
@@ -45,17 +39,17 @@ def compute_for_ticker(model, ticker: str, thresh: float) -> list[dict]:
     if len(filings) < 2:
         return []
     rows = []
-    prev_chunks = None
+    prev_emb = None
     prev_date = None
     for f in filings:
         ch = _chunks(f["text"])
         if len(ch) < 3:
-            prev_chunks, prev_date = None, None
+            prev_emb, prev_date = None, None
             continue
-        if prev_chunks is not None:
-            emb_new = model.encode(ch, normalize_embeddings=True, batch_size=64, show_progress_bar=False)
-            emb_old = model.encode(prev_chunks, normalize_embeddings=True, batch_size=64, show_progress_bar=False)
-            best = (emb_new @ emb_old.T).max(axis=1)
+        # embed each filing once; reuse as the "old" side of the next pair
+        emb = model.encode(ch, normalize_embeddings=True, batch_size=128, show_progress_bar=False)
+        if prev_emb is not None:
+            best = (emb @ prev_emb.T).max(axis=1)
             rows.append({
                 "ticker": ticker,
                 "filing_date": f["filing_date"],
@@ -64,7 +58,7 @@ def compute_for_ticker(model, ticker: str, thresh: float) -> list[dict]:
                 "new_content_frac": round(float((best < thresh).mean()), 6),
                 "mean_novelty": round(float(1 - best.mean()), 6),
             })
-        prev_chunks, prev_date = ch, f["filing_date"]
+        prev_emb, prev_date = emb, f["filing_date"]
     return rows
 
 
@@ -79,14 +73,30 @@ def compute_all(model_name: str, device: str, thresh: float, tickers: list[str] 
         tickers = sorted(
             d.name for d in FILINGS_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")
         )
+    # Per-ticker checkpoint: resume skips tickers with a part (or .empty) file.
+    parts_dir = CACHE_DIR / "change_detect_10k_parts"
+    parts_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Change-detection for {len(tickers)} tickers...")
-    out = []
+    out, n_cached = [], 0
     for i, t in enumerate(tickers, 1):
-        out.extend(compute_for_ticker(model, t, thresh))
+        part = parts_dir / f"{t}.parquet"
+        if part.exists():
+            out.append(pd.read_parquet(part))
+            n_cached += 1
+        elif not (parts_dir / f"{t}.empty").exists():
+            rows = compute_for_ticker(model, t, thresh)
+            if rows:
+                pdf = pd.DataFrame(rows)
+                tmp = part.with_suffix(".parquet.tmp")
+                pdf.to_parquet(tmp, index=False)
+                tmp.replace(part)
+                out.append(pdf)
+            else:
+                (parts_dir / f"{t}.empty").touch()
         if i % 25 == 0:
-            logger.info(f"  {i}/{len(tickers)} tickers")
+            logger.info(f"  {i}/{len(tickers)} tickers ({n_cached} from cache)")
 
-    df = pd.DataFrame(out)
+    df = pd.concat(out, ignore_index=True) if out else pd.DataFrame()
     if df.empty:
         logger.warning("No pairs computed — is the 10-K corpus present?")
         return df
