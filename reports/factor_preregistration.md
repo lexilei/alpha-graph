@@ -78,5 +78,8 @@ measurements of this single hypothesis, not independent bets.
 | 2026-07-08 | factor 20 quintile L/S | +0.32%/mo, t=+1.69, 55% hit — ~1/5 of C-F's 1981-2004 magnitude, plausible for mega-caps 20y later |
 | 2026-07-08 | R1 sector-neutral diagnostic, full panel window (vs full baseline): 10: +0.45 · 11: +1.26 · 12: +0.33 · 13: +1.54 · 14: −1.22 · 1: +0.64 | no text factor strengthens within-sector; registry rows 1, 10-14 marked rejected (note: full-panel window includes 2011, so standalone t's differ slightly from the 2012-26 lines above) |
 
+| 2026-07-08 | event-window IC around filings (quarterly-clustered, EW-adjusted): 10-Q d1-5 t=−0.26 · d6-21 +0.98 · **d22-63 +2.65 (IC +0.030)** ; 10-K control: +0.06 / −1.22 / −1.05 | one cell at the ~25-look noise ceiling; 10-K does NOT replicate the pattern |
+| 2026-07-08 | 10-Q d22-63 halves | 2012-19 t=+1.45, 2020-26 t=+2.29 — both positive (only text cell that doesn't sign-flip); confound: window ends at next quarter's earnings |
+
 Hyperparameter variants (e.g. factor-14 MATCH_THRESH, chunk size) get ledger
 lines too when swept.
