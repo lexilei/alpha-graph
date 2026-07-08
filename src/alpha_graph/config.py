@@ -46,6 +46,22 @@ class Config:
         default_factory=lambda: os.getenv("SEC_EDGAR_USER_AGENT", "")
     )
 
+    # LLM for relationship extraction (any OpenAI-compatible endpoint).
+    llm_api_key: str = field(
+        default_factory=lambda: os.getenv(
+            "LLM_API_KEY", os.getenv("TOGETHER_API_KEY", os.getenv("OPENAI_API_KEY", ""))
+        )
+    )
+    llm_base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "LLM_BASE_URL",
+            "https://api.together.xyz/v1" if os.getenv("TOGETHER_API_KEY") else "",
+        )
+    )
+    llm_model: str = field(
+        default_factory=lambda: os.getenv("LLM_MODEL", "deepseek-ai/DeepSeek-V4-Pro")
+    )
+
     universe_index: str = "S&P 500"
     max_tickers: int | None = None  # None = full universe
 
