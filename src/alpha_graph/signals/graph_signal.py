@@ -120,6 +120,7 @@ def _load_event_scores(as_of_date: pd.Timestamp | None = None) -> dict[str, floa
         if df.empty:
             return {}
         latest = df.sort_values("date").groupby("ticker").tail(1)
+        latest = latest.dropna(subset=["event_score"])  # NaN = no 8-K corpus
         return dict(zip(latest["ticker"], latest["event_score"]))
 
     if static_path.exists():

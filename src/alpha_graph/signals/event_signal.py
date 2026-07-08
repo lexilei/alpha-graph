@@ -324,6 +324,14 @@ def compute_time_series(
     rows = []
     for i, ticker in enumerate(tickers, 1):
         filings = _load_8k_filings(ticker)  # parse the corpus once per ticker
+        if not filings:
+            # No 8-K corpus for this ticker at all: that's MISSING DATA, not
+            # "no events" — emit NaN so downstream consumers don't treat it
+            # as a genuine quiet-neighbor zero.
+            for dt in dates:
+                rows.append({"date": dt, "ticker": ticker,
+                             "event_score": float("nan"), "event_count": 0})
+            continue
         scored = [
             (pd.Timestamp(f["filing_date"]), score_filing(f["items"])) for f in filings
         ]
