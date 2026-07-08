@@ -1,7 +1,7 @@
 # Factor Registry
 
 
-Next free ID: **18**
+Next free ID: **20**
 
 Status legend: `candidate` (under evaluation) · `accepted` (in the model) ·
 `rejected` (tested, no incremental signal — ID retained as a tombstone) ·
@@ -25,6 +25,8 @@ Prediction target for all factors: `fwd_return_21d` (next 21 trading-day return)
 | 15 | `cos_latest_filing` | 10-K+10-Q | rejected | **Paper-faithful combined stream** (CMN 2020): at each date, the YoY same-type TF-IDF cosine of the firm's most recent periodic filing — union of factor 1's 10-K pairs and factor 10's 10-Q pairs, raw scores pooled (same vectorizer, comparable levels), as-of merged, no staleness cap. Pure construction from cached 1+10. **Rejected 2026-07-07**: IS 2012–2020 standalone IC t=0.83, incremental over price/volume baseline t=0.64 (rule needs t>3); OOS never touched. |
 | 16 | `momentum_252_21` | price | baseline | Classic 12-1 momentum: `close(t-21)/close(t-252) − 1` (skip the most recent month). Added 2026-07-07 — the June audit found the cosine signal resembles exactly this, so it belongs in the controls. |
 | 17 | `log_dollar_volume` | price+volume | baseline | Size/**liquidity proxy**: log of 63d median dollar volume. NOT true market cap (no PIT shares outstanding); its job is to catch text factors that secretly rank by company size. |
+| 18 | `spillover_event` | graph | candidate | **Cross-firm propagation** (Cohen–Frazzini 2008 style): confidence- and relation-weighted average of graph neighbors' 8-K event scores (supplier 1.0 / customer 0.8 / partner 0.5 / competitor −0.3; in-edge relations flipped to the target's perspective). Graph: 10,997 LLM-extracted edges (DeepSeek-V4-Pro) from 7,646 10-K Business sections, 2011–2026, both endpoints S&P 500. NaN = no scored neighbors. Month-end grid from `graph_spillover.parquet` (built on the `feat/graph-signal` branch). |
+| 19 | `spillover_momentum` | graph | candidate | Same propagation as 18 but of neighbors' 5-day momentum — the closest analogue to the paper's customer-momentum. Same graph, same weights, same caveats. |
 
 IDs 2–5 (8-K event factors, HMM regime factors) were retired untested and
 removed from the codebase 2026-07-07; see git history. The IDs stay reserved.
@@ -54,6 +56,13 @@ control mode, not a factor.
   paper, magnitude in the paper's range, but indistinguishable from noise; the
   short side is absent (bottom decile ≈ average), spread comes from the long
   tail. Consistent with factor 1's U-shape finding.
+- **18, 19** — edges are LLM-extracted (the model knows post-filing history:
+  mild non-PIT), both endpoints restricted to current S&P 500 (survivorship;
+  the C-F effect is strongest outside mega-caps → prior LOW). Dual-class
+  listings (GOOG/GOOGL, FOX/FOXA...) count as separate nodes. 18 inherits the
+  8-K corpus's ticker sparsity (~180 active names per era). Business text
+  truncated at 20k chars — long competition sections (e.g. INTC) fall past
+  the cutoff.
 - Universe is current-constituent (survivorship): PIT membership filter not yet
   applied to factor evaluation.
 

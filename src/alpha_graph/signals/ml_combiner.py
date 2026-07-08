@@ -208,6 +208,26 @@ def build_feature_panel() -> pd.DataFrame:
         panel["cos_latest_filing"] = np.nan
         logger.debug("Factor 15 needs both 10-K and 10-Q pair caches — NaN")
 
+    # --- Factors 18-19: graph spillover (computed on the feat/graph-signal
+    # branch, shared via data/cache; month-end grid, as-of carried forward).
+    # NaN = no scored graph neighbors at that date.
+    spill_path = CACHE_DIR / "graph_spillover.parquet"
+    if spill_path.exists():
+        sp = pd.read_parquet(spill_path)
+        sp["date"] = pd.to_datetime(sp["date"])
+        sp = sp[["ticker", "date", "spillover_event", "spillover_momentum"]]
+        sp = sp.dropna(subset=["spillover_event", "spillover_momentum"], how="all")
+        sp = sp.sort_values(["ticker", "date"])
+        panel = _merge_asof_signal(
+            panel, sp,
+            left_date="date", right_date="date",
+            on="ticker", cols=["spillover_event", "spillover_momentum"],
+        )
+    else:
+        panel["spillover_event"] = np.nan
+        panel["spillover_momentum"] = np.nan
+        logger.debug("No graph_spillover.parquet — factors 18-19 will be NaN")
+
     # Drop rows with no target
     panel = panel.dropna(subset=["fwd_return_21d"])
     panel = panel.sort_values(["date", "ticker"]).reset_index(drop=True)
