@@ -72,6 +72,11 @@ measurements of this single hypothesis, not independent bets.
 | 2026-07-08 | factor 18 spillover_event (full 2011-26 graph, NaN semantics) | standalone t=−0.95, vs baseline t=−0.68, sector-neutral t=+0.12 → nothing, wrong sign |
 | 2026-07-08 | factor 19 spillover_momentum | standalone t=+0.48, incr over baseline t=+1.34 (sign matches C-F), sector-neutral halves to t=+0.64 → noise-compatible |
 | 2026-07-08 | corr(18, 19) monthly rank | ~0.00 — the two propagations are independent; no combination rescue |
+| 2026-07-08 | factor 20 spillover_cust_mom registered (customer-only, conf≥0.8, neighbors' 21d momentum) | single variant, no parameter sweep |
+| 2026-07-08 | factor 20 full sample (165m, xs 182) | standalone t=+1.32; incr over baseline **t=+1.97** (IC +0.0142, project's largest); sector-neutral t=+1.54 — survives, unlike 19 |
+| 2026-07-08 | factor 20 split halves (no tuning) | 2012-20: incr t=+1.61 / sn +0.89; 2021-26: +1.13 / sn +1.44 — all 4 cells positive, no post-2020 death |
+| 2026-07-08 | factor 20 vs factor 19 | incr t=+1.39 — asymmetry carries info beyond the symmetric average |
+| 2026-07-08 | factor 20 quintile L/S | +0.32%/mo, t=+1.69, 55% hit — ~1/5 of C-F's 1981-2004 magnitude, plausible for mega-caps 20y later |
 
 Hyperparameter variants (e.g. factor-14 MATCH_THRESH, chunk size) get ledger
 lines too when swept.

@@ -1,7 +1,7 @@
 # Factor Registry
 
 
-Next free ID: **20**
+Next free ID: **21**
 
 Status legend: `candidate` (under evaluation) · `accepted` (in the model) ·
 `rejected` (tested, no incremental signal — ID retained as a tombstone) ·
@@ -27,6 +27,7 @@ Prediction target for all factors: `fwd_return_21d` (next 21 trading-day return)
 | 17 | `log_dollar_volume` | price+volume | baseline | Size/**liquidity proxy**: log of 63d median dollar volume. NOT true market cap (no PIT shares outstanding); its job is to catch text factors that secretly rank by company size. |
 | 18 | `spillover_event` | graph | rejected | **Cross-firm propagation** (Cohen–Frazzini 2008 style): confidence- and relation-weighted average of graph neighbors' 8-K event scores (supplier 1.0 / customer 0.8 / partner 0.5 / competitor −0.3; in-edge relations flipped to the target's perspective). Graph: 10,997 LLM-extracted edges (DeepSeek-V4-Pro) from 7,646 10-K Business sections, 2011–2026, both endpoints S&P 500. NaN = no scored neighbors. Month-end grid from `graph_spillover.parquet` (built on the `feat/graph-signal` branch). **Rejected 2026-07-08**: standalone t=−0.95 (wrong sign), vs full baseline t=−0.68, sector-neutral t=+0.12. |
 | 19 | `spillover_momentum` | graph | rejected | Same propagation as 18 but of neighbors' 5-day momentum — the closest analogue to the paper's customer-momentum. Same graph, same weights, same caveats. **Rejected 2026-07-08**: standalone t=+0.48; incremental over full baseline t=+1.34 (sign matches C-F but noise-compatible for a low-prior family); sector-neutral halves it to t=+0.64 — part of the weak effect is sector momentum. |
+| 20 | `spillover_cust_mom` | graph | candidate | **C-F-faithful asymmetric variant**: confidence-weighted mean of the firm's CUSTOMERS' 21-day momentum only (customers = out-`customer` edges + in-`supplier` counterparts, confidence ≥ 0.8 — the extraction rubric's "explicitly named" tier, set a priori). The paper's effect is customer→supplier with a ~1-month lag; 18/19's symmetric four-relation average dilutes it. NaN if no qualifying customers. Registered 2026-07-08 before computation. **First look 2026-07-08 — the registry's only live candidate**: incr over full baseline t=+1.97 (IC +0.0142), sector-neutral t=+1.54, both split-halves positive, quintile L/S +0.32%/mo (t=1.69). Not significant (thin xs ≈ 182; project ledger N≈10 puts E[max t | null] near this level) — needs an out-of-design confirmation before promotion. |
 
 IDs 2–5 (8-K event factors, HMM regime factors) were retired untested and
 removed from the codebase 2026-07-07; see git history. The IDs stay reserved.

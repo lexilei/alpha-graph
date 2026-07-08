@@ -228,6 +228,21 @@ def build_feature_panel() -> pd.DataFrame:
         panel["spillover_momentum"] = np.nan
         logger.debug("No graph_spillover.parquet — factors 18-19 will be NaN")
 
+    # --- Factor 20: customers-only momentum spillover (C-F asymmetric) ---
+    cm_path = CACHE_DIR / "graph_customer_momentum.parquet"
+    if cm_path.exists():
+        cm = pd.read_parquet(cm_path)
+        cm["date"] = pd.to_datetime(cm["date"])
+        cm = cm.dropna(subset=["spillover_cust_mom"]).sort_values(["ticker", "date"])
+        panel = _merge_asof_signal(
+            panel, cm,
+            left_date="date", right_date="date",
+            on="ticker", cols=["spillover_cust_mom"],
+        )
+    else:
+        panel["spillover_cust_mom"] = np.nan
+        logger.debug("No graph_customer_momentum.parquet — factor 20 will be NaN")
+
     # Drop rows with no target
     panel = panel.dropna(subset=["fwd_return_21d"])
     panel = panel.sort_values(["date", "ticker"]).reset_index(drop=True)
