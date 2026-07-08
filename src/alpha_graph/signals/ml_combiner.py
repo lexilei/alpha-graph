@@ -71,10 +71,6 @@ TRAIN_MONTHS = 12
 PURGE_DAYS = 31  # labels are 21 TRADING days forward (~31 calendar)
 FEATURE_COLS = [
     "cosine_similarity",
-    "event_score",
-    "event_count",
-    "regime_state",
-    "regime_prob",
     "momentum_21d",
     "momentum_5d",
     "volatility_21d",
@@ -142,42 +138,51 @@ def build_feature_panel() -> pd.DataFrame:
         panel["cosine_similarity"] = np.nan
         logger.debug("No Lazy Prices data — feature will be NaN")
 
-    # --- Merge 8-K event signals ---
-    event_path = CACHE_DIR / "event_signals.parquet"
-    if event_path.exists():
-        events = pd.read_parquet(event_path)
-        if "date" not in events.columns:
-            # Static signals — use as cross-sectional feature
-            panel = panel.merge(
-                events[["ticker", "event_score", "event_count"]],
-                on="ticker", how="left",
-            )
-        else:
-            events["date"] = pd.to_datetime(events["date"])
-            panel = _merge_asof_signal(
-                panel, events,
-                left_date="date", right_date="date",
-                on="ticker", cols=["event_score", "event_count"],
-            )
-    else:
-        panel["event_score"] = np.nan
-        panel["event_count"] = np.nan
-        logger.debug("No 8-K event data — feature will be NaN")
+    # --- Merge remaining text-factor caches (factors 10-14) ---
+    for fname, cols in [
+        ("lazy_prices_10Q_yoy.parquet", ["cos_10q_yoy"]),
+        ("embed_sim_10k_fin.parquet", ["embed_sim_10k_fin"]),
+        ("tone_10k.parquet", ["tone_shift_10k"]),
+        ("embed_sim_10k_bge.parquet", ["embed_sim_10k_bge"]),
+        ("change_detect_10k.parquet", ["new_content_frac"]),
+    ]:
+        path = CACHE_DIR / fname
+        if not path.exists():
+            for c in cols:
+                panel[c] = np.nan
+            logger.debug(f"No {fname} — {cols} will be NaN")
+            continue
+        sig = pd.read_parquet(path)
+        sig["filing_date"] = pd.to_datetime(sig["filing_date"])
+        sig = sig[["ticker", "filing_date"] + cols].sort_values(["ticker", "filing_date"])
+        panel = _merge_asof_signal(
+            panel, sig,
+            left_date="date", right_date="filing_date",
+            on="ticker", cols=cols,
+        )
 
-    # --- Merge HMM regime ---
-    regime_path = CACHE_DIR / "regimes.parquet"
-    if regime_path.exists():
-        regimes = pd.read_parquet(regime_path)
-        regimes["date"] = pd.to_datetime(regimes["date"])
-        # Encode regime as numeric: TRENDING=0, MEAN_REVERTING=1, CRISIS=2
-        regime_map = {"TRENDING": 0, "MEAN_REVERTING": 1, "CRISIS": 2}
-        regimes["regime_state"] = regimes["regime"].map(regime_map).fillna(1)
-        regimes = regimes[["date", "regime_state", "regime_prob"]]
-        panel = panel.merge(regimes, on="date", how="left")
+    # --- Factor 15: most recent filing's YoY cosine (10-K ∪ 10-Q, CMN 2020) ---
+    k_path = CACHE_DIR / "lazy_prices_10K.parquet"
+    q_path = CACHE_DIR / "lazy_prices_10Q_yoy.parquet"
+    if k_path.exists() and q_path.exists():
+        k = pd.read_parquet(k_path)[["ticker", "filing_date", "cosine_similarity"]]
+        q = pd.read_parquet(q_path)[["ticker", "filing_date", "cos_10q_yoy"]]
+        comb = pd.concat([
+            k.rename(columns={"cosine_similarity": "cos_latest_filing"}),
+            q.rename(columns={"cos_10q_yoy": "cos_latest_filing"}),
+        ], ignore_index=True)
+        comb["filing_date"] = pd.to_datetime(comb["filing_date"])
+        comb = comb.sort_values(["ticker", "filing_date"]).drop_duplicates(
+            ["ticker", "filing_date"], keep="last"
+        )
+        panel = _merge_asof_signal(
+            panel, comb,
+            left_date="date", right_date="filing_date",
+            on="ticker", cols=["cos_latest_filing"],
+        )
     else:
-        panel["regime_state"] = np.nan
-        panel["regime_prob"] = np.nan
-        logger.debug("No regime data — feature will be NaN")
+        panel["cos_latest_filing"] = np.nan
+        logger.debug("Factor 15 needs both 10-K and 10-Q pair caches — NaN")
 
     # Drop rows with no target
     panel = panel.dropna(subset=["fwd_return_21d"])

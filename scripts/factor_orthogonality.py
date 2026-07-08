@@ -184,9 +184,10 @@ def greedy(panel_m: pd.DataFrame, candidates: list[str], t_threshold: float) -> 
 # CLI
 # --------------------------------------------------------------------------- #
 
-DEFAULT_NINE = [
-    "cosine_similarity", "event_score", "event_count", "regime_state",
-    "regime_prob", "momentum_21d", "momentum_5d", "volatility_21d", "volume_zscore",
+# Factor 1 + the price/volume baseline (factors 6-9). Text candidates must add
+# incremental IC over whatever greedy accepts from this pool.
+DEFAULT_CANDIDATES = [
+    "cosine_similarity", "momentum_21d", "momentum_5d", "volatility_21d", "volume_zscore",
 ]
 
 
@@ -196,11 +197,17 @@ def main():
     p.add_argument("--panel", default=None, help="parquet with date,ticker,fwd_return_21d + factors")
     p.add_argument("--accepted", nargs="*", default=[], help="already-accepted factors (evaluate mode)")
     p.add_argument("--candidate", help="single candidate to score (evaluate mode)")
-    p.add_argument("--candidates", nargs="*", default=DEFAULT_NINE, help="candidate pool (greedy mode)")
+    p.add_argument("--candidates", nargs="*", default=DEFAULT_CANDIDATES, help="candidate pool (greedy mode)")
     p.add_argument("--t", type=float, default=2.0, help="incremental-IC t threshold to accept (greedy)")
+    p.add_argument("--start", default=None, help="evaluation window start, e.g. 2012-01-01 (IS/OOS split)")
+    p.add_argument("--end", default=None, help="evaluation window end (inclusive), e.g. 2020-12-31")
     args = p.parse_args()
 
     panel = load_panel(args.panel)
+    if args.start:
+        panel = panel[panel["date"] >= pd.Timestamp(args.start)]
+    if args.end:
+        panel = panel[panel["date"] <= pd.Timestamp(args.end)]
     panel_m = to_monthly(panel)
     logger.info(f"Monthly panel: {panel_m['month'].nunique()} months, "
                 f"{panel_m['ticker'].nunique()} tickers")

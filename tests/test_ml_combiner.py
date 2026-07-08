@@ -69,7 +69,7 @@ def test_lgbm_params_conservative():
 def test_feature_cols_expected():
     """Ensure all expected features are defined."""
     expected = {
-        "cosine_similarity", "event_score", "regime_state",
-        "momentum_21d", "volatility_21d",
+        "cosine_similarity", "momentum_21d", "momentum_5d",
+        "volatility_21d", "volume_zscore",
     }
     assert expected.issubset(set(FEATURE_COLS))

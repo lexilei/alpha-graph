@@ -68,6 +68,12 @@ chasing the max raw number.
 | R1 | 12 | direction | 1 | TBD |
 | R1 | 14 (+15?) | added content | 1–2 | TBD |
 | R1 | 10 | 10-Q magnitude | 1 | TBD |
+| R1 | 15 | magnitude (combined freshest-filing stream) | 1 | no — IS incr-IC t=0.64 (<3), standalone t=0.83 |
+
+Factor 15 added 2026-07-07 **before its evaluation**: the paper-faithful
+combined signal — each stock's most recent periodic filing's YoY same-type
+cosine (union of factors 1+10, raw scores pooled). Same axis, same decision
+rule as the family; its variants count toward N like any other.
 
 Hyperparameter variants also count (e.g. factor-14 MATCH_THRESH, chunk size).
 **N_total for this round is the sum of the "variants tried" column** and feeds
