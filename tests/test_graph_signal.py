@@ -1,5 +1,7 @@
 """Unit tests for the knowledge graph spillover signal."""
 
+import math
+
 import networkx as nx
 import pandas as pd
 import pytest
@@ -49,11 +51,12 @@ def test_neighbor_signal_basic():
 
 
 def test_neighbor_signal_no_neighbors():
+    """Unconnected node -> NaN (not 0: zero is a real signal value)."""
     G = _make_graph()
     signals = {"AAPL": 0.5, "MSFT": -0.2}
 
     result = compute_neighbor_signal(G, "ISOLATED", signals)
-    assert result == 0.0
+    assert math.isnan(result)
 
 
 def test_neighbor_signal_no_signal_values():
@@ -62,7 +65,7 @@ def test_neighbor_signal_no_signal_values():
     signals = {"ISOLATED": 0.5}
 
     result = compute_neighbor_signal(G, "AAPL", signals)
-    assert result == 0.0
+    assert math.isnan(result)
 
 
 def test_neighbor_signal_competitor_inverts():
@@ -93,12 +96,12 @@ def test_neighbor_signal_supplier_propagates():
 
 
 def test_neighbor_signal_missing_ticker():
-    """Ticker not in graph should return 0."""
+    """Ticker not in graph should return NaN."""
     G = _make_graph()
     signals = {"AAPL": 0.5}
 
     result = compute_neighbor_signal(G, "NOT_IN_GRAPH", signals)
-    assert result == 0.0
+    assert math.isnan(result)
 
 
 def test_neighbor_signal_in_edge_relation_reversed():

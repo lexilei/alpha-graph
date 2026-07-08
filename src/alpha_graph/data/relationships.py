@@ -192,6 +192,7 @@ def extract_relationships_for_filing(
         "ticker": ticker,
         "company_name": company_name,
         "filing_date": filing_date,
+        "model": cfg.llm_model,
         "relationships": valid_rels,
     }
 
@@ -209,12 +210,18 @@ def extract_relationships_for_filing(
 def extract_all_relationships(
     tickers: list[str] | None = None,
     form_type: str = "10-K",
+    workers: int = 8,
 ) -> pd.DataFrame:
     """Extract relationships from all filings for all tickers.
 
-    Returns DataFrame with: source, target, relation, confidence, evidence, filing_date.
-    Saves to CACHE_DIR / "relationships.parquet".
+    Runs `workers` concurrent LLM calls; each filing's result is cached to
+    its own JSON, so an interrupted run resumes where it stopped.
+
+    Returns DataFrame with: source, target, relation, confidence, evidence,
+    filing_date, model. Saves to CACHE_DIR / "relationships.parquet".
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     universe = _get_universe_tickers()
     if not universe:
         logger.error("No filings directory. Run filings download first.")
@@ -223,24 +230,32 @@ def extract_all_relationships(
     if tickers is None:
         tickers = universe
 
-    logger.info(
-        f"Extracting relationships from {form_type} filings "
-        f"for {len(tickers)} tickers (universe: {len(universe)})..."
-    )
-
-    all_rows = []
-    for i, ticker in enumerate(tickers, 1):
+    jobs: list[tuple[str, Path]] = []
+    for ticker in tickers:
         ticker_dir = FILINGS_DIR / ticker
         if not ticker_dir.exists():
             continue
+        jobs.extend((ticker, p) for p in sorted(ticker_dir.glob(f"{form_type}_*.json")))
 
-        filing_files = sorted(ticker_dir.glob(f"{form_type}_*.json"))
-        for fpath in filing_files:
+    logger.info(
+        f"Extracting relationships from {len(jobs)} {form_type} filings "
+        f"({len(tickers)} tickers, model={cfg.llm_model}, {workers} workers)..."
+    )
+
+    all_rows = []
+    n_done = n_failed = 0
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {
+            ex.submit(extract_relationships_for_filing, t, p, universe): (t, p)
+            for t, p in jobs
+        }
+        for fut in as_completed(futures):
+            ticker, fpath = futures[fut]
+            n_done += 1
             try:
-                result = extract_relationships_for_filing(
-                    ticker, fpath, universe,
-                )
+                result = fut.result()
             except Exception as e:
+                n_failed += 1
                 logger.error(f"[{ticker}] {fpath.name} failed: {e}")
                 continue
 
@@ -252,10 +267,17 @@ def extract_all_relationships(
                     "confidence": rel["confidence"],
                     "evidence": rel["evidence"],
                     "filing_date": result["filing_date"],
+                    "model": result.get("model", ""),
                 })
 
-        if i % 20 == 0:
-            logger.info(f"  Progress: {i}/{len(tickers)} tickers, {len(all_rows)} edges so far")
+            if n_done % 200 == 0:
+                logger.info(
+                    f"  Progress: {n_done}/{len(jobs)} filings "
+                    f"({n_failed} failed), {len(all_rows)} edges so far"
+                )
+
+    if n_failed:
+        logger.warning(f"{n_failed}/{len(jobs)} filings failed — rerun to retry (cached ones skip)")
 
     df = pd.DataFrame(all_rows)
     if df.empty:
@@ -390,6 +412,7 @@ def main():
     parser.add_argument("--form", default="10-K", choices=["10-K", "10-Q"])
     parser.add_argument("--summary-only", action="store_true",
                         help="Only show graph summary (no extraction)")
+    parser.add_argument("--workers", type=int, default=8, help="concurrent LLM calls")
     args = parser.parse_args()
 
     if args.summary_only:
@@ -397,7 +420,7 @@ def main():
         graph_summary(G)
         return
 
-    df = extract_all_relationships(tickers=args.tickers, form_type=args.form)
+    df = extract_all_relationships(tickers=args.tickers, form_type=args.form, workers=args.workers)
     if df.empty:
         print("No relationships extracted")
         return

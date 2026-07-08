@@ -61,7 +61,9 @@ def compute_neighbor_signal(
     - In-edges:  source -> ticker (source is supplier/partner to ticker)
 
     Weight = edge_type_weight * confidence.
-    Returns 0.0 if no neighbors have signal values.
+    Returns NaN if no neighbors have signal values — 0.0 is reserved for
+    "neighbors exist and their weighted signal is genuinely zero"; conflating
+    the two floods the cross-section with fake zeros for unconnected names.
     """
     weighted_sum = 0.0
     weight_total = 0.0
@@ -90,7 +92,7 @@ def compute_neighbor_signal(
             weight_total += abs(w)
 
     if weight_total == 0:
-        return 0.0
+        return float("nan")
 
     return weighted_sum / weight_total
 
@@ -193,8 +195,8 @@ def compute_spillover_signals(
 
     df = pd.DataFrame(rows)
 
-    # Only keep tickers with non-zero spillover (connected nodes)
-    has_signal = (df["spillover_event"] != 0) | (df["spillover_momentum"] != 0)
+    # NaN = no scored neighbors (unconnected); 0.0 = neighbors genuinely quiet
+    has_signal = df["spillover_event"].notna() | df["spillover_momentum"].notna()
     n_connected = has_signal.sum()
     logger.info(
         f"Spillover signals: {n_connected}/{len(df)} tickers have graph neighbors"
@@ -270,8 +272,8 @@ def main():
 
     if not df.empty:
         print("\n--- Knowledge Graph Spillover Signals ---")
-        # Show non-zero signals
-        has_signal = (df["spillover_event"] != 0) | (df["spillover_momentum"] != 0)
+        # Show connected tickers (NaN = no graph neighbors)
+        has_signal = df["spillover_event"].notna() | df["spillover_momentum"].notna()
         active = df[has_signal].sort_values("spillover_event")
 
         if not active.empty:
