@@ -9,6 +9,7 @@ import pytest
 from alpha_graph.signals.graph_signal import (
     EDGE_WEIGHTS,
     compute_neighbor_signal,
+    customers_of,
 )
 
 
@@ -123,6 +124,20 @@ def test_neighbor_signal_in_edge_relation_reversed():
     assert result == pytest.approx(0.3 / 1.3)
     # the unreversed (buggy) value would be 0.5 / 1.5
     assert result != pytest.approx(0.5 / 1.5)
+
+
+def test_customers_of_direction_and_confidence():
+    """Customer set = out-`customer` edges + in-`supplier` counterparts,
+    conf >= cut; in-`customer` edges are suppliers and must NOT appear."""
+    G = nx.DiGraph()
+    G.add_nodes_from(["S", "C1", "C2", "X", "Y"])
+    G.add_edge("S", "C1", relation="customer", confidence=0.9)   # C1 is S's customer
+    G.add_edge("C2", "S", relation="supplier", confidence=0.85)  # S supplies C2 -> C2 is S's customer
+    G.add_edge("S", "X", relation="customer", confidence=0.6)    # below confidence cut
+    G.add_edge("Y", "S", relation="customer", confidence=0.95)   # S is Y's customer -> Y is a supplier
+
+    cust = dict(customers_of(G, "S", min_conf=0.8))
+    assert cust == {"C1": 0.9, "C2": 0.85}
 
 
 def test_load_event_scores_pit_never_uses_static(tmp_path, monkeypatch):

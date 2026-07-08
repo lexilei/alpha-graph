@@ -130,8 +130,8 @@ def _load_event_scores(as_of_date: pd.Timestamp | None = None) -> dict[str, floa
     return {}
 
 
-def _load_momentum(as_of_date: pd.Timestamp | None = None) -> dict[str, float]:
-    """Load per-ticker 5-day momentum as of a given date."""
+def _load_momentum(as_of_date: pd.Timestamp | None = None, horizon: int = 5) -> dict[str, float]:
+    """Load per-ticker `horizon`-day momentum as of a given date."""
     market_path = CACHE_DIR / "market_data.parquet"
     if not market_path.exists():
         return {}
@@ -145,15 +145,82 @@ def _load_momentum(as_of_date: pd.Timestamp | None = None) -> dict[str, float]:
     if market.empty:
         return {}
 
-    # Compute 5-day momentum
     market = market.sort_values(["ticker", "date"])
-    market["mom_5d"] = market.groupby("ticker")["close"].transform(
-        lambda s: s.pct_change(5)
+    market["mom"] = market.groupby("ticker")["close"].transform(
+        lambda s: s.pct_change(horizon)
     )
 
     # Get latest per ticker
-    latest = market.dropna(subset=["mom_5d"]).groupby("ticker").tail(1)
-    return dict(zip(latest["ticker"], latest["mom_5d"]))
+    latest = market.dropna(subset=["mom"]).groupby("ticker").tail(1)
+    return dict(zip(latest["ticker"], latest["mom"]))
+
+
+def customers_of(graph, ticker: str, min_conf: float = 0.8) -> list[tuple[str, float]]:
+    """The firm's customers with edge confidence (Cohen-Frazzini direction).
+
+    Customers = targets of out-edges labeled `customer` ("X is my customer")
+    plus sources of in-edges labeled `supplier` ("ticker is X's supplier",
+    i.e. X buys from ticker). Edges below min_conf are ignored.
+    """
+    out: list[tuple[str, float]] = []
+    if not graph.has_node(ticker):
+        return out
+    for _, nb, d in graph.out_edges(ticker, data=True):
+        if d.get("relation") == "customer" and d.get("confidence", 0.0) >= min_conf:
+            out.append((nb, d["confidence"]))
+    for nb, _, d in graph.in_edges(ticker, data=True):
+        if d.get("relation") == "supplier" and d.get("confidence", 0.0) >= min_conf:
+            out.append((nb, d["confidence"]))
+    return out
+
+
+def compute_customer_momentum_timeseries(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    min_conf: float = 0.8,
+    horizon: int = 21,
+) -> pd.DataFrame:
+    """Factor 20 — confidence-weighted mean of the firm's CUSTOMERS'
+    `horizon`-day momentum (the paper's customer→supplier lag, asymmetric).
+
+    Saves CACHE_DIR / "graph_customer_momentum.parquet".
+    """
+    from alpha_graph.data.relationships import build_graph
+
+    if start_date is None:
+        start_date = "2012-06-30"
+    if end_date is None:
+        end_date = pd.Timestamp.now().strftime("%Y-%m-%d")
+    dates = pd.date_range(start=start_date, end=end_date, freq="ME")
+    logger.info(f"Customer-momentum spillover for {len(dates)} month-ends "
+                f"(conf>={min_conf}, horizon={horizon}d)...")
+
+    rows = []
+    for dt in dates:
+        G = build_graph(as_of_date=dt)
+        if G.number_of_edges() == 0:
+            continue
+        mom = _load_momentum(dt, horizon=horizon)
+        for ticker in G.nodes():
+            cust = [(nb, c) for nb, c in customers_of(G, ticker, min_conf) if nb in mom]
+            if cust:
+                wsum = sum(c for _, c in cust)
+                val = sum(mom[nb] * c for nb, c in cust) / wsum
+            else:
+                val = float("nan")
+            rows.append({"ticker": ticker, "date": dt, "spillover_cust_mom": val})
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        logger.warning("No customer-momentum rows computed")
+        return df
+    df["date"] = pd.to_datetime(df["date"])
+    df["spillover_cust_mom"] = df["spillover_cust_mom"].round(6)
+    out_path = CACHE_DIR / "graph_customer_momentum.parquet"
+    df.to_parquet(out_path, index=False)
+    n = df["spillover_cust_mom"].notna().sum()
+    logger.info(f"Saved {len(df)} rows ({n} with qualifying customers) to {out_path}")
+    return df
 
 
 def compute_spillover_signals(
@@ -264,7 +331,17 @@ def main():
         "--timeseries", action="store_true",
         help="Compute full time series for backtesting"
     )
+    parser.add_argument(
+        "--customer-momentum", action="store_true",
+        help="Factor 20: customers-only momentum spillover time series"
+    )
     args = parser.parse_args()
+
+    if args.customer_momentum:
+        df = compute_customer_momentum_timeseries()
+        if not df.empty:
+            print(df.dropna().tail(10).to_string(index=False))
+        return
 
     if args.timeseries:
         df = compute_spillover_timeseries()
