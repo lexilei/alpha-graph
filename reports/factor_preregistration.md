@@ -61,10 +61,9 @@ measurements of this single hypothesis, not independent bets.
 
 | When | What | Result |
 |------|------|--------|
-| R1 | factors 1, 11, 13 (magnitude A/B) | pending factor-14 compute completion |
-| R1 | factor 12 (direction) | pending |
-| R1 | factor 14 (added content) | pending |
-| R1 | factor 10 (10-Q magnitude) | pending |
+| 2026-07-08 | R1 full A/B 2012–2026, raw (standalone t / over-baseline t / over-factor-1 t): 1: +0.80/+0.84/— · 10: +1.46/+0.94/+1.12 · 11: +0.23/+0.70/−0.23 · 12: +0.71/+0.51/+0.98 · 13: +1.23/+1.40/+1.34 · 14: −1.02/−0.78/−1.02 | max \|t\|=1.46 across ~18 looks — nothing clears 2 |
+| 2026-07-08 | R1 sub-window standalone t (2012-20 / 2021-26): 1: −0.59/+1.89 · 10: +1.80/+0.18 · 11: −0.43/+0.89 · 12: +1.54/−1.14 · 13: +0.35/+1.56 · 14: +0.25/−2.09 | signs flip across halves for 4/6 — noise signature |
+| 2026-07-08 | magnitude 3-way: 1 TF-IDF vs 11 finance-embed vs 13 bge-embed | no encoder beats bag-of-words (11 worst +0.23; incrementals over 1 all \|t\|<1.4) |
 | 2026-07-07 | factor 15 combined freshest-filing stream | IS incr-IC t=0.64, standalone t=0.83 → rejected |
 | 2026-07-07 | diagnostic: factor-1 IC by sub-period (4 buckets) | no decay pattern; max bucket t=2.17 (post-hoc) |
 | 2026-07-07 | diagnostic: factor-1 IC by dollar-volume half | no attention gradient (t=0.5 / 0.9) |
