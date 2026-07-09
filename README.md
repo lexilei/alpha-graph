@@ -35,7 +35,7 @@ count, not a naive t=2.
 
 ## Findings
 
-### Text change — Lazy Prices (factor 1)
+### Text change — Lazy Prices (C1)
 
 Year-over-year TF-IDF cosine between a firm's consecutive 10-Ks (Cohen, Malloy &
 Nguyen, 2020): large language change signals subsequent underperformance.
@@ -55,7 +55,7 @@ documents paired against structured ones, plus unfiltered amendments) that was
 manufacturing spurious low-similarity pairs; fixing it moved the standalone t
 from 0.7 to 2.3.
 
-### Cross-firm momentum spillover (factor 20)
+### Cross-firm momentum spillover (C10)
 
 A firm's *customers'* prior-month return as a predictor of its *own* next-month
 return (Cohen & Frazzini, 2008: value propagates slowly across economic links
@@ -85,7 +85,7 @@ is independent of the extraction method used to find the effect.
 
 ### Signals that did not survive
 
-The symmetric graph-spillover variants (factors 18–19) and the embedding- and
+The symmetric graph-spillover variants (C8–C9) and the embedding- and
 tone-based text factors are tracked in `FACTORS.md` with their verdicts; the
 embedding factors (11, 13, 14) are being re-evaluated on the corrected filing
 inputs.
@@ -125,9 +125,9 @@ python scripts/download_filings_v2.py --forms 10-K 10-Q --start-year 2011 --end-
 python -m alpha_graph.data.market --max-tickers 500 --years-back 15
 
 # factors (full registry in FACTORS.md)
-python -m alpha_graph.signals.lazy_prices                       # factor 1
+python -m alpha_graph.signals.lazy_prices                       # C1
 python -m alpha_graph.data.relationships                        # LLM company graph
-python -m alpha_graph.signals.graph_signal --customer-momentum  # factor 20
+python -m alpha_graph.signals.graph_signal --customer-momentum  # C10
 
 # evaluate
 python scripts/factor_orthogonality.py evaluate --candidate cosine_similarity --accepted BASELINE

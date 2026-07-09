@@ -24,7 +24,7 @@ measurements of this single hypothesis, not independent bets.
 
 ## Context (verified on our artifacts)
 
-- Factor 1 standalone monthly IC, **clean corpus** (post contamination-fix
+- C1 standalone monthly IC, **clean corpus** (post contamination-fix
   2026-07-08, commit `0d930e0`): +0.012, t = 2.3. (Was +0.0037/t=0.68 on
   pre-fix contaminated inputs.) Incremental over the full price/volume
   baseline t=1.5 — borderline, below the promotion bar.
@@ -40,10 +40,10 @@ measurements of this single hypothesis, not independent bets.
 
 | Axis | Question | Factors (variants) |
 |------|----------|--------------------|
-| Magnitude | how much did it change? | 1 TF-IDF, 11 finance-embed, 13 bge-embed, 15 combined-stream (rejected) |
-| Direction | did tone worsen? | 12 LM tone shift |
-| Added content | what's genuinely new? | 14 bge change-detect (+ BM25 lexical, if run) |
-| (10-Q magnitude) | 10-Q YoY change | 10 cos_10q_yoy |
+| Magnitude | how much did it change? | C1 TF-IDF, C3 finance-embed, C5 bge-embed, C7 combined-stream (rejected) |
+| Direction | did tone worsen? | C4 LM tone shift |
+| Added content | what's genuinely new? | C6 bge change-detect (+ BM25 lexical, if run) |
+| (10-Q magnitude) | 10-Q YoY change | C2 cos_10q_yoy |
 
 ## Evaluation defaults (reference points, not gates)
 
@@ -55,44 +55,44 @@ measurements of this single hypothesis, not independent bets.
 - Reference bars when deciding what is *interesting*: standalone t, incremental
   t over the price/volume baseline, and DSR against the ledger N. Thresholds
   are judgment calls made per decision, not fixed in advance.
-- The price/volume baseline is {6 mom21, 7 mom5, 8 vol21, 9 volz, 16 mom12-1,
-  17 log$vol} (16/17 added 2026-07-07). `--sector-neutral` demeans all rank-z
+- The price/volume baseline is {B1 mom21, B2 mom5, B3 vol21, B4 volz, B5 mom12-1,
+  B6 log$vol} (B5/B6 added 2026-07-07). `--sector-neutral` demeans all rank-z
   series within sector — report alongside raw as a robustness diagnostic.
   Controls are conditioning variables, not ledger trials.
 
 ## Ledger (one line per thing tried — keep appending)
 
 > ⚠ **2026-07-08 contamination fix (commit `0d930e0`) supersedes the text-factor
-> rows below dated 2026-07-08 R1 and 2026-07-07 factor 15 / factor-1 diagnostics.**
+> rows below dated 2026-07-08 R1 and 2026-07-07 C7 / C1 diagnostics.**
 > Those were computed on inputs corrupted by a fallback-extraction switch and
 > unfiltered amendments. Rows are kept (they count toward N), but their numbers
-> are void. Clean re-runs: factor 1 standalone t=2.3 / incr t=1.5; 10 t=0.68;
-> 12 t=0.72; 15 t=0.64 (all sector-neutral ≤0.55). Factors 11/13/14 recomputing.
+> are void. Clean re-runs: C1 standalone t=2.3 / incr t=1.5; C2 t=0.68;
+> C4 t=0.72; C7 t=0.64 (all sector-neutral ≤0.55). C3/C5/C6 recomputing.
 
 | When | What | Result |
 |------|------|--------|
-| 2026-07-08 | **[SUPERSEDED — pre-fix]** R1 full A/B 2012–2026, raw (standalone t / over-baseline t / over-factor-1 t): 1: +0.80/+0.84/— · 10: +1.46/+0.94/+1.12 · 11: +0.23/+0.70/−0.23 · 12: +0.71/+0.51/+0.98 · 13: +1.23/+1.40/+1.34 · 14: −1.02/−0.78/−1.02 | dirty inputs; void — see banner |
-| 2026-07-08 | **[SUPERSEDED — pre-fix]** R1 sub-window standalone t (2012-20 / 2021-26): 1: −0.59/+1.89 · 10: +1.80/+0.18 · 11: −0.43/+0.89 · 12: +1.54/−1.14 · 13: +0.35/+1.56 · 14: +0.25/−2.09 | dirty inputs; void — see banner |
-| 2026-07-08 | **[SUPERSEDED — pre-fix]** magnitude 3-way: 1 TF-IDF vs 11 finance-embed vs 13 bge-embed | dirty inputs; A/B to be re-run after 11/13 recompute |
-| 2026-07-07 | **[SUPERSEDED — pre-fix]** factor 15 combined freshest-filing stream | dirty inputs; clean re-run: standalone t=1.41, incr t=0.64 → still rejected |
-| 2026-07-08 | **R1 re-run on clean inputs** (post `0d930e0`): incr-IC t over full baseline — 1: +1.5 · 10: +0.68 · 12: +0.72 · 15: +0.64 (sector-neutral: 1.5/0.25/0.55/0.01) | factor 1 now borderline (was the null); 10/12/15 still spanned by controls; 11/13/14 pending recompute |
-| 2026-07-09 | **R1 COMPLETE — 11/13/14 recomputed clean.** incr over baseline / sector-neutral / over-factor-1: 11 fin +1.24/+1.96/+0.10 · 13 bge **+1.82/+2.08**/+1.39 · 14 change −1.33/−1.72/−1.23 (standalone −2.06, paper sign) | **A/B flips vs the pre-fix null**: general embedding (13) > TF-IDF (1) > finance-tuned (11); 13 adds real info over 1 (t=1.39), 11 does not (0.10). 13 co-leads with factor 20. |
+| 2026-07-08 | **[SUPERSEDED — pre-fix]** R1 full A/B 2012–2026, raw (standalone t / over-baseline t / over-C1 t): C1: +0.80/+0.84/— · C2: +1.46/+0.94/+1.12 · C3: +0.23/+0.70/−0.23 · C4: +0.71/+0.51/+0.98 · C5: +1.23/+1.40/+1.34 · C6: −1.02/−0.78/−1.02 | dirty inputs; void — see banner |
+| 2026-07-08 | **[SUPERSEDED — pre-fix]** R1 sub-window standalone t (2012-20 / 2021-26): C1: −0.59/+1.89 · C2: +1.80/+0.18 · C3: −0.43/+0.89 · C4: +1.54/−1.14 · C5: +0.35/+1.56 · C6: +0.25/−2.09 | dirty inputs; void — see banner |
+| 2026-07-08 | **[SUPERSEDED — pre-fix]** magnitude 3-way: C1 TF-IDF vs C3 finance-embed vs C5 bge-embed | dirty inputs; A/B to be re-run after C3/C5 recompute |
+| 2026-07-07 | **[SUPERSEDED — pre-fix]** C7 combined freshest-filing stream | dirty inputs; clean re-run: standalone t=1.41, incr t=0.64 → still rejected |
+| 2026-07-08 | **R1 re-run on clean inputs** (post `0d930e0`): incr-IC t over full baseline — C1: +1.5 · C2: +0.68 · C4: +0.72 · C7: +0.64 (sector-neutral: 1.5/0.25/0.55/0.01) | C1 now borderline (was the null); C2/C4/C7 still spanned by controls; C3/C5/C6 pending recompute |
+| 2026-07-09 | **R1 COMPLETE — C3/C5/C6 recomputed clean.** incr over baseline / sector-neutral / over-C1: C3 fin +1.24/+1.96/+0.10 · C5 bge **+1.82/+2.08**/+1.39 · C6 change −1.33/−1.72/−1.23 (standalone −2.06, paper sign) | **A/B flips vs the pre-fix null**: general embedding (C5) > TF-IDF (C1) > finance-tuned (C3); C5 adds real info over C1 (t=1.39), C3 does not (0.10). C5 co-leads with C10. |
 | 2026-07-09 | **Multiple-testing tally**: ~8 text/graph factors × 3 modes + A/Bs ≈ 25+ correlated looks. Max incr-t observed 1.97 (f20), 1.82 (f13); max sector-neutral 2.08 (f13) | E[max\|null] for this many correlated looks ≈ 2.0–2.3 → **no factor clears the bar**; the cluster at t≈1.5–2 is noise-compatible. Qualitative A/B structure (13>1>11) is the robust finding. |
-| 2026-07-07 | diagnostic: factor-1 IC by sub-period (4 buckets) | no decay pattern; max bucket t=2.17 (post-hoc) |
-| 2026-07-07 | diagnostic: factor-1 IC by dollar-volume half | no attention gradient (t=0.5 / 0.9) |
-| 2026-07-07 | controls: +16 mom_252_21, +17 log_dollar_volume, sector-neutral mode | conditioning, not trials |
-| 2026-07-08 | factor 18 spillover_event (full 2011-26 graph, NaN semantics) | standalone t=−0.95, vs baseline t=−0.68, sector-neutral t=+0.12 → nothing, wrong sign |
-| 2026-07-08 | factor 19 spillover_momentum | standalone t=+0.48, incr over baseline t=+1.34 (sign matches C-F), sector-neutral halves to t=+0.64 → noise-compatible |
+| 2026-07-07 | diagnostic: C1 IC by sub-period (4 buckets) | no decay pattern; max bucket t=2.17 (post-hoc) |
+| 2026-07-07 | diagnostic: C1 IC by dollar-volume half | no attention gradient (t=0.5 / 0.9) |
+| 2026-07-07 | controls: +B5 mom_252_21, +B6 log_dollar_volume, sector-neutral mode | conditioning, not trials |
+| 2026-07-08 | C8 spillover_event (full 2011-26 graph, NaN semantics) | standalone t=−0.95, vs baseline t=−0.68, sector-neutral t=+0.12 → nothing, wrong sign |
+| 2026-07-08 | C9 spillover_momentum | standalone t=+0.48, incr over baseline t=+1.34 (sign matches C-F), sector-neutral halves to t=+0.64 → noise-compatible |
 | 2026-07-08 | corr(18, 19) monthly rank | ~0.00 — the two propagations are independent; no combination rescue |
-| 2026-07-08 | factor 20 spillover_cust_mom registered (customer-only, conf≥0.8, neighbors' 21d momentum) | single variant, no parameter sweep |
-| 2026-07-08 | factor 20 full sample (165m, xs 182) | standalone t=+1.32; incr over baseline **t=+1.97** (IC +0.0142, project's largest); sector-neutral t=+1.54 — survives, unlike 19 |
-| 2026-07-08 | factor 20 split halves (no tuning) | 2012-20: incr t=+1.61 / sn +0.89; 2021-26: +1.13 / sn +1.44 — all 4 cells positive, no post-2020 death |
-| 2026-07-08 | factor 20 vs factor 19 | incr t=+1.39 — asymmetry carries info beyond the symmetric average |
-| 2026-07-08 | factor 20 quintile L/S | +0.32%/mo, t=+1.69, 55% hit — ~1/5 of C-F's 1981-2004 magnitude, plausible for mega-caps 20y later |
-| 2026-07-08 | **[SUPERSEDED — pre-fix]** R1 sector-neutral diagnostic, full panel window (vs full baseline): 10: +0.45 · 11: +1.26 · 12: +0.33 · 13: +1.54 · 14: −1.22 · 1: +0.64 | dirty inputs; void. Clean sector-neutral: 1: +1.5 · 10: +0.25 · 12: +0.55 · 15: +0.01; 11/13/14 pending |
+| 2026-07-08 | C10 spillover_cust_mom registered (customer-only, conf≥0.8, neighbors' 21d momentum) | single variant, no parameter sweep |
+| 2026-07-08 | C10 full sample (165m, xs 182) | standalone t=+1.32; incr over baseline **t=+1.97** (IC +0.0142, project's largest); sector-neutral t=+1.54 — survives, unlike C9 |
+| 2026-07-08 | C10 split halves (no tuning) | 2012-20: incr t=+1.61 / sn +0.89; 2021-26: +1.13 / sn +1.44 — all 4 cells positive, no post-2020 death |
+| 2026-07-08 | C10 vs C9 | incr t=+1.39 — asymmetry carries info beyond the symmetric average |
+| 2026-07-08 | C10 quintile L/S | +0.32%/mo, t=+1.69, 55% hit — ~1/5 of C-F's 1981-2004 magnitude, plausible for mega-caps 20y later |
+| 2026-07-08 | **[SUPERSEDED — pre-fix]** R1 sector-neutral diagnostic, full panel window (vs full baseline): C2: +0.45 · C3: +1.26 · C4: +0.33 · C5: +1.54 · C6: −1.22 · C1: +0.64 | dirty inputs; void. Clean sector-neutral: C1: +1.5 · C2: +0.25 · C4: +0.55 · C7: +0.01; C3/C5/C6 pending |
 
 | 2026-07-08 | event-window IC around filings (quarterly-clustered, EW-adjusted): 10-Q d1-5 t=−0.26 · d6-21 +0.98 · **d22-63 +2.65 (IC +0.030)** ; 10-K control: +0.06 / −1.22 / −1.05 | one cell at the ~25-look noise ceiling; 10-K does NOT replicate the pattern |
 | 2026-07-08 | 10-Q d22-63 halves | 2012-19 t=+1.45, 2020-26 t=+2.29 — both positive (only text cell that doesn't sign-flip); confound: window ends at next quarter's earnings |
 
-Hyperparameter variants (e.g. factor-14 MATCH_THRESH, chunk size) get ledger
+Hyperparameter variants (e.g. C6 MATCH_THRESH, chunk size) get ledger
 lines too when swept.

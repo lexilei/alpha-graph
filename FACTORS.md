@@ -1,79 +1,73 @@
 # Factor Registry
 
+Two groups: **candidates** (`C`, the hypotheses under test) and **baseline**
+(`B`, cheap price/volume controls each candidate must beat on *incremental* IC).
+Factors are keyed by **name** in code; the C/B numbers are for reference only.
 
-Next free ID: **21**
+Status: `candidate` (under evaluation) · `rejected` (tested, no incremental
+signal — kept as a tombstone; **counts toward the multiple-testing N**) ·
+`accepted` (in the model). Prediction target: `fwd_return_21d` (next 21
+trading-day return).
 
-Status legend: `candidate` (under evaluation) · `accepted` (in the model) ·
-`rejected` (tested, no incremental signal — ID retained as a tombstone) ·
-`baseline` (cheap price/volume control — text candidates must add incremental
-IC over these).
-
-Prediction target for all factors: `fwd_return_21d` (next 21 trading-day return).
+## Candidates (hypotheses under evaluation)
 
 | ID | name | source | status | definition |
 |----|------|--------|--------|------------|
-| 1 | `cosine_similarity` | 10-K | candidate | TF-IDF (1–2gram, 10k vocab, EN stopwords) cosine between a firm's consecutive **same-type** 10-K filings; vectorizer refit per pair. High = little language change. **Re-evaluated on clean inputs 2026-07-08** (after contamination fix, commit `0d930e0`): standalone IC +0.012, t=2.3; incremental over full price/volume baseline t=1.5, sector-neutral t=1.5 (168m). Borderline — below the promotion bar but no longer the pre-fix t=0.68 null. In the clean R1 (2026-07-09) it is edged out on the magnitude axis by factor 13 (general-purpose embedding, incr t=1.82); the two, with factor 20, form a cluster of borderline signals at the multiple-testing noise ceiling. |
-| 6 | `momentum_21d` | price | baseline | `close.pct_change(21)`. |
-| 7 | `momentum_5d` | price | baseline | `close.pct_change(5)`. |
-| 8 | `volatility_21d` | price | baseline | 21-day rolling std of daily returns × √252 (annualized realized vol). |
-| 9 | `volume_zscore` | volume | baseline | `(volume − 63d mean) / 63d std`. |
-| 10 | `cos_10q_yoy` | 10-Q | rejected | Lazy Prices on 10-Q, **year-over-year** (paper-faithful): TF-IDF cosine vs the 10-Q ~365 days earlier (same fiscal quarter, controls seasonality), same vectorizer as factor 1. `signals/lazy_prices_10q.py`. **Rejected 2026-07-08 (R1), clean inputs**: standalone t=+1.35, vs full baseline t=+0.68, sector-neutral t=+0.25. |
-| 11 | `embed_sim_10k` | 10-K | rejected | **Semantic** similarity between consecutive 10-Ks: cosine of sentence-transformer embeddings, finance-tuned model `FinLang/finance-embeddings-investopedia` (pinned, local, deterministic; long sections chunked + mean-pooled). The modern alternative to factor 1's bag-of-words TF-IDF — added to A/B test whether finance-semantic embeddings beat TF-IDF (incremental IC of 11 over 1). **Clean R1 2026-07-09**: standalone t=+1.56, vs baseline t=+1.24, sector-neutral t=+1.96; incremental over factor 1 only t=+0.10 — redundant with TF-IDF and dominated by factor 13. Loses the magnitude A/B. |
-| 12 | `tone_shift_10k` | 10-K | rejected | **Tone/direction** axis: change in Loughran-McDonald financial-sentiment word proportions (negative, uncertainty) vs the prior 10-K. Captures direction of change, which cosine ignores. PIT-safe (lexicon lookup, deterministic). **Rejected 2026-07-08 (R1), clean inputs**: standalone t=+1.06, vs baseline t=+0.72, sector-neutral t=+0.55 — spanned by price/volume controls. |
-| 13 | `embed_sim_10k_bge` | 10-K | candidate | Same as factor 11 but with the **general-purpose** `BAAI/bge-base-en-v1.5` encoder. Forms a 3-way A/B with factors 1 (TF-IDF) and 11 (finance-tuned): bag-of-words vs general-semantic vs finance-semantic similarity for the same 10-K change. **Clean R1 2026-07-09 — magnitude-axis winner**: standalone t=+2.56, vs full baseline t=+1.82, sector-neutral t=+2.08; incremental over factor 1 t=+1.39 (adds info beyond bag-of-words, unlike 11). Strongest text factor, co-leads with factor 20 — but at the multiple-testing noise ceiling (~2.0-2.3 for this many correlated looks), so borderline, not significant. |
-| 14 | `new_content_frac` | 10-K | candidate | **Change detection**, not similarity: align the new 10-K's paragraph chunks against the prior filing's, count the share with no good match (cosine < thresh) → fraction of genuinely **added** content. Targets the saturation that defeats 11/13 (a single new paragraph survives instead of being pooled away). Embedding-space version of Lazy Prices "added text". `signals/change_detect_10k.py`. **Clean R1 2026-07-09**: standalone t=−2.06 (paper direction — more new content, lower return), vs baseline t=−1.33, sector-neutral t=−1.72; incremental over factor 1 t=−1.23. Economically-correct sign, borderline magnitude. |
-| 15 | `cos_latest_filing` | 10-K+10-Q | rejected | **Paper-faithful combined stream** (CMN 2020): at each date, the YoY same-type TF-IDF cosine of the firm's most recent periodic filing — union of factor 1's 10-K pairs and factor 10's 10-Q pairs, raw scores pooled (same vectorizer, comparable levels), as-of merged, no staleness cap. Pure construction from cached 1+10. **Rejected 2026-07-08, clean inputs** (re-derived from clean factors 1+10): standalone t=+1.41, vs full baseline t=+0.64, sector-neutral t=+0.01. |
-| 16 | `momentum_252_21` | price | baseline | Classic 12-1 momentum: `close(t-21)/close(t-252) − 1` (skip the most recent month). Added 2026-07-07 — the June audit found the cosine signal resembles exactly this, so it belongs in the controls. |
-| 17 | `log_dollar_volume` | price+volume | baseline | Size/**liquidity proxy**: log of 63d median dollar volume. NOT true market cap (no PIT shares outstanding); its job is to catch text factors that secretly rank by company size. |
-| 18 | `spillover_event` | graph | rejected | **Cross-firm propagation** (Cohen–Frazzini 2008 style): confidence- and relation-weighted average of graph neighbors' 8-K event scores (supplier 1.0 / customer 0.8 / partner 0.5 / competitor −0.3; in-edge relations flipped to the target's perspective). Graph: 10,997 LLM-extracted edges (DeepSeek-V4-Pro) from 7,646 10-K Business sections, 2011–2026, both endpoints S&P 500. NaN = no scored neighbors. Month-end grid from `graph_spillover.parquet` (built on the `feat/graph-signal` branch). **Rejected 2026-07-08**: standalone t=−0.95 (wrong sign), vs full baseline t=−0.68, sector-neutral t=+0.12. |
-| 19 | `spillover_momentum` | graph | rejected | Same propagation as 18 but of neighbors' 5-day momentum — the closest analogue to the paper's customer-momentum. Same graph, same weights, same caveats. **Rejected 2026-07-08**: standalone t=+0.48; incremental over full baseline t=+1.34 (sign matches C-F but noise-compatible for a low-prior family); sector-neutral halves it to t=+0.64 — part of the weak effect is sector momentum. |
-| 20 | `spillover_cust_mom` | graph | candidate | **C-F-faithful asymmetric variant**: confidence-weighted mean of the firm's CUSTOMERS' 21-day momentum only (customers = out-`customer` edges + in-`supplier` counterparts, confidence ≥ 0.8 — the extraction rubric's "explicitly named" tier, set a priori). The paper's effect is customer→supplier with a ~1-month lag; 18/19's symmetric four-relation average dilutes it. NaN if no qualifying customers. Registered 2026-07-08 before computation. **First look 2026-07-08 — the registry's only live candidate**: incr over full baseline t=+1.97 (IC +0.0142), sector-neutral t=+1.54, both split-halves positive, quintile L/S +0.32%/mo (t=1.69). Not significant (thin xs ≈ 182; project ledger N≈10 puts E[max t | null] near this level) — needs an out-of-design confirmation before promotion. |
+| C1 | `cosine_similarity` | 10-K | candidate | TF-IDF (1–2gram, 10k vocab, EN stopwords) cosine between a firm's consecutive **same-type** 10-K filings; vectorizer refit per pair. High = little language change. **Clean inputs 2026-07-08** (after contamination fix `0d930e0`): standalone IC +0.012, t=2.3; incremental over full baseline t=1.5, sector-neutral t=1.5 (168m). Borderline — below the promotion bar but no longer the pre-fix t=0.68 null. In the clean R1 (2026-07-09) it is edged out on the magnitude axis by C5 (general-purpose embedding, incr t=1.82); the two, with C10, form a cluster of borderline signals at the multiple-testing noise ceiling. |
+| C2 | `cos_10q_yoy` | 10-Q | rejected | Lazy Prices on 10-Q, **year-over-year** (paper-faithful): TF-IDF cosine vs the 10-Q ~365 days earlier (same fiscal quarter, controls seasonality), same vectorizer as C1. `signals/lazy_prices_10q.py`. **Rejected 2026-07-08 (R1), clean inputs**: standalone t=+1.35, vs full baseline t=+0.68, sector-neutral t=+0.25. |
+| C3 | `embed_sim_10k` | 10-K | rejected | **Semantic** similarity between consecutive 10-Ks: cosine of sentence-transformer embeddings, finance-tuned model `FinLang/finance-embeddings-investopedia` (pinned, local, deterministic; long sections chunked + mean-pooled). The modern alternative to C1's bag-of-words TF-IDF. **Clean R1 2026-07-09**: standalone t=+1.56, vs baseline t=+1.24, sector-neutral t=+1.96; incremental over C1 only t=+0.10 — redundant with TF-IDF and dominated by C5. Loses the magnitude A/B. |
+| C4 | `tone_shift_10k` | 10-K | rejected | **Tone/direction** axis: change in Loughran-McDonald financial-sentiment word proportions (negative, uncertainty) vs the prior 10-K. Captures direction of change, which cosine ignores. PIT-safe (lexicon lookup, deterministic). **Rejected 2026-07-08 (R1), clean inputs**: standalone t=+1.06, vs baseline t=+0.72, sector-neutral t=+0.55 — spanned by price/volume controls. |
+| C5 | `embed_sim_10k_bge` | 10-K | candidate | Same as C3 but with the **general-purpose** `BAAI/bge-base-en-v1.5` encoder. Forms a 3-way A/B with C1 (TF-IDF) and C3 (finance-tuned): bag-of-words vs general-semantic vs finance-semantic similarity for the same 10-K change. **Clean R1 2026-07-09 — magnitude-axis winner**: standalone t=+2.56, vs full baseline t=+1.82, sector-neutral t=+2.08; incremental over C1 t=+1.39 (adds info beyond bag-of-words, unlike C3). Strongest text factor, co-leads with C10 — but at the multiple-testing noise ceiling (~2.0-2.3 for this many correlated looks), so borderline, not significant. |
+| C6 | `new_content_frac` | 10-K | candidate | **Change detection**, not similarity: align the new 10-K's paragraph chunks against the prior filing's, count the share with no good match (cosine < thresh) → fraction of genuinely **added** content. Targets the saturation that defeats C3/C5 (a single new paragraph survives instead of being pooled away). Embedding-space version of Lazy Prices "added text". `signals/change_detect_10k.py`. **Clean R1 2026-07-09**: standalone t=−2.06 (paper direction — more new content, lower return), vs baseline t=−1.33, sector-neutral t=−1.72; incremental over C1 t=−1.23. Economically-correct sign, borderline magnitude. |
+| C7 | `cos_latest_filing` | 10-K+10-Q | rejected | **Paper-faithful combined stream** (CMN 2020): at each date, the YoY same-type TF-IDF cosine of the firm's most recent periodic filing — union of C1's 10-K pairs and C2's 10-Q pairs, raw scores pooled, as-of merged, no staleness cap. Pure construction from cached C1+C2. **Rejected 2026-07-08, clean inputs**: standalone t=+1.41, vs full baseline t=+0.64, sector-neutral t=+0.01. |
+| C8 | `spillover_event` | graph | rejected | **Cross-firm propagation** (Cohen–Frazzini 2008 style): confidence- and relation-weighted average of graph neighbors' 8-K event scores (supplier 1.0 / customer 0.8 / partner 0.5 / competitor −0.3; in-edge relations flipped to the target's perspective). Graph: 10,997 LLM-extracted edges (DeepSeek-V4-Pro) from 7,646 10-K Business sections, 2011–2026, both endpoints S&P 500. NaN = no scored neighbors. **Rejected 2026-07-08**: standalone t=−0.95 (wrong sign), vs full baseline t=−0.68, sector-neutral t=+0.12. |
+| C9 | `spillover_momentum` | graph | rejected | Same propagation as C8 but of neighbors' 5-day momentum — the closest analogue to the paper's customer-momentum. Same graph, same weights, same caveats. **Rejected 2026-07-08**: standalone t=+0.48; incremental over full baseline t=+1.34 (sign matches C-F but noise-compatible); sector-neutral halves it to t=+0.64 — part of the weak effect is sector momentum. |
+| C10 | `spillover_cust_mom` | graph | candidate | **C-F-faithful asymmetric variant**: confidence-weighted mean of the firm's CUSTOMERS' 21-day momentum only (customers = out-`customer` edges + in-`supplier` counterparts, confidence ≥ 0.8, set a priori). The paper's effect is customer→supplier with a ~1-month lag; C8/C9's symmetric four-relation average dilutes it. NaN if no qualifying customers. Registered 2026-07-08 before computation. **The strongest graph candidate**: incr over full baseline t=+1.97 (IC +0.0142), sector-neutral t=+1.54, both split-halves positive, quintile L/S +0.32%/mo (t=1.69). At the noise ceiling for the trial count — needs an out-of-design confirmation (SEC-disclosed customer links, PIT) before promotion. |
 
-IDs 2–5 (8-K event factors, HMM regime factors) were retired untested and
-removed from the codebase 2026-07-07; see git history. The IDs stay reserved.
+## Baseline (price/volume controls — not tested for promotion)
+
+| ID | name | source | definition |
+|----|------|--------|------------|
+| B1 | `momentum_21d` | price | `close.pct_change(21)`. |
+| B2 | `momentum_5d` | price | `close.pct_change(5)`. |
+| B3 | `volatility_21d` | price | 21-day rolling std of daily returns × √252 (annualized realized vol). |
+| B4 | `volume_zscore` | volume | `(volume − 63d mean) / 63d std`. |
+| B5 | `momentum_252_21` | price | Classic 12-1 momentum: `close(t-21)/close(t-252) − 1` (skip most recent month). The June audit found the cosine signal resembles this, so it belongs in the controls. |
+| B6 | `log_dollar_volume` | price+volume | Size/**liquidity proxy**: log of 63d median dollar volume. NOT true market cap (no PIT shares outstanding); catches text factors that secretly rank by company size. |
 
 Sector controls: `build_feature_panel` attaches a `sector` column (current GICS
 snapshot, `sector_map.parquet` — mildly non-PIT). `factor_orthogonality.py
---sector-neutral` demeans all rank-z series within sector per month; it is a
-control mode, not a factor.
+--sector-neutral` demeans all rank-z series within sector per month; a control
+mode, not a factor.
 
 ## Known issues (carry into any evaluation)
 
-- **1** — corpus backfilled 2026-06-30 (7,146 pairs, 82–98% coverage 2012+).
-  Standalone monthly IC on the clean corpus (post contamination-fix, commit
-  `0d930e0`): +0.012, t = 2.3. (The pre-fix +0.0037/t=0.68 was on contaminated
-  inputs — fallback-mode extraction + unfiltered amendments; see git history.)
-  Per-pair TF-IDF vocab refit means levels are not strictly comparable across
-  pairs; cross-sectional ranks are what get used.
-- **10** — computed on the complete 10-Q corpus (19,913 YoY pairs, 498 tickers).
-- **11, 13** — pretrained encoders (mild non-PIT); pin model versions. Purpose
-  is the 3-way A/B vs factor 1, not a standalone claim. Whole-doc similarity
-  saturates near 0.99 (motivated factor 14).
-- **12** — PIT-safe (static lexicon).
-- **14** — MATCH_THRESH and MAX_CHUNKS=150 (truncates very long filings) are
+- **C1** — corpus backfilled 2026-06-30. Clean standalone IC +0.012, t=2.3
+  (the pre-fix +0.0037/t=0.68 was on contaminated inputs — fallback-mode
+  extraction + unfiltered amendments; see `0d930e0`). Per-pair TF-IDF vocab
+  refit means levels aren't comparable across pairs; cross-sectional ranks used.
+- **C2** — computed on the complete 10-Q corpus (19,913 YoY pairs, 498 tickers).
+- **C3, C5** — pretrained encoders (mild non-PIT); pin model versions. Purpose
+  is the 3-way A/B vs C1. Whole-doc similarity saturates near 0.99 (motivated C6).
+- **C4** — PIT-safe (static lexicon).
+- **C6** — MATCH_THRESH and MAX_CHUNKS (truncates very long filings) are
   hyperparameters; count variants toward N.
-- **15** — pooling raw cosines across form types follows the paper; the
-  no-staleness-cap choice is a (mild) variant — S&P 500 firms file ~quarterly,
-  so scores are at most ~4 months old in practice. IS 2012–2020 result: decile
-  L/S (long non-changers / short changers) +0.28%/mo, t=1.35 — sign matches the
-  paper, magnitude in the paper's range, but indistinguishable from noise; the
-  short side is absent (bottom decile ≈ average), spread comes from the long
-  tail. Consistent with factor 1's U-shape finding.
-- **18, 19** — edges are LLM-extracted (the model knows post-filing history:
-  mild non-PIT), both endpoints restricted to current S&P 500 (survivorship;
-  the C-F effect is strongest outside mega-caps → prior LOW). Dual-class
-  listings (GOOG/GOOGL, FOX/FOXA...) count as separate nodes. 18 inherits the
-  8-K corpus's ticker sparsity (~180 active names per era). Business text
-  truncated at 20k chars — long competition sections (e.g. INTC) fall past
-  the cutoff.
+- **C8, C9, C10** — edges are LLM-extracted (the model knows post-filing
+  history: mild non-PIT), both endpoints restricted to current S&P 500
+  (survivorship; the C-F effect is strongest outside mega-caps → prior LOW).
+  Dual-class listings (GOOG/GOOGL...) count as separate nodes. C8 inherits the
+  8-K corpus's ticker sparsity (~180 active names/era). Business text truncated
+  at 20k chars.
 - Universe is current-constituent (survivorship): PIT membership filter not yet
   applied to factor evaluation.
 
 ## Convention
 
 - A factor enters as `candidate`. Promote to `accepted` only after it clears the
-  pre-registered incremental-IC threshold over the current accepted set
+  pre-registered incremental-IC threshold over the accepted set
   (`scripts/factor_orthogonality.py`), confirmed out-of-sample.
-- Rejected factors keep their ID and a one-line reason; do not delete the row.
-- When adding a factor, also record its hypothesis and decision rule in the
-  pre-registration log before running the test.
+- Rejected factors keep their C-ID and a one-line reason (tombstone) — they
+  count toward N; do not delete the row.
+- Next free IDs: **C11** / **B7**.
+- Record each new factor's hypothesis and decision rule in the pre-registration
+  log before running the test.
