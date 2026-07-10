@@ -38,7 +38,7 @@ Code keys factors by name; the C/B labels are for reference.
 |---|---|
 | 10-K | 7,646 filings, 2011–2026 |
 | 10-Q | 21,487 filings, 2011–2026 |
-| 8-K | 33,490 filings (backfill to full 499-name coverage in progress) |
+| 8-K | 100,618 filings, 2011–2026, all 499 names |
 | Prices | 499 tickers, daily OHLCV, 2011–2026 |
 | Company graph | 10,997 supplier/customer/competitor edges, LLM-extracted from 10-K business sections, each backed by a source sentence |
 
@@ -51,28 +51,27 @@ trailing 24-month distribution. A spike in filing activity relative to the firm'
 baseline predicts lower forward returns: the cross-section under-reacts to
 clustered disclosure.
 
+On the full cross-section (all 499 names, 100,618 filings):
+
 | | incremental IC | t |
 |---|---|---|
-| over price/volume baseline | −0.017 | −2.8 |
-| baseline, sector-neutral | −0.020 | −2.9 |
+| over price/volume baseline | −0.008 | −1.9 |
+| baseline, sector-neutral | −0.011 | −2.8 |
 
-The effect holds in both sample halves (2012–2019 t = −1.9, 2020–2026 t = −2.9),
-carries an economically meaningful quintile long/short of +0.41%/month (t = 2.5,
-57% monthly hit rate, long low-abnormal / short high-abnormal), and uses only
-information available at each month-end. It is the strongest verified factor in
-the registry.
+The sector-neutral effect holds in both sample halves (2012–2019 t = −2.2,
+2020–2026 t = −1.9) and uses only information available at each month-end. Its
+economic magnitude is coverage-dependent: on the 179 larger, filing-active names
+first evaluated, the quintile long/short earned +0.41%/month (t = 2.5); on the
+full cross-section it is +0.11%/month (t = 1.2). The signal is robust in rank
+terms and concentrated in the more actively-filing segment of the index.
 
 The predictive content is the frequency *anomaly* specifically. Constructions
 that read 8-K item content — a hard-negative-item count (restatements, officer
 departures, delistings, debt-acceleration, agreement terminations) — and 8-K
 text sentiment (Loughran-McDonald negative-word density) carry no incremental
-signal (sector-neutral t = +0.1 and +0.9). The market prices the content of
-individual 8-Ks; what it under-weights is the clustering of filing activity
-itself.
-
-This factor is currently computed on the 179 of 499 names with a downloaded 8-K
-corpus; a full backfill is in progress, and full-cross-section re-verification
-is pending.
+signal on the full corpus (sector-neutral t = +0.1, +0.2, +0.1). The market
+prices the content of individual 8-Ks; what it under-weights is the clustering
+of filing activity itself.
 
 ### Cross-firm momentum spillover (C10)
 
@@ -149,8 +148,10 @@ number of names, sets the significance sample size.
 - **Survivorship.** The universe is current index constituents; roughly 38% of
   names that passed through the S&P 500 over 2011–2026 are absent. This
   attenuates the measured ICs.
-- **8-K coverage.** The verified 8-K frequency factor is computed on 179 of 499
-  names pending the corpus backfill now in progress.
+- **8-K segment dependence.** The frequency factor's portfolio-level spread is
+  concentrated in the larger, filing-active segment of the index; on the full
+  cross-section the rank signal holds (sector-neutral t = −2.8) while the
+  quintile spread is +0.11%/month.
 - **Graph edges** are LLM-extracted (mild forward-knowledge exposure) with both
   endpoints in the S&P 500 — the regime in which the cross-firm-momentum effect
   is weakest — which makes the observed magnitude a lower bound on the underlying
