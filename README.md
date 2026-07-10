@@ -9,7 +9,7 @@ the S&P 500 (499 names, 2011–2026), evaluating each candidate monthly against
 Across three data sources and fourteen registered candidate factors, two signals
 carry incremental predictive content that survives price/volume controls,
 sector-neutralization, and multiple-testing accounting: **abnormal 8-K filing
-frequency** (the strongest, sector-neutral incremental t ≈ −2.9) and
+frequency** (sector-neutral incremental t ≈ −2.8) and
 **customer-momentum spillover** across a supplier/customer graph (incremental
 t ≈ 2.0 at a monthly horizon, ≈ 3.1 at its natural ten-day horizon). A third
 result is structural: text-change and cross-firm-momentum signals have opposite
@@ -58,12 +58,17 @@ On the full cross-section (all 499 names, 100,618 filings):
 | over price/volume baseline | −0.008 | −1.9 |
 | baseline, sector-neutral | −0.011 | −2.8 |
 
-The sector-neutral effect holds in both sample halves (2012–2019 t = −2.2,
+The sector-neutral effect holds in both sample halves (2012–2019 t = −2.1,
 2020–2026 t = −1.9) and uses only information available at each month-end. Its
 economic magnitude is coverage-dependent: on the 179 larger, filing-active names
 first evaluated, the quintile long/short earned +0.41%/month (t = 2.5); on the
 full cross-section it is +0.11%/month (t = 1.2). The signal is robust in rank
-terms and concentrated in the more actively-filing segment of the index.
+terms and concentrated in the more actively-filing segment of the index. An
+adversarial code review verified the point-in-time construction (excluding all
+month-end-day filings strengthens the result) and localized the effect in time:
+months where the current month's count is available at the sample date score
+t = −3.7, while a one-month lag eliminates the signal — the effect decays
+within one month, so implementation latency is the binding constraint.
 
 The predictive content is the frequency *anomaly* specifically. Constructions
 that read 8-K item content — a hard-negative-item count (restatements, officer
@@ -137,7 +142,7 @@ The candidate factors are correlated same-family measurements, so the effective
 number of independent tests is well below the nominal count. Estimated from the
 eigenspectrum of the factor IC-correlation matrix, the effective breadth is ≈ 7–9
 tests, placing the noise ceiling at E[max |t| | null] ≈ 2.0. Abnormal 8-K
-frequency (sector-neutral t ≈ 2.9) and customer-momentum spillover at its natural
+frequency (sector-neutral t ≈ 2.8) and customer-momentum spillover at its natural
 horizon (HAC t ≈ 3.1) clear this ceiling; the 10-K text-change cluster sits at it.
 Reported t-statistics for factors evaluated on thin cross-sections carry a
 larger per-month sampling-noise component; the number of months (≈ 165), not the
