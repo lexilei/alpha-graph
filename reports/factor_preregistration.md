@@ -94,5 +94,8 @@ measurements of this single hypothesis, not independent bets.
 | 2026-07-08 | event-window IC around filings (quarterly-clustered, EW-adjusted): 10-Q d1-5 t=−0.26 · d6-21 +0.98 · **d22-63 +2.65 (IC +0.030)** ; 10-K control: +0.06 / −1.22 / −1.05 | one cell at the ~25-look noise ceiling; 10-K does NOT replicate the pattern |
 | 2026-07-08 | 10-Q d22-63 halves | 2012-19 t=+1.45, 2020-26 t=+2.29 — both positive (only text cell that doesn't sign-flip); confound: window ends at next quarter's earnings |
 
+| 2026-07-09 | **8-K event round** (new source; 179/499 tickers with 8-K corpus). Tested ~8 constructions vs full baseline (sector-neutral t): frequency **abnormal-z −2.92 (C11)**, unscheduled-abnormal-z −3.04, raw 3mo count −1.21, raw 12mo count +1.59, hand-scored EW severity −1.49, hard-negative-item count +0.07 (C12), unscheduled density −0.99 (C13), LM sentiment +0.93 (C14) | **The signal is filing-frequency abnormality, not content.** C11 verified: split-halves −1.94/−2.89, quintile L/S +0.41%/mo t=2.55, no lookahead → candidate. Item/tone axes dead → C12–C14 rejected. Count level (vs z-score) and hand-scoring don't work. |
+| 2026-07-09 | multiple-testing note for the 8-K round | ~8 correlated activity/content/tone constructions; the winner (C11 −2.92) and its unscheduled variant (−3.04) are the same idea. Treat as one axis with a winner, per protocol. Full-499 re-verification pending backfill. |
+
 Hyperparameter variants (e.g. C6 MATCH_THRESH, chunk size) get ledger
 lines too when swept.

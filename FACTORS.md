@@ -23,6 +23,10 @@ trading-day return).
 | C8 | `spillover_event` | graph | rejected | **Cross-firm propagation** (Cohen–Frazzini 2008 style): confidence- and relation-weighted average of graph neighbors' 8-K event scores (supplier 1.0 / customer 0.8 / partner 0.5 / competitor −0.3; in-edge relations flipped to the target's perspective). Graph: 10,997 LLM-extracted edges (DeepSeek-V4-Pro) from 7,646 10-K Business sections, 2011–2026, both endpoints S&P 500. NaN = no scored neighbors. **Rejected 2026-07-08**: standalone t=−0.95 (wrong sign), vs full baseline t=−0.68, sector-neutral t=+0.12. |
 | C9 | `spillover_momentum` | graph | rejected | Same propagation as C8 but of neighbors' 5-day momentum — the closest analogue to the paper's customer-momentum. Same graph, same weights, same caveats. **Rejected 2026-07-08**: standalone t=+0.48; incremental over full baseline t=+1.34 (sign matches C-F but noise-compatible); sector-neutral halves it to t=+0.64 — part of the weak effect is sector momentum. |
 | C10 | `spillover_cust_mom` | graph | candidate | **C-F-faithful asymmetric variant**: confidence-weighted mean of the firm's CUSTOMERS' 21-day momentum only (customers = out-`customer` edges + in-`supplier` counterparts, confidence ≥ 0.8, set a priori). The paper's effect is customer→supplier with a ~1-month lag; C8/C9's symmetric four-relation average dilutes it. NaN if no qualifying customers. Registered 2026-07-08 before computation. **The strongest graph candidate**: incr over full baseline t=+1.97 (IC +0.0142), sector-neutral t=+1.54, both split-halves positive, quintile L/S +0.32%/mo (t=1.69). At the noise ceiling for the trial count — needs an out-of-design confirmation (SEC-disclosed customer links, PIT) before promotion. |
+| C11 | `evt8k_freq_z` | 8-K | candidate | **Abnormal 8-K filing frequency**: z-score of the current calendar month's 8-K count vs the firm's trailing 24-month distribution (`signals/event_freq_8k.py`). A spike in filing activity relative to the firm's own baseline predicts **lower** forward returns — the market under-reacts to clustered disclosure. **Verified 2026-07-09** (179 tickers with 8-K corpus, ~33% coverage): incr over full baseline t=−2.80, sector-neutral t=−2.92; split-halves both significant (2012-19 −1.94, 2020-26 −2.89); quintile L/S (short high-abnormal) +0.41%/mo, t=2.55, 57% hit; no lookahead. **The registry's strongest verified factor** — the signal is the frequency *spike*, not item content or tone (see C12–C14). Coverage-limited to the 179 downloaded names; full-corpus re-verification pending 8-K backfill. |
+| C12 | `evt8k_hard_items` | 8-K | rejected | Count of 8-Ks with hard-negative items (1.02 termination / 2.04 debt acceleration / 3.01 delisting / 4.02 restatement / 5.02 officer departure) in a trailing 12-month window. **Rejected 2026-07-09**: incr over baseline t=+0.47, sector-neutral t=+0.07 — item **content** carries nothing beyond C11's frequency signal. |
+| C13 | `evt8k_unsched` | 8-K | rejected | Unscheduled 8-K density: trailing-12mo count of 8-Ks with any non-routine item (excludes 2.02 earnings / 7.01 RegFD / 8.01 other / 9.01 exhibits). **Rejected 2026-07-09**: incr t=−0.93, sector-neutral t=−0.99. (The *abnormal frequency* of unscheduled 8-Ks, by contrast, matches C11 — sector-neutral −3.04 — confirming it's the spike, not the level.) |
+| C14 | `evt8k_sentiment` | 8-K | rejected | Loughran-McDonald negative-word density of recent 8-K text, trailing-window averaged. **Rejected 2026-07-09**: incr t=+0.41, sector-neutral t=+0.93 — 8-K tone does not predict, unlike the frequency signal. |
 
 ## Baseline (price/volume controls — not tested for promotion)
 
@@ -52,6 +56,11 @@ mode, not a factor.
 - **C4** — PIT-safe (static lexicon).
 - **C6** — MATCH_THRESH and MAX_CHUNKS (truncates very long filings) are
   hyperparameters; count variants toward N.
+- **C11–C14** — 8-K corpus covers only 179 of 499 tickers (~33% cross-section);
+  the other 320 have no 8-K download (NaN, not zero). C11 verified strong on
+  that subset; full-499 re-verification pending an 8-K backfill (~0.7 GB, 2-4h).
+  Item-type / sentiment axes (C12–C14) are dead — the signal is filing-frequency
+  abnormality alone.
 - **C8, C9, C10** — edges are LLM-extracted (the model knows post-filing
   history: mild non-PIT), both endpoints restricted to current S&P 500
   (survivorship; the C-F effect is strongest outside mega-caps → prior LOW).
@@ -68,6 +77,6 @@ mode, not a factor.
   (`scripts/factor_orthogonality.py`), confirmed out-of-sample.
 - Rejected factors keep their C-ID and a one-line reason (tombstone) — they
   count toward N; do not delete the row.
-- Next free IDs: **C11** / **B7**.
+- Next free IDs: **C15** / **B7**.
 - Record each new factor's hypothesis and decision rule in the pre-registration
   log before running the test.

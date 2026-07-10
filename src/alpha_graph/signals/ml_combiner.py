@@ -243,6 +243,21 @@ def build_feature_panel() -> pd.DataFrame:
         panel["spillover_cust_mom"] = np.nan
         logger.debug("No graph_customer_momentum.parquet — factor 20 will be NaN")
 
+    # --- C11: abnormal 8-K filing frequency (month-end z-score, as-of) ---
+    freq_path = CACHE_DIR / "event_freq_8k.parquet"
+    if freq_path.exists():
+        fz = pd.read_parquet(freq_path)
+        fz["date"] = pd.to_datetime(fz["date"])
+        fz = fz[["ticker", "date", "evt8k_freq_z"]].sort_values(["ticker", "date"])
+        panel = _merge_asof_signal(
+            panel, fz,
+            left_date="date", right_date="date",
+            on="ticker", cols=["evt8k_freq_z"],
+        )
+    else:
+        panel["evt8k_freq_z"] = np.nan
+        logger.debug("No event_freq_8k.parquet — C11 will be NaN")
+
     # Drop rows with no target
     panel = panel.dropna(subset=["fwd_return_21d"])
     panel = panel.sort_values(["date", "ticker"]).reset_index(drop=True)
