@@ -101,5 +101,7 @@ measurements of this single hypothesis, not independent bets.
 
 | 2026-07-10 | **LightGBM combiner, tuned properly** (pre-declared 9-config grid — leaves {7,15,31} × train-window {12,36,60}mo — selected on IS 2012-2020 common eval window 2017-2020, single-shot OOS 2021-2026). IS winner leaves=31/window=60m at IS Sharpe 1.87 (E[max\|null,9]=0.76) | **OOS gross 0.98 / net ~0.62 (30bp/mo), monthly t=2.24 (63mo). IS→OOS shrinkage ~50%.** Attribution (same config, OOS): baseline-only **1.02** ≥ full 0.98; novel-SEC-factors-only 0.28. The combiner is a momentum machine; the SEC factors contribute ≈ zero at portfolio level OOS. Window length (12→60mo) was the material knob, not tree complexity. |
 
+| 2026-07-10 | **Full-corpus retest** (8-K backfill complete: 499 tickers, 100,618 filings). Sector-neutral incr t: C12 hard-items +0.08 · C13 unsched +0.24 · C14 sentiment +0.08 · unsched-abnormal-z −1.15 (was −3.04 on the 179-name subset) · composite customer-propagated-freq +0.90 (halves +0.79/+0.55, sign opposite to prediction) | C12–C14 rejections confirmed at full coverage. The unscheduled-frequency variant attenuates like C11 itself. The composite (C11 signal over C10's customer channel) does not work — the propagation round closes with nothing surviving. |
+
 Hyperparameter variants (e.g. C6 MATCH_THRESH, chunk size) get ledger
 lines too when swept.
