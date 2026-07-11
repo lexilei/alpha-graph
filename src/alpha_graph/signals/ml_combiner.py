@@ -78,7 +78,7 @@ FEATURE_COLS = [
 ]
 
 
-def build_feature_panel() -> pd.DataFrame:
+def build_feature_panel(pit_universe: bool = False) -> pd.DataFrame:
     """Assemble all available signals into a single feature panel.
 
     Merges data from multiple sources using ticker and date as keys.
@@ -95,6 +95,17 @@ def build_feature_panel() -> pd.DataFrame:
     # --- Base: market data with returns and momentum features ---
     panel = market[["ticker", "date", "close", "volume", "ret_21d"]].copy()
     panel = panel.rename(columns={"ret_21d": "fwd_return_21d"})
+
+    # --- PIT universe mask (forward-bias fix only; survivor bias remains —
+    # see data/pit_universe.py docstring). Default False until the v0
+    # convention freeze so intermediate evaluations stay on one convention.
+    if pit_universe:
+        from alpha_graph.data.pit_universe import load_membership, membership_mask
+        mask = membership_mask(panel, load_membership())
+        n0 = len(panel)
+        panel = panel[mask.values].copy()
+        logger.info(f"PIT universe: {n0} -> {len(panel)} rows "
+                    f"({n0 - len(panel)} non-member rows removed)")
 
     # Compute momentum features (backward-looking, no lookahead)
     panel = panel.sort_values(["ticker", "date"])
