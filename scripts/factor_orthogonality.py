@@ -51,12 +51,9 @@ def to_monthly(panel: pd.DataFrame) -> pd.DataFrame:
 # Cross-sectional residualization + IC
 # --------------------------------------------------------------------------- #
 
-def _xs_rank_z(s: pd.Series) -> pd.Series:
-    """Cross-sectional rank -> standardized to mean 0 / std 1."""
-    r = s.rank()
-    if r.notna().sum() < 2 or r.std(ddof=0) == 0:
-        return pd.Series(np.nan, index=s.index)
-    return (r - r.mean()) / r.std(ddof=0)
+# Moved verbatim to the shared diagnostics library; imported so this script's
+# outputs stay literally bit-identical (plan v2 refactor gate).
+from alpha_graph.eval.ic_tools import _xs_rank_z  # noqa: E402
 
 
 def evaluate(
