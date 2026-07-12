@@ -22,6 +22,7 @@ import math
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 from scipy import stats
 
 EULER_GAMMA = 0.5772156649015329
@@ -77,6 +78,8 @@ def hac_tstat(x, lags: int) -> float:
         return float("nan")
     mu = x.mean()
     d = x - mu
+    if float(d @ d) == 0.0:
+        return float("nan")  # constant series: variance undefined, not +inf
     lrv = float(d @ d) / n
     L = int(min(max(lags, 0), n - 1))
     for l in range(1, L + 1):
@@ -108,6 +111,10 @@ def default_lags(horizon_days: float, sampling_interval_days: float,
                         break
                     run = l
                 base = max(base, run)
+    if base > max_lags:
+        logger.warning(f"default_lags: required lags {base} truncated to "
+                       f"max_lags={max_lags} — HAC will under-correct; "
+                       f"raise max_lags for long-horizon series")
     return int(min(base, max_lags))
 
 
@@ -121,18 +128,20 @@ def emax_null(n_trials: int) -> float:
                  + EULER_GAMMA * stats.norm.ppf(1 - 1 / (n_trials * math.e)))
 
 
-def deflated_t(t: float, n_trials: int, n_obs: int | None = None) -> dict:
+def deflated_t(t: float, n_trials: int, n_obs: int | None = None,
+               two_sided: bool = True) -> dict:
     """|t| measured against the best-of-N null ceiling.
 
-    Returns emax_null, the margin |t| - emax_null, and Phi(margin) — the
-    probability that the observed t exceeds the expected best of n_trials
-    null draws. Approximations (documented, conservative when n_trials is
-    the full ledger count): the null t is ~N(0,1); trials independent.
-    n_obs is accepted for signature stability (small-sample refinements later).
+    two_sided=True (default) compares |t| to E[max of N |Z|] = emax_null(2N):
+    selection in this project is over |t| (signs are not pre-registered), and
+    the one-sided ceiling understates the null max by ~0.3 sigma at N=25-50
+    (review F3, anti-conservative). Set two_sided=False only for a
+    pre-registered sign. Null t ~ N(0,1), trials independent (conservative
+    when n_trials is the full ledger count). n_obs reserved.
     """
-    e = emax_null(n_trials)
+    e = emax_null(2 * n_trials if two_sided else n_trials)
     margin = abs(float(t)) - e
-    return {"emax_null": e, "margin": margin,
+    return {"emax_null": e, "margin": margin, "two_sided": bool(two_sided),
             "prob_exceeds_null_max": float(stats.norm.cdf(margin))}
 
 
@@ -152,8 +161,13 @@ def ic_summary(ic: pd.Series, horizon_days: float = 21,
     if n < 3:
         return {"n": n, "ok": False}
     mu, sd = float(x.mean()), float(x.std(ddof=1))
-    lags = hac_lags if hac_lags is not None else default_lags(
-        horizon_days, sampling_interval_days, ic=x)
+    overlap_floor = int(math.ceil(horizon_days / float(sampling_interval_days)))
+    if hac_lags is not None:
+        # an override may raise but never lower the overlap minimum (review F6)
+        lags = max(int(hac_lags), overlap_floor) \
+            if sampling_interval_days < horizon_days else int(hac_lags)
+    else:
+        lags = default_lags(horizon_days, sampling_interval_days, ic=x)
     overlap = sampling_interval_days < horizon_days
     t_naive = None if overlap else (mu / (sd / math.sqrt(n)) if sd > 0 else 0.0)
     out = {
@@ -175,6 +189,10 @@ def split_halves(ic: pd.Series, boundary) -> dict:
     idx = ic.index
     if isinstance(idx, pd.PeriodIndex):
         boundary = pd.Period(boundary, freq=idx.freq)
+    elif isinstance(idx, pd.DatetimeIndex):
+        # coerce to the period END so "2019-12" includes Dec-2019 stamps
+        # (review F8: naive parse -> Dec 1 -> the 2019-drop bug class)
+        boundary = pd.Period(boundary).end_time
     first = ic[idx <= boundary]
     second = ic[idx > boundary]
     def _t(x):
@@ -208,10 +226,16 @@ def quantile_ls(panel_m: pd.DataFrame, factor: str,
     mean monthly L/S return.
     """
     rows, tops, bots = {}, {}, {}
+    tie_months = 0
     for mo, g in panel_m.groupby("month"):
         sub = g[[factor, target, "ticker"]].dropna(subset=[factor, target])
         if len(sub) < min_names:
             continue
+        # tie diagnosis: a value mass wider than one quantile straddles a
+        # boundary and makes rank(method="first") row-order dependent (F5)
+        top_share = sub[factor].value_counts(normalize=True).iloc[0]
+        if top_share > 1.0 / q:
+            tie_months += 1
         qq = pd.qcut(sub[factor].rank(method="first"), q, labels=False)
         top, bot = sub[qq == q - 1], sub[qq == 0]
         rows[mo] = float(top[target].mean() - bot[target].mean())
@@ -226,6 +250,10 @@ def quantile_ls(panel_m: pd.DataFrame, factor: str,
               for a, b in zip(months, months[1:])]
         return float(np.mean(fr)) if fr else float("nan")
 
+    if tie_months:
+        logger.warning(f"quantile_ls[{factor}]: tied value mass straddles a "
+                       f"quantile boundary in {tie_months}/{len(rows)} months — "
+                       f"L/S economics are row-order dependent; treat with care")
     f_top, f_bot = _one_way(tops), _one_way(bots)
     summ = ic_summary(ls, horizon_days, sampling_interval_days, hac_lags)
     mean_ls = float(ls.mean())
@@ -238,6 +266,7 @@ def quantile_ls(panel_m: pd.DataFrame, factor: str,
         "ann_sharpe": float(ls.mean() / ls.std(ddof=1) * math.sqrt(12))
         if ls.std(ddof=1) > 0 else float("nan"),
         "turnover_top": f_top, "turnover_bottom": f_bot,
+        "tie_months": tie_months,
         "break_even_cost_bps": 1e4 * mean_ls / denom if denom > 0 else float("inf"),
     }
 
@@ -246,14 +275,48 @@ def quantile_ls(panel_m: pd.DataFrame, factor: str,
 # Factor-set diagnostics
 # --------------------------------------------------------------------------- #
 
+def ic_decay(panel_m: pd.DataFrame, factor: str, prices: pd.DataFrame,
+             horizons: tuple = (5, 10, 21, 42, 63, 126),
+             sampling_interval_days: float = 21,
+             min_names: int = 20) -> pd.DataFrame:
+    """Mean IC and HAC t per holding horizon (plan Item 3; required by Item 4's
+    C10 acceptance). `prices` needs columns ticker/date/close; forward returns
+    are computed internally per horizon. HAC lags per horizon via default_lags
+    with max_lags raised to cover the longest horizon (review F7).
+    """
+    px = prices[["ticker", "date", "close"]].copy()
+    px["date"] = pd.to_datetime(px["date"])
+    px = px.sort_values(["ticker", "date"])
+    rows = []
+    for h in horizons:
+        fwd = px.groupby("ticker")["close"].transform(lambda s: s.shift(-h) / s - 1)
+        pxh = px[["ticker", "date"]].assign(fwd=fwd)
+        pm = panel_m.merge(pxh, on=["ticker", "date"], how="left")
+        ic = monthly_ic(pm, factor, target="fwd", min_names=min_names)
+        need = int(math.ceil(h / float(sampling_interval_days)))
+        lags = default_lags(h, sampling_interval_days, ic=ic,
+                            max_lags=max(24, need))
+        rows.append({"horizon_days": h, "n_months": len(ic),
+                     "mean_ic": float(ic.mean()) if len(ic) else float("nan"),
+                     "hac_lags": lags, "t_hac": hac_tstat(ic, lags)})
+    return pd.DataFrame(rows)
+
+
 def effective_n(panel_m: pd.DataFrame, factors: list[str],
                 min_names: int = 30) -> dict:
-    """Effective number of independent factor COLUMNS (Li-Ji and Nyholt) from
-    the pooled cross-sectional rank correlations.
+    """Effective number of independent factor COLUMNS from pooled
+    cross-sectional rank correlations. Three estimators (review F4):
 
-    This measures redundancy among the given factors. It is NOT the
-    multiple-testing look-count: the significance ceiling must use the ledger
-    N via emax_null(ledger_N) (review S7).
+    - m_eff_li_ji: the published Li & Ji (2005) f(lam)=I(lam>=1)+(lam-floor(lam))
+      — lenient, discounts only near-exact duplicates.
+    - m_eff_capped: sum of min(lam, 1) — the stricter variant this project
+      used informally (a soft principal-component count).
+    - m_eff_nyholt: Nyholt (2004) over ALL M eigenvalues, ddof=1.
+
+    NOT the multiple-testing look-count: the significance ceiling must use
+    the ledger N via emax_null. `n_sparse_pairs` counts correlations imputed
+    to 0 for insufficient overlap (min_periods) — a nonzero value inflates
+    every m_eff; treat the estimates as upper bounds then.
     """
     pooled = []
     for _, g in panel_m.groupby("month"):
@@ -262,14 +325,20 @@ def effective_n(panel_m: pd.DataFrame, factors: list[str],
             continue
         pooled.append(sub.rank().apply(
             lambda s: (s - s.mean()) / s.std(ddof=0) if s.std(ddof=0) > 0 else s * np.nan))
-    R = pd.concat(pooled).corr(min_periods=100).fillna(0.0).to_numpy(copy=True)
+    C = pd.concat(pooled).corr(min_periods=100)
+    n_sparse = int(C.isna().sum().sum())
+    R = C.fillna(0.0).to_numpy(copy=True)
     np.fill_diagonal(R, 1.0)
-    ev = np.linalg.eigvalsh(R)
-    ev = ev[ev > 0]
+    ev = np.linalg.eigvalsh(R)              # full spectrum, ascending
     m = len(factors)
-    m_lj = float(sum(1.0 if e >= 1 else e - math.floor(e) for e in ev))
-    m_ny = float(1 + (m - 1) * (1 - np.var(ev) / m))
-    return {"m_eff_li_ji": m_lj, "m_eff_nyholt": m_ny,
+    ev_pos = np.clip(ev, 0.0, None)
+    m_li_ji = float(sum((1.0 if e >= 1 else 0.0) + (e - math.floor(e))
+                        for e in ev_pos))
+    m_capped = float(np.minimum(ev_pos, 1.0).sum())
+    m_nyholt = float(1 + (m - 1) * (1 - np.var(ev, ddof=1) / m))
+    return {"m_eff_li_ji": m_li_ji, "m_eff_capped": m_capped,
+            "m_eff_nyholt": m_nyholt, "n_sparse_pairs": n_sparse,
+            "min_eigenvalue": float(ev.min()),
             "eigenvalues": sorted((float(e) for e in ev), reverse=True),
             "note": "column redundancy only; use ledger N for emax_null"}
 

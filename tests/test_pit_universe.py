@@ -122,3 +122,62 @@ def test_band_validation_fires(tmp_path):
     bad.to_csv(p, index=False)
     with pytest.raises(ValueError, match="outside plausible band"):
         load_membership(csv_path=p, start="2019-01-01")
+
+
+# --------------------------------------------------------------------------- #
+# Review hardening (correctness review 2026-07-11)
+# --------------------------------------------------------------------------- #
+
+@needs_csv
+def test_fisv_membership_not_dropped(snaps):
+    # Review F2: the inverse FISV->FI mapping silently dropped Fiserv for 15y.
+    # Panel vocabulary keeps FISV; it must be a member in 2015 AND 2024.
+    assert "FISV" in membership_asof(snaps, pd.Timestamp("2015-06-30"))
+    assert "FISV" in membership_asof(snaps, pd.Timestamp("2024-06-30"))
+    assert "FI" not in membership_asof(snaps, pd.Timestamp("2024-06-30"))
+
+
+@needs_csv
+def test_rename_map_vocabulary():
+    # Hard test (plan Item 1 / review F2): every map TARGET must be a panel
+    # ticker (a non-panel target is a silent drop of the mapped member), and
+    # every map KEY must actually occur in the CSV window.
+    import pandas as pd
+    from alpha_graph.data.pit_universe import RENAME_MAP, MEMBERSHIP_CSV, START
+    from alpha_graph.config import CACHE_DIR
+    mk = CACHE_DIR / "market_data.parquet"
+    if not mk.exists():
+        pytest.skip("market data not present")
+    panel_tk = set(pd.read_parquet(mk, columns=["ticker"])["ticker"].unique())
+    m = pd.read_csv(MEMBERSHIP_CSV)
+    m["date"] = pd.to_datetime(m["date"])
+    m = m[m["date"] >= pd.Timestamp(START)]
+    csv_syms = set()
+    for t in m["tickers"]:
+        csv_syms |= {x.strip().replace(".", "-").upper() for x in t.split(",")}
+    for old, (new, _until) in RENAME_MAP.items():
+        assert new in panel_tk, f"map target {new} not a panel ticker (silent drop)"
+        assert old in csv_syms, f"map key {old} never occurs in the CSV window"
+
+
+@needs_csv
+def test_never_matched_is_exactly_the_known_joiners(snaps):
+    # Rename-completeness: the only panel tickers with no membership match
+    # must be the known post-CSV joiners. Any new name here = missing rename.
+    import pandas as pd
+    from alpha_graph.config import CACHE_DIR
+    mk = CACHE_DIR / "market_data.parquet"
+    if not mk.exists():
+        pytest.skip("market data not present")
+    panel_tk = set(pd.read_parquet(mk, columns=["ticker"])["ticker"].unique())
+    matched = set()
+    for _, s in snaps:
+        matched |= (panel_tk & s)
+    assert panel_tk - matched == {"CIEN", "COHR", "LITE", "SATS", "VRT"}
+
+
+@needs_csv
+def test_carry_forward_exact_edge(snaps):
+    last = snaps[-1][0]
+    assert membership_asof(snaps, last + pd.Timedelta(days=60)) is not None
+    assert membership_asof(snaps, last + pd.Timedelta(days=61)) is None

@@ -65,7 +65,7 @@ RENAME_MAP: dict[str, tuple[str, str | None]] = {
     "ARNC":  ("HWM", None),    # 2020-04 (old-Alcoa line back-normalized to ARNC)
     "DISCA": ("WBD", None),    # 2022-04
     "DISCK": ("WBD", None),
-    "FISV":  ("FI", None),     # 2023-06 (CSV double-lists both; set dedups)
+    "FI":    ("FISV", None),   # panel keeps FISV; CSV co-lists FI 2023-25 (review F2: the inverse mapping falsely dropped Fiserv for 15y)
     "BBT":   ("TFC", None),    # 2019-12 BB&T -> Truist (surviving listing)
     # Dated rule (symbol reuse): IR = Ingersoll-Rand plc (today's TT) through
     # Feb 2020; afterwards IR = the ex-Gardner-Denver company (panel IR).

@@ -96,17 +96,6 @@ def build_feature_panel(pit_universe: bool = False) -> pd.DataFrame:
     panel = market[["ticker", "date", "close", "volume", "ret_21d"]].copy()
     panel = panel.rename(columns={"ret_21d": "fwd_return_21d"})
 
-    # --- PIT universe mask (forward-bias fix only; survivor bias remains —
-    # see data/pit_universe.py docstring). Default False until the v0
-    # convention freeze so intermediate evaluations stay on one convention.
-    if pit_universe:
-        from alpha_graph.data.pit_universe import load_membership, membership_mask
-        mask = membership_mask(panel, load_membership())
-        n0 = len(panel)
-        panel = panel[mask.values].copy()
-        logger.info(f"PIT universe: {n0} -> {len(panel)} rows "
-                    f"({n0 - len(panel)} non-member rows removed)")
-
     # Compute momentum features (backward-looking, no lookahead)
     panel = panel.sort_values(["ticker", "date"])
     panel["momentum_21d"] = panel.groupby("ticker")["close"].transform(
@@ -144,6 +133,19 @@ def build_feature_panel(pit_universe: bool = False) -> pd.DataFrame:
     )
 
     panel = panel.drop(columns=["daily_ret", "close", "volume"], errors="ignore")
+
+    # --- PIT universe mask, applied AFTER price-feature computation so
+    # lookbacks never span membership gaps (review F1: masking first gave
+    # re-entrant names +297% "momentum" across their gap and NaN'd every
+    # joiner's first year of 12-1 momentum). Forward-bias fix only; survivor
+    # bias remains — see data/pit_universe.py. Default False until v0 freeze.
+    if pit_universe:
+        from alpha_graph.data.pit_universe import load_membership, membership_mask
+        mask = membership_mask(panel, load_membership())
+        n0 = len(panel)
+        panel = panel[mask.values].copy()
+        logger.info(f"PIT universe: {n0} -> {len(panel)} rows "
+                    f"({n0 - len(panel)} non-member rows removed)")
 
     # Sector labels (current GICS snapshot — mildly non-PIT; used as controls,
     # not as a ranking factor)
