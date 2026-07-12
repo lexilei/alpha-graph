@@ -50,9 +50,15 @@ def test_rename_chains(snaps):
     d = pd.Timestamp("2016-06-30")
     s = membership_asof(snaps, d)
     # flattened chains: Symantec-era GEN, HCP-era DOC, CBS-era PSKY,
-    # MeadWestvaco/WestRock-era SW, UTX-era RTX
-    for t in ("GEN", "DOC", "PSKY", "SW", "RTX", "ELV", "WTW"):
+    # UTX-era RTX, Praxair-era LIN
+    for t in ("GEN", "DOC", "PSKY", "RTX", "ELV", "WTW", "LIN", "FISV"):
         assert t in s, t
+    # audit 2026-07-11: panel SW is the Smurfit Kappa line (never a member
+    # pre-2024) — the old MWV/WRK->SW mapping was a 14.1y false grant
+    assert "SW" not in s
+    assert "SW" in membership_asof(snaps, pd.Timestamp("2024-08-30"))
+    # DWDP->DD fills DD's 2017-08..2019-06 interior hole
+    assert "DD" in membership_asof(snaps, pd.Timestamp("2018-06-29"))
 
 
 @needs_csv

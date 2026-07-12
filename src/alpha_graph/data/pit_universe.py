@@ -19,6 +19,15 @@ symbols to current panel tickers; entries are (panel_ticker, valid_until) —
 today's TT, through Feb 2020; the symbol was then reused by Gardner Denver,
 today's panel IR). The map is a versioned research artifact: every change gets
 a ledger line.
+
+Audit 2026-07-11 (agent, filing-text + price-seam forensics): pure ticker
+renames are back-normalized upstream through ~2018-06; hand-verify 2018-07..
+2019-06; entries required from 2019 on. MERGER-SUCCESSIONS are never
+normalized at any date and need a panel-line identity check (price seam),
+not a membership-span check — that class produced all four map errors
+(false MWV/WRK->SW; missing PX->LIN, DWDP->DD). DISH->SATS is deliberately
+absent: the panel SATS line is old EchoStar (never a member); DISH's
+membership belongs to a dead listing.
 """
 
 from __future__ import annotations
@@ -52,8 +61,10 @@ RENAME_MAP: dict[str, tuple[str, str | None]] = {
     "WLTW":  ("WTW", None),    # 2022-01
     "MYL":   ("VTRS", None),   # 2020-11
     "BHGE":  ("BKR", None),    # 2019-10
-    "MWV":   ("SW", None),     # 2015-07 MeadWestvaco -> WestRock line
-    "WRK":   ("SW", None),     # 2024-07 WestRock -> Smurfit Westrock
+    # MWV/WRK are NOT mapped: the panel's SW price series is the Smurfit
+    # Kappa line (never an S&P member; 2011 level ~9.2 vs WestRock-line ~26+,
+    # OTC-style stale fills), proven by the rename-map audit 2026-07-11.
+    # Mapping them granted a never-member 14.1y of false membership.
     "UTX":   ("RTX", None),    # 2020-04
     "HRS":   ("LHX", None),    # 2019-06
     "JEC":   ("J", None),      # 2019-12
@@ -65,8 +76,14 @@ RENAME_MAP: dict[str, tuple[str, str | None]] = {
     "ARNC":  ("HWM", None),    # 2020-04 (old-Alcoa line back-normalized to ARNC)
     "DISCA": ("WBD", None),    # 2022-04
     "DISCK": ("WBD", None),
-    "FI":    ("FISV", None),   # panel keeps FISV; CSV co-lists FI 2023-25 (review F2: the inverse mapping falsely dropped Fiserv for 15y)
+    "FI":    ("FISV", None),   # panel keeps FISV; CSV runs FISV->FI->FISV as
+                               # clean successions (audit: no co-listing).
+                               # Review F2: the inverse mapping dropped Fiserv 15y.
     "BBT":   ("TFC", None),    # 2019-12 BB&T -> Truist (surviving listing)
+    "PX":    ("LIN", None),    # 2018-11 Praxair listing continued as Linde plc
+                               # (price-seam proven; filings/LIN starts 2018)
+    "DWDP":  ("DD", None),     # 2019-06 DowDuPont -> DuPont; fills DD's
+                               # 2017-08..2019-06 interior membership hole
     # Dated rule (symbol reuse): IR = Ingersoll-Rand plc (today's TT) through
     # Feb 2020; afterwards IR = the ex-Gardner-Denver company (panel IR).
     "IR":    ("TT", "2020-02-29"),
