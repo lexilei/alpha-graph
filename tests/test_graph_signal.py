@@ -195,3 +195,38 @@ def test_build_graph_deduplicates():
     edge_data = G.edges["AAPL", "MSFT"]
     assert edge_data["relation"] == "partner"
     assert edge_data["confidence"] == 0.9
+
+
+def test_build_graph_dedup_is_order_independent():
+    """Same-day duplicate edges must resolve identically regardless of
+    input row order.
+
+    Regression: the dedup used an unstable single-key sort on
+    filing_date, so when a (source, target) pair had two rows with the
+    same filing_date but different relation/confidence, the survivor
+    depended on how the frame had been filtered/sliced upstream (the
+    monthly and daily C10 builders got different edges).
+    """
+    from alpha_graph.data.relationships import build_graph
+
+    rels = pd.DataFrame([
+        {"source": "MU", "target": "INTC", "relation": "customer",
+         "confidence": 0.7, "evidence": "row-a", "filing_date": "2012-11-08"},
+        {"source": "MU", "target": "INTC", "relation": "supplier",
+         "confidence": 0.9, "evidence": "row-b", "filing_date": "2012-11-08"},
+        # unrelated edge so the graph isn't trivial
+        {"source": "AAPL", "target": "MSFT", "relation": "partner",
+         "confidence": 0.8, "evidence": "row-c", "filing_date": "2012-11-08"},
+    ])
+    rels["filing_date"] = pd.to_datetime(rels["filing_date"])
+
+    G_fwd = build_graph(rels)
+    G_rev = build_graph(rels.iloc[::-1])
+
+    assert set(G_fwd.edges) == set(G_rev.edges)
+    for edge in G_fwd.edges:
+        assert G_fwd.edges[edge] == G_rev.edges[edge]
+
+    # Survivor policy for the same-day tie: highest confidence wins.
+    assert G_fwd.edges["MU", "INTC"]["confidence"] == 0.9
+    assert G_fwd.edges["MU", "INTC"]["relation"] == "supplier"

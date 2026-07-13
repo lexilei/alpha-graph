@@ -339,9 +339,18 @@ def build_graph(
     if relationships.empty:
         return nx.DiGraph()
 
-    # Deduplicate: for same (source, target), keep most recent filing
+    # Deduplicate: for same (source, target), keep most recent filing.
+    # The sort must be a deterministic TOTAL order: the parquet contains
+    # same-day duplicates (same pair, same filing_date, different
+    # relation/confidence), and a single-key unstable sort made the
+    # survivor depend on input row order. Policy: latest filing_date
+    # wins; same-day ties broken by highest confidence; remaining ties
+    # by lexicographically-last relation (arbitrary but fixed).
     relationships = (
-        relationships.sort_values("filing_date")
+        relationships.sort_values(
+            ["filing_date", "confidence", "relation", "source", "target"],
+            kind="stable",
+        )
         .drop_duplicates(subset=["source", "target"], keep="last")
     )
 
