@@ -27,6 +27,7 @@ trading-day return).
 | C12 | `evt8k_hard_items` | 8-K | rejected | Count of 8-Ks with hard-negative items (1.02 termination / 2.04 debt acceleration / 3.01 delisting / 4.02 restatement / 5.02 officer departure) in a trailing 12-month window. **Rejected 2026-07-09**: incr over baseline t=+0.47, sector-neutral t=+0.07 — item **content** carries nothing beyond C11's frequency signal. |
 | C13 | `evt8k_unsched` | 8-K | rejected | Unscheduled 8-K density: trailing-12mo count of 8-Ks with any non-routine item (excludes 2.02 earnings / 7.01 RegFD / 8.01 other / 9.01 exhibits). **Rejected 2026-07-09**: incr t=−0.93, sector-neutral t=−0.99. (The *abnormal frequency* of unscheduled 8-Ks scored −3.04 on the 179-name subset but attenuates to −1.15 at full coverage — the spike-not-level reading rests on C11 itself.) |
 | C14 | `evt8k_sentiment` | 8-K | rejected | Loughran-McDonald negative-word density of recent 8-K text, trailing-window averaged. **Rejected 2026-07-09**: incr t=+0.41, sector-neutral t=+0.93 — 8-K tone does not predict, unlike the frequency signal. |
+| C15 | `evt8k_freq_z_d` | 8-K | candidate | **Daily-grid abnormal 8-K frequency** — the version C11's fresh-month caveat calls for. NOT a port of C11 (new ID): three definitional changes at once — (1) grid: every trading day; (2) scored window: trailing 21-trading-day count, not the calendar month; (3) baseline: mean/std of the same statistic over the trailing 504 trading days lagged one full window, so the scored window never overlaps its own null (C11's rolling 24-month baseline includes the scored month). Weekend filings count at the next close; rows stamped with computation date t; availability applied at the panel merge (v0: t+1). `signals/event_freq_8k.py --daily`. **Registered 2026-07-13 before evaluation**; first numbers come from the pre-committed 2³ convention factorial (PIT × t+1 × grid), all cells ledgered. C11's monthly −2.81 stays the C11 headline; C15 is evaluated as its own trial. |
 
 ## Baseline (price/volume controls — not tested for promotion)
 
@@ -76,6 +77,11 @@ mode, not a factor.
   (`scripts/factor_orthogonality.py`), confirmed out-of-sample.
 - Rejected factors keep their C-ID and a one-line reason (tombstone) — they
   count toward N; do not delete the row.
-- Next free IDs: **C15** / **B7**.
+- Next free IDs: **C16** / **B7**.
+- Grid note (2026-07-13): C10 gained a daily as-of cache
+  (`graph_customer_momentum_daily.parquet`) with the construction unchanged —
+  grid is a convention axis, so the ID stays C10; a builder-level test pins
+  daily == monthly at every month-end. C15 is a new ID because its window and
+  baseline definitions change along with the grid.
 - Record each new factor's hypothesis and decision rule in the pre-registration
   log before running the test.
