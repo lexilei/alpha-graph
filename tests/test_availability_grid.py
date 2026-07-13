@@ -63,6 +63,29 @@ def test_merge_lag_one_friday_to_monday():
     assert got[pd.Timestamp("2020-01-06")] == 2.5
 
 
+def test_lag_controls_shift_semantics():
+    # build_feature_panel(lag_controls=True) lags the in-panel controls with
+    # the IDENTICAL expression tested here: panel sorted by (ticker, date),
+    # then panel.groupby("ticker")[cols].shift(1). Verify one-trading-day
+    # semantics within ticker and NaN on each ticker's first row.
+    dates = pd.bdate_range("2020-01-06", periods=5)
+    cols = ["momentum_21d", "volume_zscore"]
+    df = pd.concat([
+        pd.DataFrame({"ticker": t, "date": dates,
+                      "momentum_21d": base + np.arange(5.0),
+                      "volume_zscore": base - np.arange(5.0)})
+        for t, base in [("A", 10.0), ("B", 100.0)]
+    ], ignore_index=True).sort_values(["ticker", "date"])
+    unshifted = df[cols].copy()
+    df[cols] = df.groupby("ticker")[cols].shift(1)
+    for t in ["A", "B"]:
+        got = df[df["ticker"] == t].reset_index(drop=True)
+        raw = unshifted[(df["ticker"] == t).values].reset_index(drop=True)
+        for c in cols:
+            assert np.isnan(got.loc[0, c])                       # first row NaN
+            assert got.loc[1:, c].tolist() == raw.loc[:3, c].tolist()  # col(t)==raw(t-1)
+
+
 # --------------------------------------------------------------------------- #
 # C15 daily 8-K frequency builder
 # --------------------------------------------------------------------------- #

@@ -82,6 +82,7 @@ def build_feature_panel(
     pit_universe: bool = False,
     availability_lag_days: int = 0,
     daily_signals: bool = False,
+    lag_controls: bool = False,
 ) -> pd.DataFrame:
     """Assemble all available signals into a single feature panel.
 
@@ -100,6 +101,13 @@ def build_feature_panel(
     momentum from graph_customer_momentum_daily.parquet (same construction,
     finer grid) and the C15 daily 8-K frequency variant (evt8k_freq_z_d,
     a NEW registry entry; the monthly C11 column stays loaded regardless).
+
+    lag_controls (factorial sensitivity): shift the 6 in-panel price/volume
+    control columns by ONE trading day within ticker. The controls are
+    computed from same-close prices and are otherwise untouched by
+    availability_lag_days (which only lags merged signals); this switch
+    checks whether candidate-vs-control comparisons move when the controls
+    are held to the same t+1 availability standard. Default False.
 
     v0 convention (to be frozen after the factorial): pit_universe=True,
     availability_lag_days=1, daily_signals=True.
@@ -153,6 +161,19 @@ def build_feature_panel(
     )
 
     panel = panel.drop(columns=["daily_ret", "close", "volume"], errors="ignore")
+
+    # Optional t+1 availability for the in-panel controls (factorial
+    # sensitivity axis). Must run AFTER all price features are computed but
+    # BEFORE the PIT mask below — shifting after row removal would carry
+    # values across membership gaps (same ordering reason as the review-F1
+    # fix on the mask itself). Panel is still sorted by (ticker, date) here,
+    # so shift(1) within ticker is exactly one trading day.
+    if lag_controls:
+        control_cols = [
+            "momentum_21d", "momentum_5d", "volatility_21d",
+            "volume_zscore", "momentum_252_21", "log_dollar_volume",
+        ]
+        panel[control_cols] = panel.groupby("ticker")[control_cols].shift(1)
 
     # --- PIT universe mask, applied AFTER price-feature computation so
     # lookbacks never span membership gaps (review F1: masking first gave

@@ -28,14 +28,15 @@ MIN_MONTHS = 12      # need at least this many scored months to trust the IC
 # --------------------------------------------------------------------------- #
 
 def load_panel(path: str | None, pit: bool = False, lag: int = 0,
-               daily: bool = False) -> pd.DataFrame:
+               daily: bool = False, lag_controls: bool = False) -> pd.DataFrame:
     if path:
         panel = pd.read_parquet(path)
     else:
         from alpha_graph.signals.ml_combiner import build_feature_panel
         panel = build_feature_panel(pit_universe=pit,
                                     availability_lag_days=lag,
-                                    daily_signals=daily)
+                                    daily_signals=daily,
+                                    lag_controls=lag_controls)
     panel["date"] = pd.to_datetime(panel["date"])
     if FWD_COL not in panel.columns:
         raise ValueError(f"panel needs a '{FWD_COL}' column; has {list(panel.columns)}")
@@ -245,11 +246,15 @@ def main():
                         "filing merges on any grid, grid signals under --daily)")
     p.add_argument("--daily", action="store_true",
                    help="daily as-of caches for C10 + the C15 daily 8-K variant")
+    p.add_argument("--lag-controls", action="store_true",
+                   help="shift the 6 in-panel price/volume controls by one "
+                        "trading day (factorial sensitivity cell)")
     args = p.parse_args()
     if args.accepted == ["BASELINE"]:
         args.accepted = list(BASELINE)
 
-    panel = load_panel(args.panel, pit=args.pit, lag=args.lag, daily=args.daily)
+    panel = load_panel(args.panel, pit=args.pit, lag=args.lag, daily=args.daily,
+                       lag_controls=args.lag_controls)
     if args.start:
         panel = panel[panel["date"] >= pd.Timestamp(args.start)]
     if args.end:
