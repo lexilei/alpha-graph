@@ -78,11 +78,31 @@ FEATURE_COLS = [
 ]
 
 
-def build_feature_panel(pit_universe: bool = False) -> pd.DataFrame:
+def build_feature_panel(
+    pit_universe: bool = False,
+    availability_lag_days: int = 0,
+    daily_signals: bool = False,
+) -> pd.DataFrame:
     """Assemble all available signals into a single feature panel.
 
     Merges data from multiple sources using ticker and date as keys.
     Missing features are kept as NaN — LightGBM handles them natively.
+
+    availability_lag_days (Item 2): calendar-day lag between a signal's
+    computation date and its first use. Applies to the filing-date merges on
+    every grid, and to grid-signal merges ONLY under daily_signals — on the
+    monthly grid a +1d shift on a month-end-stamped series pushes it to the
+    NEXT month-end, which is the already-tested "stale" variant, not t+1
+    (the monthly grid cannot express a one-day lag; that is why Items 2 and
+    4 ship jointly).
+
+    daily_signals (Item 4): load the daily as-of caches — C10 customer
+    momentum from graph_customer_momentum_daily.parquet (same construction,
+    finer grid) and the C15 daily 8-K frequency variant (evt8k_freq_z_d,
+    a NEW registry entry; the monthly C11 column stays loaded regardless).
+
+    v0 convention (to be frozen after the factorial): pit_universe=True,
+    availability_lag_days=1, daily_signals=True.
     """
     market_path = CACHE_DIR / "market_data.parquet"
     if not market_path.exists():
@@ -170,6 +190,7 @@ def build_feature_panel(pit_universe: bool = False) -> pd.DataFrame:
             panel, lazy,
             left_date="date", right_date="filing_date",
             on="ticker", cols=["cosine_similarity"],
+            availability_lag_days=availability_lag_days,
         )
     else:
         panel["cosine_similarity"] = np.nan
@@ -196,6 +217,7 @@ def build_feature_panel(pit_universe: bool = False) -> pd.DataFrame:
             panel, sig,
             left_date="date", right_date="filing_date",
             on="ticker", cols=cols,
+            availability_lag_days=availability_lag_days,
         )
 
     # --- Factor 15: most recent filing's YoY cosine (10-K ∪ 10-Q, CMN 2020) ---
@@ -216,6 +238,7 @@ def build_feature_panel(pit_universe: bool = False) -> pd.DataFrame:
             panel, comb,
             left_date="date", right_date="filing_date",
             on="ticker", cols=["cos_latest_filing"],
+            availability_lag_days=availability_lag_days,
         )
     else:
         panel["cos_latest_filing"] = np.nan
@@ -231,6 +254,8 @@ def build_feature_panel(pit_universe: bool = False) -> pd.DataFrame:
         sp = sp[["ticker", "date", "spillover_event", "spillover_momentum"]]
         sp = sp.dropna(subset=["spillover_event", "spillover_momentum"], how="all")
         sp = sp.sort_values(["ticker", "date"])
+        # Rejected factors (C8/C9): monthly cache only, no daily port, no lag
+        # (see the monthly-grid caveat in the docstring).
         panel = _merge_asof_signal(
             panel, sp,
             left_date="date", right_date="date",
@@ -241,8 +266,12 @@ def build_feature_panel(pit_universe: bool = False) -> pd.DataFrame:
         panel["spillover_momentum"] = np.nan
         logger.debug("No graph_spillover.parquet — factors 18-19 will be NaN")
 
-    # --- Factor 20: customers-only momentum spillover (C-F asymmetric) ---
-    cm_path = CACHE_DIR / "graph_customer_momentum.parquet"
+    # --- C10: customers-only momentum spillover (C-F asymmetric) ---
+    # daily_signals selects the daily as-of cache (same construction, finer
+    # grid — same registry ID); only the daily grid can express the t+1 lag.
+    cm_name = ("graph_customer_momentum_daily.parquet" if daily_signals
+               else "graph_customer_momentum.parquet")
+    cm_path = CACHE_DIR / cm_name
     if cm_path.exists():
         cm = pd.read_parquet(cm_path)
         cm["date"] = pd.to_datetime(cm["date"])
@@ -251,12 +280,16 @@ def build_feature_panel(pit_universe: bool = False) -> pd.DataFrame:
             panel, cm,
             left_date="date", right_date="date",
             on="ticker", cols=["spillover_cust_mom"],
+            availability_lag_days=availability_lag_days if daily_signals else 0,
         )
     else:
         panel["spillover_cust_mom"] = np.nan
-        logger.debug("No graph_customer_momentum.parquet — factor 20 will be NaN")
+        logger.debug(f"No {cm_name} — C10 will be NaN")
 
     # --- C11: abnormal 8-K filing frequency (month-end z-score, as-of) ---
+    # Always merged unlagged: the headline fresh-month result attaches the
+    # month-m z at month-end m; a +1d shift would turn it into the (already
+    # tested, near-zero) stale variant. Intramonth availability is C15's job.
     freq_path = CACHE_DIR / "event_freq_8k.parquet"
     if freq_path.exists():
         fz = pd.read_parquet(freq_path)
@@ -270,6 +303,25 @@ def build_feature_panel(pit_universe: bool = False) -> pd.DataFrame:
     else:
         panel["evt8k_freq_z"] = np.nan
         logger.debug("No event_freq_8k.parquet — C11 will be NaN")
+
+    # --- C15: daily 8-K abnormal frequency (NEW variant, not a port of C11:
+    # daily grid + trailing-21-trading-day window + lagged non-overlapping
+    # baseline; see FACTORS.md) ---
+    if daily_signals:
+        freq_d_path = CACHE_DIR / "event_freq_8k_daily.parquet"
+        if freq_d_path.exists():
+            fzd = pd.read_parquet(freq_d_path)
+            fzd["date"] = pd.to_datetime(fzd["date"])
+            fzd = fzd[["ticker", "date", "evt8k_freq_z_d"]].sort_values(["ticker", "date"])
+            panel = _merge_asof_signal(
+                panel, fzd,
+                left_date="date", right_date="date",
+                on="ticker", cols=["evt8k_freq_z_d"],
+                availability_lag_days=availability_lag_days,
+            )
+        else:
+            panel["evt8k_freq_z_d"] = np.nan
+            logger.debug("No event_freq_8k_daily.parquet — C15 will be NaN")
 
     # Drop rows with no target
     panel = panel.dropna(subset=["fwd_return_21d"])
@@ -296,11 +348,17 @@ def _merge_asof_signal(
     right_date: str,
     on: str,
     cols: list[str],
+    availability_lag_days: int = 0,
 ) -> pd.DataFrame:
     """Merge signal data as-of join: for each panel row, carry forward latest signal.
 
     This is critical for avoiding lookahead bias — we only use signals
     that were available at the time of the observation.
+
+    availability_lag_days (plan Item 2): a signal dated t is treated as
+    available from t + lag CALENDAR days, so with lag=1 it first attaches at
+    the next trading close (Friday -> Monday). The merge layer is the SINGLE
+    owner of this lag; builders always stamp rows with the computation date.
     """
     panel = panel.sort_values(left_date)
     signal = signal.sort_values(right_date)
@@ -308,6 +366,8 @@ def _merge_asof_signal(
     # Normalize datetime dtypes (yfinance returns ms, filings use ns)
     signal = signal.rename(columns={right_date: left_date})
     signal[left_date] = pd.to_datetime(signal[left_date]).astype("datetime64[ns]")
+    if availability_lag_days:
+        signal[left_date] = signal[left_date] + pd.Timedelta(days=availability_lag_days)
     panel[left_date] = pd.to_datetime(panel[left_date]).astype("datetime64[ns]")
 
     merged = pd.merge_asof(

@@ -27,12 +27,15 @@ MIN_MONTHS = 12      # need at least this many scored months to trust the IC
 # Panel loading + monthly sampling
 # --------------------------------------------------------------------------- #
 
-def load_panel(path: str | None) -> pd.DataFrame:
+def load_panel(path: str | None, pit: bool = False, lag: int = 0,
+               daily: bool = False) -> pd.DataFrame:
     if path:
         panel = pd.read_parquet(path)
     else:
         from alpha_graph.signals.ml_combiner import build_feature_panel
-        panel = build_feature_panel()
+        panel = build_feature_panel(pit_universe=pit,
+                                    availability_lag_days=lag,
+                                    daily_signals=daily)
     panel["date"] = pd.to_datetime(panel["date"])
     if FWD_COL not in panel.columns:
         raise ValueError(f"panel needs a '{FWD_COL}' column; has {list(panel.columns)}")
@@ -235,11 +238,18 @@ def main():
     p.add_argument("--end", default=None, help="evaluation window end (inclusive), e.g. 2020-12-31")
     p.add_argument("--sector-neutral", action="store_true",
                    help="demean all rank-z series within sector each month")
+    p.add_argument("--pit", action="store_true",
+                   help="PIT S&P 500 membership mask (factorial axis)")
+    p.add_argument("--lag", type=int, default=0,
+                   help="availability lag in calendar days (factorial axis; "
+                        "filing merges on any grid, grid signals under --daily)")
+    p.add_argument("--daily", action="store_true",
+                   help="daily as-of caches for C10 + the C15 daily 8-K variant")
     args = p.parse_args()
     if args.accepted == ["BASELINE"]:
         args.accepted = list(BASELINE)
 
-    panel = load_panel(args.panel)
+    panel = load_panel(args.panel, pit=args.pit, lag=args.lag, daily=args.daily)
     if args.start:
         panel = panel[panel["date"] >= pd.Timestamp(args.start)]
     if args.end:
