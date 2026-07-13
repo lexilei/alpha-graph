@@ -130,13 +130,18 @@ def _load_event_scores(as_of_date: pd.Timestamp | None = None) -> dict[str, floa
     return {}
 
 
-def _load_momentum(as_of_date: pd.Timestamp | None = None, horizon: int = 5) -> dict[str, float]:
-    """Load per-ticker `horizon`-day momentum as of a given date."""
-    market_path = CACHE_DIR / "market_data.parquet"
-    if not market_path.exists():
-        return {}
-
-    market = pd.read_parquet(market_path)
+def _load_momentum(as_of_date: pd.Timestamp | None = None, horizon: int = 5,
+                   market: pd.DataFrame | None = None) -> dict[str, float]:
+    """Per-ticker `horizon`-day momentum as of a date: each ticker's LATEST
+    non-NaN pct_change(horizon) at dates <= as_of_date (stale values carry
+    forward for names that stopped trading). `market` is injectable for tests."""
+    if market is None:
+        market_path = CACHE_DIR / "market_data.parquet"
+        if not market_path.exists():
+            return {}
+        market = pd.read_parquet(market_path)
+    else:
+        market = market.copy()
     market["date"] = pd.to_datetime(market["date"])
 
     if as_of_date is not None:
@@ -174,16 +179,35 @@ def customers_of(graph, ticker: str, min_conf: float = 0.8) -> list[tuple[str, f
     return out
 
 
+def _customer_momentum_at(G, mom: dict[str, float], min_conf: float) -> list[dict]:
+    """One grid date's rows: confidence-weighted mean of each node's
+    customers' momentum. Shared by the monthly and daily builders so the
+    construction is one piece of code (grid is a convention, not a variant)."""
+    rows = []
+    for ticker in G.nodes():
+        cust = [(nb, c) for nb, c in customers_of(G, ticker, min_conf) if nb in mom]
+        if cust:
+            wsum = sum(c for _, c in cust)
+            val = sum(mom[nb] * c for nb, c in cust) / wsum
+        else:
+            val = float("nan")
+        rows.append({"ticker": ticker, "spillover_cust_mom": val})
+    return rows
+
+
 def compute_customer_momentum_timeseries(
     start_date: str | None = None,
     end_date: str | None = None,
     min_conf: float = 0.8,
     horizon: int = 21,
+    relationships: pd.DataFrame | None = None,
+    market: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Factor 20 — confidence-weighted mean of the firm's CUSTOMERS'
-    `horizon`-day momentum (the paper's customer→supplier lag, asymmetric).
+    """C10 — confidence-weighted mean of the firm's CUSTOMERS' `horizon`-day
+    momentum (the paper's customer→supplier lag, asymmetric); month-end grid.
 
-    Saves CACHE_DIR / "graph_customer_momentum.parquet".
+    Saves CACHE_DIR / "graph_customer_momentum.parquet" (only when reading
+    the real caches; injected relationships/market run cache-free for tests).
     """
     from alpha_graph.data.relationships import build_graph
 
@@ -197,18 +221,12 @@ def compute_customer_momentum_timeseries(
 
     rows = []
     for dt in dates:
-        G = build_graph(as_of_date=dt)
+        G = build_graph(relationships=relationships, as_of_date=dt)
         if G.number_of_edges() == 0:
             continue
-        mom = _load_momentum(dt, horizon=horizon)
-        for ticker in G.nodes():
-            cust = [(nb, c) for nb, c in customers_of(G, ticker, min_conf) if nb in mom]
-            if cust:
-                wsum = sum(c for _, c in cust)
-                val = sum(mom[nb] * c for nb, c in cust) / wsum
-            else:
-                val = float("nan")
-            rows.append({"ticker": ticker, "date": dt, "spillover_cust_mom": val})
+        mom = _load_momentum(dt, horizon=horizon, market=market)
+        for r in _customer_momentum_at(G, mom, min_conf):
+            rows.append({**r, "date": dt})
 
     df = pd.DataFrame(rows)
     if df.empty:
@@ -216,10 +234,92 @@ def compute_customer_momentum_timeseries(
         return df
     df["date"] = pd.to_datetime(df["date"])
     df["spillover_cust_mom"] = df["spillover_cust_mom"].round(6)
-    out_path = CACHE_DIR / "graph_customer_momentum.parquet"
-    df.to_parquet(out_path, index=False)
-    n = df["spillover_cust_mom"].notna().sum()
-    logger.info(f"Saved {len(df)} rows ({n} with qualifying customers) to {out_path}")
+    if relationships is None and market is None:
+        out_path = CACHE_DIR / "graph_customer_momentum.parquet"
+        df.to_parquet(out_path, index=False)
+        n = df["spillover_cust_mom"].notna().sum()
+        logger.info(f"Saved {len(df)} rows ({n} with qualifying customers) to {out_path}")
+    return df
+
+
+def compute_customer_momentum_daily(
+    start_date: str = "2012-06-29",
+    end_date: str | None = None,
+    min_conf: float = 0.8,
+    horizon: int = 21,
+    relationships: pd.DataFrame | None = None,
+    market: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """C10 on the daily as-of grid — construction identical to the monthly
+    builder (edges from filings <= t, customers' latest momentum <= t), grid
+    is the only change, so it keeps the C10 registry ID. Rows are stamped
+    with the computation date t; availability lag belongs to the panel merge
+    (plan Item 2).
+
+    The per-day loop loads everything once: momentum as a ffilled wide frame
+    (identical "latest <= t" semantics to _load_momentum) and the edge list
+    sorted by filing date, rebuilding the graph only on days the edge count
+    changes. Saves graph_customer_momentum_daily.parquet on real runs.
+    """
+    from alpha_graph.data.relationships import build_graph
+
+    if relationships is None:
+        rel_path = CACHE_DIR / "relationships.parquet"
+        if not rel_path.exists():
+            logger.error("No relationships data. Run extraction first.")
+            return pd.DataFrame()
+        rel = pd.read_parquet(rel_path)
+    else:
+        rel = relationships.copy()
+    rel["filing_date"] = pd.to_datetime(rel["filing_date"])
+    rel = rel.sort_values("filing_date").reset_index(drop=True)
+    fdates = rel["filing_date"].to_numpy()
+
+    if market is None:
+        market = pd.read_parquet(CACHE_DIR / "market_data.parquet")
+    market = market.copy()
+    market["date"] = pd.to_datetime(market["date"])
+    market = market.sort_values(["ticker", "date"])
+    market["mom"] = market.groupby("ticker")["close"].transform(
+        lambda s: s.pct_change(horizon)
+    )
+    wide = (market.pivot_table(index="date", columns="ticker", values="mom",
+                               aggfunc="last")
+                  .sort_index().ffill())
+
+    cal = wide.index
+    cal = cal[cal >= pd.Timestamp(start_date)]
+    if end_date is not None:
+        cal = cal[cal <= pd.Timestamp(end_date)]
+    logger.info(f"Customer-momentum spillover for {len(cal)} trading days "
+                f"(conf>={min_conf}, horizon={horizon}d)...")
+
+    rows = []
+    G, prev_n = None, -1
+    for dt in cal:
+        n_edges = int(np.searchsorted(fdates, dt.to_datetime64(), side="right"))
+        if n_edges == 0:
+            continue
+        if n_edges != prev_n:
+            G = build_graph(relationships=rel.iloc[:n_edges])
+            prev_n = n_edges
+        mom = wide.loc[dt].dropna().to_dict()
+        for r in _customer_momentum_at(G, mom, min_conf):
+            rows.append({**r, "date": dt})
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        logger.warning("No daily customer-momentum rows computed")
+        return df
+    df["date"] = pd.to_datetime(df["date"])
+    df["spillover_cust_mom"] = df["spillover_cust_mom"].round(6)
+    df = df[["ticker", "date", "spillover_cust_mom"]]
+    if relationships is None:
+        out_path = CACHE_DIR / "graph_customer_momentum_daily.parquet"
+        df.to_parquet(out_path, index=False)
+        n = df["spillover_cust_mom"].notna().sum()
+        logger.info(f"Saved {len(df)} daily rows ({n} with qualifying "
+                    f"customers) to {out_path}")
     return df
 
 
@@ -333,12 +433,17 @@ def main():
     )
     parser.add_argument(
         "--customer-momentum", action="store_true",
-        help="Factor 20: customers-only momentum spillover time series"
+        help="C10: customers-only momentum spillover time series (monthly)"
+    )
+    parser.add_argument(
+        "--daily", action="store_true",
+        help="with --customer-momentum: daily as-of grid (plan Item 4)"
     )
     args = parser.parse_args()
 
     if args.customer_momentum:
-        df = compute_customer_momentum_timeseries()
+        df = (compute_customer_momentum_daily() if args.daily
+              else compute_customer_momentum_timeseries())
         if not df.empty:
             print(df.dropna().tail(10).to_string(index=False))
         return
