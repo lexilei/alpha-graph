@@ -79,9 +79,9 @@ FEATURE_COLS = [
 
 
 def build_feature_panel(
-    pit_universe: bool = False,
-    availability_lag_days: int = 0,
-    daily_signals: bool = False,
+    pit_universe: bool = True,
+    availability_lag_days: int = 1,
+    daily_signals: bool = True,
     lag_controls: bool = False,
 ) -> pd.DataFrame:
     """Assemble all available signals into a single feature panel.
@@ -109,8 +109,10 @@ def build_feature_panel(
     checks whether candidate-vs-control comparisons move when the controls
     are held to the same t+1 availability standard. Default False.
 
-    v0 convention (to be frozen after the factorial): pit_universe=True,
-    availability_lag_days=1, daily_signals=True.
+    v0 convention (frozen 2026-07-13 after the factorial; see
+    reports/factorial_v0.md): pit_universe=True, availability_lag_days=1,
+    daily_signals=True — the defaults above. lag_controls stays False
+    (factorial sensitivity switch, not part of v0).
     """
     market_path = CACHE_DIR / "market_data.parquet"
     if not market_path.exists():
@@ -179,7 +181,7 @@ def build_feature_panel(
     # lookbacks never span membership gaps (review F1: masking first gave
     # re-entrant names +297% "momentum" across their gap and NaN'd every
     # joiner's first year of 12-1 momentum). Forward-bias fix only; survivor
-    # bias remains — see data/pit_universe.py. Default False until v0 freeze.
+    # bias remains — see data/pit_universe.py. Default True (v0, 2026-07-13).
     if pit_universe:
         from alpha_graph.data.pit_universe import load_membership, membership_mask
         mask = membership_mask(panel, load_membership())

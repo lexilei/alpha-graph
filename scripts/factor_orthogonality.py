@@ -27,8 +27,8 @@ MIN_MONTHS = 12      # need at least this many scored months to trust the IC
 # Panel loading + monthly sampling
 # --------------------------------------------------------------------------- #
 
-def load_panel(path: str | None, pit: bool = False, lag: int = 0,
-               daily: bool = False, lag_controls: bool = False) -> pd.DataFrame:
+def load_panel(path: str | None, pit: bool = True, lag: int = 1,
+               daily: bool = True, lag_controls: bool = False) -> pd.DataFrame:
     if path:
         panel = pd.read_parquet(path)
     else:
@@ -239,13 +239,19 @@ def main():
     p.add_argument("--end", default=None, help="evaluation window end (inclusive), e.g. 2020-12-31")
     p.add_argument("--sector-neutral", action="store_true",
                    help="demean all rank-z series within sector each month")
-    p.add_argument("--pit", action="store_true",
-                   help="PIT S&P 500 membership mask (factorial axis)")
-    p.add_argument("--lag", type=int, default=0,
-                   help="availability lag in calendar days (factorial axis; "
-                        "filing merges on any grid, grid signals under --daily)")
-    p.add_argument("--daily", action="store_true",
-                   help="daily as-of caches for C10 + the C15 daily 8-K variant")
+    p.add_argument("--pit", action=argparse.BooleanOptionalAction, default=True,
+                   help="PIT S&P 500 membership mask (default ON — frozen v0 "
+                        "convention 2026-07-13; --no-pit is for attribution "
+                        "work only)")
+    p.add_argument("--lag", type=int, default=1,
+                   help="availability lag in calendar days (default 1 — frozen "
+                        "v0; applies to filing merges on any grid, grid "
+                        "signals under --daily; --lag 0 is for attribution "
+                        "work only)")
+    p.add_argument("--daily", action=argparse.BooleanOptionalAction, default=True,
+                   help="daily as-of caches for C10 + the C15 daily 8-K "
+                        "variant (default ON — frozen v0; --no-daily is for "
+                        "attribution work only)")
     p.add_argument("--lag-controls", action="store_true",
                    help="shift the 6 in-panel price/volume controls by one "
                         "trading day (factorial sensitivity cell)")
