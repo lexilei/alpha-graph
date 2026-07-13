@@ -113,5 +113,25 @@ measurements of this single hypothesis, not independent bets.
 
 | 2026-07-13 | **build_graph dedup nondeterminism fixed.** The relationships parquet has 290 same-day duplicate groups (same source/target/filing_date, differing relation/confidence); the dedup's unstable single-key sort made the survivor depend on input row order, so the monthly and daily C10 builders got different edges — 1,217/29,048 month-end value mismatches. Fixed with a stable total order (filing_date, then confidence, then relation — latest/highest/lexicographically-last wins); regression test pins order-independence; both C10 caches rebuilt (grid invariance now 0/29,062). | Prior C10 numbers were computed on an arbitrary tie order — deltas are tie-edge-sized; full recompute lands with the factorial. |
 
+| 2026-07-13 | factorial 1/19: C1 vs BASELINE, sector-neutral, pit=F lag=0 grid=monthly | sn incr t=+1.48 (IC +0.0066), sn raw t=+2.11, 168m, xs 451, cov 89.8% — reproduces clean-C1 ledger 1.5 |
+| 2026-07-13 | factorial 2/19: C1 vs BASELINE, sn, pit=F lag=1 grid=monthly | sn incr t=+1.47 (IC +0.0065), sn raw t=+2.08, 168m, xs 451, cov 89.7% — lag ≈ inert for C1 on monthly sampling |
+| 2026-07-13 | factorial 3/19: C1 vs BASELINE, sn, pit=T lag=0 grid=monthly | sn incr t=+0.29 (IC +0.0014), sn raw t=+0.74, 168m, xs 382, cov 92.5% |
+| 2026-07-13 | factorial 4/19: C1 vs BASELINE, sn, pit=T lag=1 grid=monthly | sn incr t=+0.24 (IC +0.0011), sn raw t=+0.70, 168m, xs 382, cov 92.5% — **v0 cell** (C1 grid-inert: eval inputs verified bit-identical on the daily panel) |
+| 2026-07-13 | factorial 5/19: C10 vs BASELINE, sn, pit=F lag=0(≡1, verified) grid=monthly | sn incr t=+1.40 (IC +0.0093), sn raw t=+1.68, 165m, xs 178, cov 34.7% — post-dedup-rebuild (was +1.54 pre-fix; tie-edge-sized delta as predicted) |
+| 2026-07-13 | factorial 6/19: C10 vs BASELINE, sn, pit=T lag=0(≡1) grid=monthly | sn incr t=+1.05 (IC +0.0076), sn raw t=+1.01, 165m, xs 160, cov 38.1% |
+| 2026-07-13 | factorial 7/19: C10 vs BASELINE, sn, pit=F lag=0 grid=daily | sn incr t=+1.44 (IC +0.0097), sn raw t=+1.57, 166m, xs 177, cov 34.8% |
+| 2026-07-13 | factorial 8/19: C10 vs BASELINE, sn, pit=F lag=1 grid=daily | sn incr t=+1.05 (IC +0.0070), sn raw t=+1.23, 165m, xs 178, cov 34.7% |
+| 2026-07-13 | factorial 9/19: C10 vs BASELINE, sn, pit=T lag=0 grid=daily | sn incr t=+0.91 (IC +0.0064), sn raw t=+1.02, 166m, xs 160, cov 38.2% |
+| 2026-07-13 | factorial 10/19: C10 vs BASELINE, sn, pit=T lag=1 grid=daily | sn incr t=+0.21 (IC +0.0015), sn raw t=+0.33, 165m, xs 161, cov 38.1% — **v0 cell** |
+| 2026-07-13 | factorial 11/19: C11 vs BASELINE, sn, pit=F (lag+grid verified inert for C11) | sn incr t=−2.81 (IC −0.0110), sn raw t=−3.20, 168m, xs 458, cov 96.0% — reproduces the registry headline exactly |
+| 2026-07-13 | factorial 12/19: C11 vs BASELINE, sn, pit=T (lag+grid inert) | sn incr t=−2.00 (IC −0.0089), sn raw t=−2.42, 168m, xs 386, cov 97.4% — **v0-convention C11** |
+| 2026-07-13 | factorial 13/19: C15 vs BASELINE, sn, pit=F lag=0 grid=daily | sn incr t=−3.29 (IC −0.0138), sn raw t=−3.47, 168m, xs 458, cov 93.1% — exceeds prior max headline \|t\| (C11 −2.81); pit=F cell, attribution only |
+| 2026-07-13 | factorial 14/19: C15 vs BASELINE, sn, pit=F lag=1 grid=daily | sn incr t=−3.67 (IC −0.0156), sn raw t=−3.72, 168m, xs 458, cov 93.1% — exceeds prior max \|t\|; pit=F cell; t+1 strengthens C15 |
+| 2026-07-13 | factorial 15/19: C15 vs BASELINE, sn, pit=T lag=0 grid=daily | sn incr t=−1.85 (IC −0.0090), sn raw t=−2.35, 168m, xs 386, cov 95.0% |
+| 2026-07-13 | factorial 16/19: C15 vs BASELINE, sn, pit=T lag=1 grid=daily | sn incr t=−2.29 (IC −0.0111), sn raw t=−2.63, 168m, xs 386, cov 95.0% — **v0 cell**, C15's first headline |
+| 2026-07-13 | factorial 17/19 (sensitivity): C1 vs BASELINE, sn, v0 panel + controls lagged 1 td (lag_controls) | sn incr t=+0.10 (IC +0.0005), sn raw t=+0.70, 168m, xs 382 — control timing moves C1 −0.14 |
+| 2026-07-13 | factorial 18/19 (sensitivity): C10 vs BASELINE, sn, v0 panel + controls lagged | sn incr t=−0.05 (IC −0.0003), sn raw t=+0.34, 165m, xs 161 — moves C10 −0.26, through zero |
+| 2026-07-13 | factorial 19/19 (sensitivity): C15 vs BASELINE, sn, v0 panel + controls lagged | sn incr t=−2.33 (IC −0.0112), sn raw t=−2.63, 168m, xs 386 — C15 insensitive to control timing (−0.04) |
+
 Hyperparameter variants (e.g. C6 MATCH_THRESH, chunk size) get ledger
 lines too when swept.
