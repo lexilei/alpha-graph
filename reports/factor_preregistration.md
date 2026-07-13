@@ -16,6 +16,34 @@ restricts nothing; it preserves the option to make a strong claim later
 
 Refer to factors by their permanent IDs (see `FACTORS.md`).
 
+## Current accounting (2026-07-13)
+
+- **Counting rule.** N = every ledger row that records a computed evaluation
+  statistic — including SUPERSEDED rows (they were looks; voiding a number
+  does not un-spend it) — excluding pure registration lines and
+  infrastructure/bug-fix notes.
+- **Count.** 52 ledger rows as of today (including the 19 factorial cells
+  and the 2 v0 re-evals below). Excluded: 8 — 1 pure registration (C10,
+  2026-07-08); 5 infrastructure/bug-fix rows (B5/B6+sector controls
+  2026-07-07 "conditioning, not trials"; PIT implementation 2026-07-11;
+  ic_tools/pit_universe code review 2026-07-11; RENAME_MAP audit 2026-07-11;
+  build_graph dedup fix 2026-07-13); 2 multiple-testing accounting notes
+  (2026-07-09, tallies of already-counted looks). **N = 44.**
+- **Ceiling.** Selection here is over |t| (signs are not pre-registered), so
+  the bar is the two-sided ceiling `alpha_graph.eval.ic_tools.emax_null(2N)`
+  = emax_null(88) = **2.49**. The counting judgment calls barely move it:
+  counting all 52 rows gives 2.54; also dropping the two borderline counted
+  rows (the superseded 3-way A/B, which records no number of its own, and
+  the C8–C9 factor-correlation diagnostic, which touches no returns) gives
+  2.47.
+- **Binding rule.** This ceiling is the significance bar for ANY external
+  claim from this ledger. Effective-N (correlation-based, ~7-9 independent
+  bets among the factors) describes redundancy only and is never the
+  denominator.
+
+As of this date no factor clears the bar (strongest: C15 at v0 −2.29 vs
+ceiling ≈2.49).
+
 ## Economic hypothesis (one, not many)
 
 Lazy Prices (Cohen-Malloy-Nguyen 2020): deliberate change in a firm's periodic
@@ -132,6 +160,8 @@ measurements of this single hypothesis, not independent bets.
 | 2026-07-13 | factorial 17/19 (sensitivity): C1 vs BASELINE, sn, v0 panel + controls lagged 1 td (lag_controls) | sn incr t=+0.10 (IC +0.0005), sn raw t=+0.70, 168m, xs 382 — control timing moves C1 −0.14 |
 | 2026-07-13 | factorial 18/19 (sensitivity): C10 vs BASELINE, sn, v0 panel + controls lagged | sn incr t=−0.05 (IC −0.0003), sn raw t=+0.34, 165m, xs 161 — moves C10 −0.26, through zero |
 | 2026-07-13 | factorial 19/19 (sensitivity): C15 vs BASELINE, sn, v0 panel + controls lagged | sn incr t=−2.33 (IC −0.0112), sn raw t=−2.63, 168m, xs 386 — C15 insensitive to control timing (−0.04) |
+| 2026-07-13 | v0 re-eval: C5 embed_sim_10k_bge vs BASELINE, sn, saved v0 panel (pit=T lag=1 grid=daily) | sn incr t=+1.43 (IC +0.0065, ICIR +0.11), sn raw t=+1.58 (IC +0.0074), 168m, xs 382, cov 92.5% — was sn +2.08 pre-PIT (2026-07-09); same PIT attenuation as C1; below the 1.5 borderline bar → rejected under v0 |
+| 2026-07-13 | v0 re-eval: C6 new_content_frac vs BASELINE, sn, saved v0 panel | sn incr t=−0.73 (IC −0.0034, ICIR −0.06), sn raw t=−0.57 (IC −0.0029), 168m, xs 382, cov 92.5% — was sn −1.72 pre-PIT (2026-07-09) → rejected under v0 |
 
 Hyperparameter variants (e.g. C6 MATCH_THRESH, chunk size) get ledger
 lines too when swept.
