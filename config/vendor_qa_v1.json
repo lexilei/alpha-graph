@@ -17,5 +17,6 @@
   "calendar_endpoint_gap_days_max": 7,
   "calendar_internal_gap_days_max": 7,
   "calendar_expected_dates": 3716,
-  "calendar_expected_sha256": "74e37a8ac351a3b8efd1f74bdfc7c1b921688826b49b5e1e9f5c58662b144ad2"
+  "calendar_expected_sha256": "74e37a8ac351a3b8efd1f74bdfc7c1b921688826b49b5e1e9f5c58662b144ad2",
+  "_calendar_expected_provenance": "distinct data/cache/market_data.parquet dates in [2011-04-06, 2026-01-14] (membership end); sha256 over newline-joined YYYY-MM-DD dates plus trailing newline; recompute when the panel or membership window changes"
 }

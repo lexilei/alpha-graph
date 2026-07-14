@@ -933,14 +933,22 @@ def test_known_cases_require_evidenced_manual_approval(tmp_path):
     assert blank.iloc[0]["approval_reason"] == "blank_evidence"
 
 
-def test_blind_qa_end_to_end_synthetic_snapshot(tmp_path):
-    names = [f"T{i:03d}" for i in range(490)]
+def _synthetic_audit_kwargs(
+    tmp_path,
+    *,
+    names_count=3,
+    threshold_overrides=None,
+    tickers=None,
+    prices=None,
+    actions=None,
+):
+    """Build a complete synthetic snapshot plus audit inputs under tmp_path."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    names = [f"T{i:03d}" for i in range(names_count)]
     dates = pd.to_datetime(["2020-01-02", "2020-01-03"])
     snapshot = "synthetic"
     raw_root = tmp_path / "raw"
     staged_root = tmp_path / "staged"
-    raw_snapshot = raw_root / snapshot
-    staged_snapshot = staged_root / snapshot
 
     membership = tmp_path / "membership.csv"
     pd.DataFrame({
@@ -959,61 +967,63 @@ def test_blind_qa_end_to_end_synthetic_snapshot(tmp_path):
     ], ignore_index=True)
     panel_frame.to_parquet(panel, index=False)
 
-    tickers = pd.DataFrame({
-        "table": "SEP",
-        "permaticker": range(1, 491),
-        "ticker": names,
-        "name": names,
-        "firstpricedate": pd.Timestamp("2010-01-01"),
-        "lastpricedate": pd.Timestamp("2030-01-01"),
-    })
-    prices = pd.DataFrame([
-        {
-            "ticker": ticker,
-            "date": d,
-            "open": 10.0,
-            "high": 10.2,
-            "low": 9.9,
-            "close": 10.1,
-            "volume": 1000,
-            "closeadj": 10.1,
-            "closeunadj": 10.1,
-            "dividends": 0.0,
-            "lastupdated": dates[-1],
-        }
-        for ticker in names
-        for d in dates
-    ])
+    if tickers is None:
+        tickers = pd.DataFrame({
+            "table": "SEP",
+            "permaticker": range(1, names_count + 1),
+            "ticker": names,
+            "name": names,
+            "firstpricedate": pd.Timestamp("2010-01-01"),
+            "lastpricedate": pd.Timestamp("2030-01-01"),
+        })
+    if prices is None:
+        prices = pd.DataFrame([
+            {
+                "ticker": ticker,
+                "date": d,
+                "open": 10.0,
+                "high": 10.2,
+                "low": 9.9,
+                "close": 10.1,
+                "volume": 1000,
+                "closeadj": 10.1,
+                "closeunadj": 10.1,
+                "dividends": 0.0,
+                "lastupdated": dates[-1],
+            }
+            for ticker in names
+            for d in dates
+        ])
     sp500 = pd.DataFrame({
         "date": dates[-1],
         "ticker": names,
         "action": "current",
     })
-    actions = pd.DataFrame({
-        "date": [dates[0]],
-        "ticker": [names[0]],
-        "name": [names[0]],
-        "action": ["dividend"],
-        "contraname": [None],
-        "contraticker": [None],
-    })
-    _write_complete_snapshot(raw_snapshot, staged_snapshot, {
+    if actions is None:
+        actions = pd.DataFrame({
+            "date": [dates[0]],
+            "ticker": [names[0]],
+            "name": [names[0]],
+            "action": ["dividend"],
+            "contraname": [None],
+            "contraticker": [None],
+        })
+    _write_complete_snapshot(raw_root / snapshot, staged_root / snapshot, {
         "TICKERS": tickers,
         "SEP": prices,
         "SP500": sp500,
         "ACTIONS": actions,
     })
 
-    thresholds = tmp_path / "thresholds.json"
-    thresholds.write_text(json.dumps({
+    thresholds_value = {
         "schema_version": 1,
         "departed_identity_coverage_min": 1.0,
         "departed_interval_price_coverage_min": 1.0,
         "member_day_price_coverage_min": 1.0,
         "member_day_price_coverage_by_year_min": 1.0,
         "membership_month_end_jaccard_min": 1.0,
-        "cross_section_min": 490,
-        "cross_section_max": 515,
+        "cross_section_min": names_count,
+        "cross_section_max": max(names_count, 515),
         "unresolved_primary_key_duplicates_max": 0,
         "unresolved_identity_ambiguities_max": 0,
         "known_case_approval_rate_min": 0.0,
@@ -1027,22 +1037,30 @@ def test_blind_qa_end_to_end_synthetic_snapshot(tmp_path):
         "calendar_expected_sha256": hashlib.sha256(
             b"2020-01-02\n2020-01-03\n"
         ).hexdigest(),
-    }))
+    }
+    thresholds_value.update(threshold_overrides or {})
+    thresholds = tmp_path / "thresholds.json"
+    thresholds.write_text(json.dumps(thresholds_value))
     cases = tmp_path / "cases.json"
     cases.write_text(json.dumps({"schema_version": 1, "cases": []}))
-    output = tmp_path / "qa"
-    run = audit_snapshot(
-        snapshot=snapshot,
-        staged_root=staged_root,
-        raw_root=raw_root,
-        membership_csv=membership,
-        panel_path=panel,
-        thresholds_path=thresholds,
-        cases_path=cases,
-        output_dir=output,
-        start="2020-01-02",
-        enforce_license=False,
-    )
+    return {
+        "snapshot": snapshot,
+        "staged_root": staged_root,
+        "raw_root": raw_root,
+        "membership_csv": membership,
+        "panel_path": panel,
+        "thresholds_path": thresholds,
+        "cases_path": cases,
+        "output_dir": tmp_path / "qa",
+        "start": "2020-01-02",
+        "enforce_license": False,
+    }
+
+
+def test_blind_qa_end_to_end_synthetic_snapshot(tmp_path):
+    kwargs = _synthetic_audit_kwargs(tmp_path, names_count=490)
+    output = kwargs["output_dir"]
+    run = audit_snapshot(**kwargs)
     assert run["status"] == "NONCANONICAL"
     assert run["gate_status"] == "PASS"
     assert run["departed_target"]["target"] == 1
@@ -1052,15 +1070,32 @@ def test_blind_qa_end_to_end_synthetic_snapshot(tmp_path):
     assert "Status: **NONCANONICAL**" in (output / "report.md").read_text()
 
     with pytest.raises(SharadarError, match="must not be inside raw or staged"):
-        audit_snapshot(
-            snapshot=snapshot,
-            staged_root=staged_root,
-            raw_root=raw_root,
-            membership_csv=membership,
-            panel_path=panel,
-            thresholds_path=thresholds,
-            cases_path=cases,
-            output_dir=raw_snapshot,
-            start="2020-01-02",
-            enforce_license=False,
-        )
+        audit_snapshot(**{
+            **kwargs,
+            "output_dir": kwargs["raw_root"] / kwargs["snapshot"],
+        })
+
+
+def test_audit_fails_on_calendar_expectation_mismatch(tmp_path):
+    count_kwargs = _synthetic_audit_kwargs(
+        tmp_path / "count",
+        threshold_overrides={"calendar_expected_dates": 3},
+    )
+    run = audit_snapshot(**count_kwargs)
+    assert run["gate_status"] == "FAIL"
+    issues = pd.read_parquet(count_kwargs["output_dir"] / "issues.parquet")
+    detail = issues[issues["gate"] == "calendar_expectation"]
+    assert len(detail) == 1
+    assert detail.iloc[0]["severity"] == "high"
+
+    hash_kwargs = _synthetic_audit_kwargs(
+        tmp_path / "hash",
+        threshold_overrides={"calendar_expected_sha256": "0" * 64},
+    )
+    run = audit_snapshot(**hash_kwargs)
+    assert run["gate_status"] == "FAIL"
+    assert run["price_coverage"]["calendar_sha256"] == hashlib.sha256(
+        b"2020-01-02\n2020-01-03\n"
+    ).hexdigest()
+    issues = pd.read_parquet(hash_kwargs["output_dir"] / "issues.parquet")
+    assert (issues["gate"] == "calendar_expectation").any()

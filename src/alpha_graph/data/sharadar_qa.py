@@ -1504,6 +1504,22 @@ def _audit_snapshot_unlocked(
             "detail": f"internal gap {calendar_internal_gap}d > "
                       f"{thresholds['calendar_internal_gap_days_max']}d",
         })
+    if len(calendar) != thresholds["calendar_expected_dates"]:
+        issues_list.append({
+            "gate": "calendar_expectation",
+            "severity": "high",
+            "subject": "market_panel",
+            "detail": f"{len(calendar)} calendar dates != expected "
+                      f"{thresholds['calendar_expected_dates']}",
+        })
+    if calendar_stats["sha256"] != thresholds["calendar_expected_sha256"]:
+        issues_list.append({
+            "gate": "calendar_expectation",
+            "severity": "high",
+            "subject": "market_panel",
+            "detail": f"calendar sha256 {calendar_stats['sha256']} != expected "
+                      f"{thresholds['calendar_expected_sha256']}",
+        })
     if departed_summary["coverage"] < thresholds["departed_identity_coverage_min"]:
         issues_list.append({
             "gate": "departed_identity_coverage",
@@ -1653,6 +1669,7 @@ def _audit_snapshot_unlocked(
             **price_summary,
             "calendar_source": "union of independent market-panel dates",
             "calendar_dates": len(calendar),
+            "calendar_sha256": calendar_stats["sha256"],
             "calendar_weekday_coverage": calendar_weekday_coverage,
             "calendar_min_month_weekday_coverage": calendar_min_month_coverage,
             "calendar_start_gap_days": calendar_start_gap,
