@@ -42,21 +42,26 @@ Refer to factors by their permanent IDs (see `FACTORS.md`).
   bets among the factors) describes redundancy only and is never the
   denominator.
 
-**Update (2026-07-13, end of day).** 15 further looks landed after the count
-above: the 3 gate-2 tradeable cells, C17's 5, C16's 3 + 3 (original and
-corrected timing both count — the correction re-ran the selection), C18's 1.
-**N = 71, ceiling emax_null(142) = 2.65** (68 → 2.64 / 74 → 2.67 under the
-same judgment-call variations). Status against the bar: **C16 corrected
-full-sample alpha HAC t = +3.33 is the first result to clear the
-full-ledger ceiling** — with its stated caveats (event portfolio, no cost
-model yet, residual joint-filing entity contamination, beta ≈ 1 long-only);
-C17 +2.09, C15 −2.29, C11 −2.00 remain below it. Registry still shows 0
-accepted: clearing the ceiling is necessary, not sufficient — promotion
-additionally requires the economics gates (cost-doubling, break-even,
-forward period) that killed C15.
-
-As of the morning count no factor cleared the bar; as of end of day C16
-(corrected) clears the statistical bar and awaits the economics gates.
+**Update (2026-07-13, end of day; re-graded after the five-lens review).**
+17 further looks landed after the count above: the 3 gate-2 tradeable cells,
+C17's 5, C16's 3 + 3 + the first-day decomposition + the review placebo,
+C18's 1. **N = 73, ceiling emax_null(146) = 2.66.** Status against the bar:
+C16-corrected full-sample alpha HAC t = +3.33 exceeds this expected
+best-of-N noise level but is treated as **NOT clearing the statistical
+bar**, for three review findings: (1) a shifted-event placebo (+126td,
+timing destroyed) reproduces α +8.18%/yr t +3.16 — the statistic measures
+the composition of insider-bought stocks, not event timing, so its null is
+not zero-centered; (2) even at face value, 3.33 < ≈3.4, the 5% family-wise
+threshold at N=73 (the E[max] ceiling is a mean, not a significance bar);
+(3) row-based counting understates statistic-level looks (≈150–185 →
+ceiling ≈2.9). C16's path forward, to be pinned as registered variants
+before running: a matched-composition null (shifted-event or
+characteristics-matched calendar-time control) and a routine-buyer screen
+(ED alone = 13.4% of events, active 88.9% of days; top-10 tickers 28.4%).
+C17 +2.09, C15 −2.29, C11 −2.00 remain below the ceiling. Registry shows
+**0 accepted**; nothing currently clears the statistical bar, and clearing
+it would still only be necessary, not sufficient (the economics gates
+killed C15).
 
 ## Economic hypothesis (one, not many)
 
@@ -234,3 +239,5 @@ lines too when swept.
 | 2026-07-13 | **C16 look 1/3 (corrected timing, full sample)**: same calendar-time EW long-only portfolio, first credit close(d+1)→close(d+2) (2011-04-06→2026-04-02, 3,770d), FF5+MOM excess=False | alpha **+7.67%/yr (HAC t +3.33)**, mkt beta +1.001, R² 0.829; avg active 16.2, days with ≥1 name 99.9% — still clears the pinned full-sample bar (t ≥ +2.0) |
 | 2026-07-13 | C16 look 2/3 (corrected timing, first half 2011-04-06→2018-10-03, 1,887d): same regression | alpha +7.27%/yr (HAC t +2.80), mkt beta +1.057, R² 0.847; avg active 15.6 — positive half-sample alpha |
 | 2026-07-13 | C16 look 3/3 (corrected timing, second half 2018-10-04→2026-04-02, 1,883d): same regression | alpha +7.48%/yr (HAC t +1.99), mkt beta +0.985, R² 0.822; avg active 16.8 — positive half-sample alpha → **C16 stays candidate under the corrected timing**; the corrected set is the headline, the original-timing set is labeled "includes the uncapturable filing-day overnight" |
+| 2026-07-13 | **C16 review placebo (a look; five-lens review)**: every event date shifted +126 trading days — timing information destroyed, identical corrected-timing construction and FF5+MOM regression | α +8.18%/yr, HAC t **+3.16** (protocol-faithful full window; +6.46%/yr, t +2.89 on the placebo's populated window). Statistically indistinguishable from the headline (+7.67%, +3.33): the statistic measures the COMPOSITION of insider-bought stocks (EW small/value/anti-momentum habitat; MOM loading −0.27, t −7.9), not event timing. Its null is not zero-centered. |
+| 2026-07-13 | **Accounting correction (not a new look)**: the C16 first-day-decomposition row (mean +0.51%/event, n=1,158) records computed return statistics and counts as a look under the stated rule; with it and the placebo, **N = 73**, two-sided ceiling emax_null(146) = **2.66**. Also noted by review: row-based counting understates statistic-level looks (several early rows each carry 6–18 constructions' t's; statistic-level tally ≈150–185 → ceiling ≈2.90–2.95), and the E[max] ceiling is a mean, not a significance bar — the 5% family-wise threshold at N=73 is ≈3.4. | recorded |
