@@ -40,9 +40,13 @@ from alpha_graph.data.sharadar_qa import (
     membership_reconciliation,
     prepare_vendor_tickers,
     price_coverage,
+    price_jump_review,
     resolve_panel_identities,
     resolve_identity_intervals,
     resolve_sep_rows,
+    staged_table_sha256,
+    unexplained_price_jumps,
+    verify_price_jumps,
 )
 
 
@@ -1133,6 +1137,141 @@ def test_audit_quarantines_ambiguous_sep_rows(tmp_path):
     quarantine_issue = issues[issues["gate"] == "sep_row_quarantine"]
     assert len(quarantine_issue) == 1
     assert quarantine_issue.iloc[0]["severity"] == "high"
+
+
+def test_price_jump_math_verification_rejects_ordinary_dividends(tmp_path):
+    prices = pd.DataFrame({
+        "ticker": ["SPL", "SPL", "RSP", "RSP", "DIV", "DIV", "SPC", "SPC"],
+        "date": pd.to_datetime(["2020-01-02", "2020-01-03"] * 4),
+        "closeunadj": [100.0, 48.0, 10.0, 100.0, 100.0, 40.0, 100.0, 45.0],
+        "dividends": [0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 55.0],
+    })
+    actions = pd.DataFrame({
+        "ticker": ["SPL", "RSP", "DIV"],
+        "date": pd.to_datetime(["2020-01-03"] * 3),
+        "action": ["split", "split", "dividend"],
+        "value": [2.0, 0.1, 0.5],
+    })
+    jumps = unexplained_price_jumps(prices, actions)
+    assert sorted(jumps["ticker"]) == ["DIV", "RSP", "SPC", "SPL"]
+    verified = verify_price_jumps(jumps, actions, prices).set_index("ticker")
+    assert verified.loc["SPL", "verified_method"] == "split_math"
+    assert verified.loc["RSP", "verified_method"] == "split_math"
+    assert verified.loc["SPC", "verified_method"] == "distribution_math"
+    # A nearby ordinary dividend must not clear a 60% move.
+    assert not bool(verified.loc["DIV", "math_verified"])
+
+    # Without the ACTIONS value column no split can be math-verified.
+    valueless = verify_price_jumps(
+        jumps, actions.drop(columns="value"), prices
+    ).set_index("ticker")
+    assert not bool(valueless.loc["SPL", "math_verified"])
+    assert bool(valueless.loc["SPC", "math_verified"])
+
+    reviewed = price_jump_review(
+        verified.reset_index(),
+        None,
+        snapshot="snap-1",
+        tickers_sha256="tick-hash",
+    ).set_index("ticker")
+    assert reviewed.loc["SPL", "manual_status"] == "auto_verified"
+    assert reviewed.loc["DIV", "manual_status"] == "review_required"
+
+    approvals = tmp_path / "jump_approvals.csv"
+    pd.DataFrame({
+        "jump_id": [reviewed.loc["DIV", "jump_id"]],
+        "status": ["approved"],
+        "evidence": ["verified against the exchange notice"],
+        "snapshot": ["snap-1"],
+        "observed_sha256": [reviewed.loc["DIV", "observed_sha256"]],
+        "tickers_sha256": ["tick-hash"],
+    }).to_csv(approvals, index=False)
+    approved = price_jump_review(
+        verified.reset_index(),
+        approvals,
+        snapshot="snap-1",
+        tickers_sha256="tick-hash",
+    ).set_index("ticker")
+    assert approved.loc["DIV", "manual_status"] == "approved"
+    stale = price_jump_review(
+        verified.reset_index(),
+        approvals,
+        snapshot="snap-2",
+        tickers_sha256="tick-hash",
+    ).set_index("ticker")
+    assert stale.loc["DIV", "manual_status"] == "review_required"
+
+
+def test_audit_gates_unexplained_jump_until_bound_approval(tmp_path):
+    dates = pd.to_datetime(["2020-01-02", "2020-01-03"])
+
+    def price_row(ticker, day, closeunadj, dividends=0.0):
+        return {
+            "ticker": ticker,
+            "date": day,
+            "open": closeunadj,
+            "high": closeunadj,
+            "low": closeunadj,
+            "close": closeunadj,
+            "volume": 1000,
+            "closeadj": 10.0,
+            "closeunadj": closeunadj,
+            "dividends": dividends,
+            "lastupdated": dates[-1],
+        }
+
+    prices = pd.DataFrame([
+        price_row("T000", dates[0], 10.0),
+        price_row("T000", dates[1], 10.0),
+        # True 2:1 split with a matching ACTIONS value: auto-verified.
+        price_row("T001", dates[0], 100.0),
+        price_row("T001", dates[1], 48.0),
+        # 60% drop beside an ordinary dividend: requires manual approval.
+        price_row("T002", dates[0], 100.0),
+        price_row("T002", dates[1], 40.0, dividends=0.5),
+    ])
+    actions = pd.DataFrame({
+        "date": [dates[1], dates[1]],
+        "ticker": ["T001", "T002"],
+        "name": ["T001", "T002"],
+        "action": ["split", "dividend"],
+        "contraname": [None, None],
+        "contraticker": [None, None],
+        "value": [2.0, 0.5],
+    })
+    kwargs = _synthetic_audit_kwargs(tmp_path, prices=prices, actions=actions)
+    run = audit_snapshot(**kwargs)
+    assert run["gate_status"] == "FAIL"
+    assert run["price_jumps"] == {
+        "total_large_moves": 2,
+        "math_verified": 1,
+        "approved": 0,
+        "review_required": 1,
+    }
+    issues = pd.read_parquet(kwargs["output_dir"] / "issues.parquet")
+    assert (issues["gate"] == "price_jump_review").any()
+    inventory = pd.read_parquet(
+        kwargs["output_dir"] / "all_large_price_jumps.parquet"
+    )
+    assert sorted(inventory["ticker"]) == ["T001", "T002"]
+    unexplained = inventory[inventory["manual_status"] == "review_required"]
+    assert list(unexplained["ticker"]) == ["T002"]
+
+    approvals = tmp_path / "jump_approvals.csv"
+    pd.DataFrame({
+        "jump_id": [unexplained.iloc[0]["jump_id"]],
+        "status": ["approved"],
+        "evidence": ["special distribution confirmed by filing"],
+        "snapshot": ["synthetic"],
+        "observed_sha256": [unexplained.iloc[0]["observed_sha256"]],
+        "tickers_sha256": [
+            staged_table_sha256(kwargs["staged_root"] / "synthetic", "TICKERS")
+        ],
+    }).to_csv(approvals, index=False)
+    cleared = audit_snapshot(**kwargs, jump_approvals_path=approvals)
+    assert cleared["gate_status"] == "PASS"
+    assert cleared["price_jumps"]["approved"] == 1
+    assert cleared["price_jumps"]["review_required"] == 0
 
 
 def test_audit_fails_on_calendar_expectation_mismatch(tmp_path):

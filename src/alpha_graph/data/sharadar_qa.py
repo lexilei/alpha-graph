@@ -75,6 +75,14 @@ REQUIRED_MEMBERSHIP_APPROVAL_COLUMNS = {
     "tickers_sha256",
     "membership_sha256",
 }
+REQUIRED_JUMP_APPROVAL_COLUMNS = {
+    "jump_id",
+    "status",
+    "evidence",
+    "snapshot",
+    "observed_sha256",
+    "tickers_sha256",
+}
 PRICE_NUMERIC_COLUMNS = (
     "open",
     "high",
@@ -1189,6 +1197,154 @@ def unexplained_price_jumps(
     ]].reset_index(drop=True)
 
 
+def verify_price_jumps(
+    jumps: pd.DataFrame,
+    actions: pd.DataFrame,
+    prices: pd.DataFrame,
+    *,
+    action_tolerance_days: int = 3,
+    split_rel_tolerance: float = 0.15,
+    dividend_rel_tolerance: float = 0.15,
+) -> pd.DataFrame:
+    """Mathematically verify large raw-close moves against vendor records.
+
+    A jump is verified only when (a) a split-like ACTIONS row within
+    tolerance carries a positive ratio value matching the closeunadj ratio,
+    or (b) the SEP dividends column on or near the jump date implies the
+    observed drop as one large special distribution. Ordinary dividends can
+    never satisfy the distribution identity for a >50% move, and an ACTIONS
+    keyword alone verifies nothing.
+    """
+    out = jumps.copy()
+    action_frame = actions.copy()
+    action_frame["ticker"] = action_frame["ticker"].map(_ticker_norm)
+    action_frame["date"] = pd.to_datetime(action_frame["date"], errors="raise")
+    action_frame["action_norm"] = (
+        action_frame["action"].astype(str).str.strip().str.lower()
+    )
+    has_split_value = "value" in action_frame.columns
+    if has_split_value:
+        action_frame["value"] = pd.to_numeric(action_frame["value"], errors="coerce")
+    dividends = None
+    if "dividends" in prices.columns:
+        dividends = prices[["ticker", "date", "dividends"]].copy()
+        dividends["ticker"] = dividends["ticker"].map(_ticker_norm)
+        dividends["date"] = pd.to_datetime(dividends["date"], errors="raise")
+        dividends["dividends"] = pd.to_numeric(dividends["dividends"], errors="coerce")
+        dividends = dividends[dividends["dividends"] > 0]
+    tolerance = pd.Timedelta(days=action_tolerance_days)
+    methods = []
+    details = []
+    for row in out.itertuples(index=False):
+        method = ""
+        detail = ""
+        ratio = row.closeunadj / row.prior_closeunadj
+        if has_split_value:
+            splits = action_frame[
+                (action_frame["ticker"] == row.ticker)
+                & (action_frame["date"] >= row.date - tolerance)
+                & (action_frame["date"] <= row.date + tolerance)
+                & action_frame["action_norm"].str.contains("split")
+                & action_frame["value"].notna()
+                & (action_frame["value"] > 0)
+            ]
+            for value in splits["value"]:
+                if abs(ratio * float(value) - 1.0) <= split_rel_tolerance:
+                    method = "split_math"
+                    detail = (
+                        f"split value {float(value)} matches raw ratio {ratio:.6f}"
+                    )
+                    break
+        if not method and dividends is not None and row.raw_return < 0:
+            nearby = dividends[
+                (dividends["ticker"] == row.ticker)
+                & (dividends["date"] >= row.date - tolerance)
+                & (dividends["date"] <= row.date + tolerance)
+            ]
+            for amount in nearby["dividends"]:
+                implied = -float(amount) / row.prior_closeunadj
+                if (
+                    abs(row.raw_return - implied)
+                    <= dividend_rel_tolerance * abs(row.raw_return)
+                ):
+                    method = "distribution_math"
+                    detail = (
+                        f"dividend {float(amount)} implies return {implied:.6f}"
+                    )
+                    break
+        methods.append(method)
+        details.append(detail)
+    out["verified_method"] = methods
+    out["verification_detail"] = details
+    out["math_verified"] = [bool(method) for method in methods]
+    return out
+
+
+def price_jump_review(
+    jumps: pd.DataFrame,
+    approvals_path: Path | None,
+    *,
+    snapshot: str,
+    tickers_sha256: str,
+) -> pd.DataFrame:
+    """Adjudicate verified jumps: math auto-passes, the rest need approvals."""
+    approvals = pd.DataFrame(columns=sorted(REQUIRED_JUMP_APPROVAL_COLUMNS))
+    if approvals_path is not None:
+        approvals = pd.read_csv(approvals_path, dtype=str, keep_default_na=False)
+        missing = REQUIRED_JUMP_APPROVAL_COLUMNS - set(approvals.columns)
+        if missing:
+            raise SharadarError(
+                f"price-jump approvals missing columns: {sorted(missing)}"
+            )
+        if approvals["jump_id"].duplicated().any():
+            raise SharadarError("price-jump approvals contain duplicate jump_id values")
+    approval_map = (
+        approvals.set_index("jump_id").to_dict("index") if len(approvals) else {}
+    )
+    out = jumps.copy()
+    jump_ids = []
+    hashes = []
+    statuses = []
+    evidence_values = []
+    for row in out.itertuples(index=False):
+        observed = {
+            "ticker": str(row.ticker),
+            "date": str(pd.Timestamp(row.date).date()),
+            "prior_closeunadj": float(row.prior_closeunadj),
+            "closeunadj": float(row.closeunadj),
+            "raw_return": float(row.raw_return),
+        }
+        serialized = json.dumps(observed, sort_keys=True, separators=(",", ":"))
+        observed_sha = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        jump_id = f"{observed['ticker']}:{observed['date']}"
+        approval = approval_map.get(jump_id, {})
+        approved = (
+            str(approval.get("status", "")).lower() == "approved"
+            and _nonblank(approval.get("evidence"))
+            and str(approval.get("snapshot", "")) == snapshot
+            and str(approval.get("observed_sha256", "")) == observed_sha
+            and str(approval.get("tickers_sha256", "")) == tickers_sha256
+        )
+        if row.math_verified:
+            status = "auto_verified"
+        elif approved:
+            status = "approved"
+        else:
+            status = "review_required"
+        jump_ids.append(jump_id)
+        hashes.append(observed_sha)
+        statuses.append(status)
+        evidence_values.append(
+            "" if pd.isna(approval.get("evidence"))
+            else str(approval.get("evidence", ""))
+        )
+    out["jump_id"] = jump_ids
+    out["observed_sha256"] = hashes
+    out["manual_status"] = statuses
+    out["evidence"] = evidence_values
+    return out
+
+
 def primary_key_audit(
     snapshot_dir: Path,
     *,
@@ -1278,8 +1434,10 @@ def _write_report(path: Path, run: dict, issues: pd.DataFrame) -> None:
         f"{run['known_cases']['total']}",
         f"- Listing/issuer registry coverage: "
         f"{run['identity']['registry']['coverage']:.3%}",
-        f"- Unexplained raw-close jumps over 50%: "
-        f"{run['unexplained_price_jumps']}",
+        f"- Raw-close jumps over 50%: {run['price_jumps']['total_large_moves']} "
+        f"({run['price_jumps']['math_verified']} math-verified, "
+        f"{run['price_jumps']['approved']} approved, "
+        f"{run['price_jumps']['review_required']} unexplained)",
         "",
         "## Issues",
         "",
@@ -1318,6 +1476,7 @@ def _audit_snapshot_unlocked(
     approvals_path: Path | None = None,
     membership_approvals_path: Path | None = None,
     identity_registry_path: Path | None = None,
+    jump_approvals_path: Path | None = None,
     output_dir: Path | None = None,
     start: str = "2011-04-06",
     end: str | None = None,
@@ -1510,8 +1669,15 @@ def _audit_snapshot_unlocked(
     )
     alias_overlaps = alias_window_audit(tickers)
     actions = read_staged_table(snapshot_dir, "ACTIONS")
-    price_jump_audit = unexplained_price_jumps(prices, actions)
-    price_jumps = price_jump_audit[~price_jump_audit["compatible_action"]].copy()
+    price_jump_audit = price_jump_review(
+        verify_price_jumps(unexplained_price_jumps(prices, actions), actions, prices),
+        jump_approvals_path,
+        snapshot=snapshot,
+        tickers_sha256=tickers_sha,
+    )
+    price_jumps = price_jump_audit[
+        price_jump_audit["manual_status"] == "review_required"
+    ].copy()
 
     ambiguous = int(crosswalk["match_status"].isin({"ambiguous", "ambiguous_override"}).sum())
     if ambiguous > thresholds["unresolved_identity_ambiguities_max"]:
@@ -1568,10 +1734,11 @@ def _audit_snapshot_unlocked(
         })
     if len(price_jumps):
         issues_list.append({
-            "gate": "non_action_price_jump",
+            "gate": "price_jump_review",
             "severity": "high",
             "subject": "SEP",
-            "detail": f"{len(price_jumps)} raw-close moves exceed 50% without a nearby action",
+            "detail": f"{len(price_jumps)} raw-close moves exceed 50% without "
+                      "mathematical verification or a snapshot-bound approval",
         })
     if invalid_price_rows:
         issues_list.append({
@@ -1757,6 +1924,7 @@ def _audit_snapshot_unlocked(
         "known_case_approvals": approvals_path,
         "membership_approvals": membership_approvals_path,
         "identity_registry": identity_registry_path,
+        "jump_approvals": jump_approvals_path,
     }
     input_sha256 = {
         key: (sha256_file(path) if path is not None else None)
@@ -1824,6 +1992,16 @@ def _audit_snapshot_unlocked(
             "alias_window_overlaps": len(alias_overlaps),
         },
         "known_cases": {"approved": approved, "total": len(known)},
+        "price_jumps": {
+            "total_large_moves": int(len(price_jump_audit)),
+            "math_verified": int(
+                (price_jump_audit["manual_status"] == "auto_verified").sum()
+            ),
+            "approved": int(
+                (price_jump_audit["manual_status"] == "approved").sum()
+            ),
+            "review_required": int(len(price_jumps)),
+        },
         "unexplained_price_jumps": len(price_jumps),
         "primary_keys": primary_keys.to_dict("records"),
         "issue_count": len(issues),
@@ -1894,6 +2072,7 @@ def audit_snapshot(
     approvals_path: Path | None = None,
     membership_approvals_path: Path | None = None,
     identity_registry_path: Path | None = None,
+    jump_approvals_path: Path | None = None,
     output_dir: Path | None = None,
     start: str = "2011-04-06",
     end: str | None = None,
@@ -1920,6 +2099,7 @@ def audit_snapshot(
             approvals_path=approvals_path,
             membership_approvals_path=membership_approvals_path,
             identity_registry_path=identity_registry_path,
+            jump_approvals_path=jump_approvals_path,
             output_dir=output_dir,
             start=start,
             end=end,
@@ -1938,6 +2118,7 @@ def main() -> None:
     parser.add_argument("--approvals")
     parser.add_argument("--membership-approvals")
     parser.add_argument("--identity-registry")
+    parser.add_argument("--jump-approvals")
     parser.add_argument("--output")
     parser.add_argument("--start", default="2011-04-06")
     parser.add_argument("--end")
@@ -1955,6 +2136,9 @@ def main() -> None:
         ),
         identity_registry_path=(
             Path(args.identity_registry) if args.identity_registry else None
+        ),
+        jump_approvals_path=(
+            Path(args.jump_approvals) if args.jump_approvals else None
         ),
         output_dir=Path(args.output) if args.output else None,
         start=args.start,
