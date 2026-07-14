@@ -8,8 +8,11 @@ std-exclusion pin):
   - the seasonal match is 365±45 days (a two-year gap is NOT bridged);
   - SUE = diff / std(trailing 8 diffs EXCLUDING the current one, min 6,
     ddof=1), std==0 -> NaN;
-  - availability = earliest Item-2.02 8-K date in (period_end, filed], else
-    the statement filed date; acceptance at/after 16:00 ET shifts it +1 day;
+  - availability = the LAST Item-2.02 8-K date in (period_end, filed]
+    (corrected 2026-07-14: guidance 8-Ks carry Item 2.02 without the final
+    EPS, so first-2.02 could date SUE before its EPS existed; last errs
+    stale, never early), else the statement filed date; acceptance at/after
+    16:00 ET shifts it +1 day;
   - PIT: appending later filings changes nothing dated before them.
 """
 
@@ -222,13 +225,43 @@ def _e8k(ticker, fdate, accession, has_202):
             "accession": accession, "has_202": has_202}
 
 
-def test_availability_prefers_earliest_item_202_8k():
+def test_availability_takes_last_item_202_8k_in_window():
+    # TWO 2.02 8-Ks in (period_end, filed]: an early guidance/preliminary
+    # 8-K (legitimately Item 2.02, no final EPS yet) and the later earnings
+    # release. Availability must sit at the LATER one — errs stale, never
+    # early (correction 2026-07-14; first-2.02 dated SUE at the guidance).
     eightk = pd.DataFrame([
         _e8k("AAA", "2020-03-31", "e0", True),    # ON period_end: excluded (open bound)
-        _e8k("AAA", "2020-04-10", "e1", False),   # in window but not 2.02
-        _e8k("AAA", "2020-04-20", "e2", True),    # chosen
-        _e8k("AAA", "2020-04-25", "e3", True),    # later 2.02
+        _e8k("AAA", "2020-04-03", "e1", True),    # early guidance 2.02 — must NOT win
+        _e8k("AAA", "2020-04-10", "e2", False),   # in window but not 2.02
+        _e8k("AAA", "2020-04-28", "e3", True),    # the earnings release: chosen
     ])
+    acc = pd.DataFrame([_acc("e1", "2020-04-03 08:30:00"),
+                        _acc("e3", "2020-04-28 08:30:00")])
+    r = compute(facts=pd.DataFrame(_one_quarter()), eightk=eightk,
+                acceptance=acc).iloc[0]
+    assert r["disclosure_date"] == pd.Timestamp("2020-04-28")
+    assert bool(r["via_8k02"])
+
+
+def test_availability_1600_shift_keys_off_the_last_8k():
+    # the 16:00-ET acceptance shift applies to the SELECTED (last) 8-K,
+    # not the early guidance one
+    eightk = pd.DataFrame([
+        _e8k("AAA", "2020-04-03", "e1", True),
+        _e8k("AAA", "2020-04-28", "e3", True),
+    ])
+    acc = pd.DataFrame([_acc("e1", "2020-04-03 08:30:00"),
+                        _acc("e3", "2020-04-28 16:30:00")])
+    r = compute(facts=pd.DataFrame(_one_quarter()), eightk=eightk,
+                acceptance=acc).iloc[0]
+    assert r["disclosure_date"] == pd.Timestamp("2020-04-29")
+    assert bool(r["via_8k02"])
+
+
+def test_availability_single_8k_unchanged():
+    # one 2.02 8-K in the window: selection is identical under first/last
+    eightk = pd.DataFrame([_e8k("AAA", "2020-04-20", "e2", True)])
     acc = pd.DataFrame([_acc("e2", "2020-04-20 08:30:00")])
     r = compute(facts=pd.DataFrame(_one_quarter()), eightk=eightk,
                 acceptance=acc).iloc[0]

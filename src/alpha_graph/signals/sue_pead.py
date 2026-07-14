@@ -28,16 +28,22 @@ as registered:
   without stating inclusion; pinned 2026-07-13 pre-evaluation as EXCLUDING
   the current diff — non-overlapping null, consistent with C15's design;
   ledgered as a build-time pin.)
-- Availability (`disclosure_date`) = earliest public disclosure: the first
-  Item-2.02 8-K date in (period_end, statement filed]. Item labels are not
-  in the filing JSONs' section keys (all `full_text`); they are recovered
-  from the text's "Item 2.02" headers — the same extraction the C12-C14
-  event factors used. If that 8-K was ACCEPTED at/after 16:00 ET, the
-  availability moves to the next calendar day (it wasn't public before that
-  close). No qualifying 8-K -> the statement's filed date, unshifted (a
-  filed date is already the availability day for EDGAR docs used at close).
-  The v0 t+1 availability lag is applied at the panel merge on top of this,
-  like every other filing-dated factor.
+- Availability (`disclosure_date`) = the LAST Item-2.02 8-K date in
+  (period_end, statement filed]. Corrected 2026-07-14 (data review; the
+  registration said "earliest"): guidance/preliminary 8-Ks legitimately
+  carry Item 2.02 without the final EPS — the first-2.02 rule dated 132
+  SUE rows a median 23 days before their EPS was computable (e.g. AAPL's
+  2018-12-31 quarter got the 2019-01-03 guidance-cut letter instead of the
+  2019-01-29 earnings release). The last 2.02 in the window errs stale,
+  never early. Item labels are not in the filing JSONs' section keys (all
+  `full_text`); they are recovered from the text's "Item 2.02" headers —
+  the same extraction the C12-C14 event factors used. If that 8-K was
+  ACCEPTED at/after 16:00 ET, the availability moves to the next calendar
+  day (it wasn't public before that close). No qualifying 8-K -> the
+  statement's filed date, unshifted (a filed date is already the
+  availability day for EDGAR docs used at close). The v0 t+1 availability
+  lag is applied at the panel merge on top of this, like every other
+  filing-dated factor.
 
 Cache: data/cache/sue_pead.parquet — ticker, disclosure_date, period_end,
 sue, eps_q, eps_q4_ago, derived_q4, via_8k02. A row exists for every scored
@@ -224,9 +230,15 @@ def add_availability(qeps: pd.DataFrame, eightk: pd.DataFrame,
                      acceptance: pd.DataFrame) -> pd.DataFrame:
     """Add disclosure_date and via_8k02.
 
-    disclosure_date = the earliest Item-2.02 8-K date in (period_end,
+    disclosure_date = the LAST Item-2.02 8-K date in (period_end,
     stmt_filed], pushed one calendar day when that 8-K was accepted at/after
     16:00 ET (join on digits-only accession); else stmt_filed (no shift).
+
+    Last, not first (corrected 2026-07-14): guidance/preliminary 8-Ks carry
+    Item 2.02 without the final EPS, so the first 2.02 in the window can
+    predate the number's existence; the last one errs stale, never early.
+    Same-date ties resolve to the latest acceptance_ts (NaT last). The
+    statement-filed fallback stays the terminal backstop.
     """
     e = eightk.loc[eightk["has_202"].astype(bool)].merge(
         acceptance[["accession", "acceptance_ts"]].drop_duplicates("accession"),
@@ -251,8 +263,10 @@ def add_availability(qeps: pd.DataFrame, eightk: pd.DataFrame,
         if got is None:
             continue
         dates, ts = got
-        k = np.searchsorted(dates, pends[i], side="right")   # first > period_end
-        if k < len(dates) and dates[k] <= fileds[i]:
+        lo = np.searchsorted(dates, pends[i], side="right")   # first > period_end
+        hi = np.searchsorted(dates, fileds[i], side="right")  # first > stmt_filed
+        if hi > lo:
+            k = hi - 1                         # LAST 2.02 in (period_end, filed]
             d = dates[k]
             t = pd.Timestamp(ts[k])
             if not pd.isna(t) and t.hour >= ACCEPT_CUTOFF_HOUR:
