@@ -2,35 +2,45 @@
 
 **Do SEC-filing signals — filing text, inter-company graph structure, and 8-K
 disclosure activity — carry cross-sectional equity-return information
-incremental to price and volume?** A point-in-time factor-research pipeline on
-the S&P 500 (499 names, 2011–2026), evaluating each candidate monthly against
+incremental to price and volume?** A factor-research pipeline on the S&P 500
+(499 names, 2011–2026), evaluating each candidate monthly against
 21-trading-day forward returns under a pre-registered protocol.
 
-Across three data sources and fourteen registered candidate factors, two signals
-carry incremental predictive content that survives price/volume controls,
-sector-neutralization, and multiple-testing accounting: **abnormal 8-K filing
-frequency** (sector-neutral incremental t ≈ −2.8) and
-**customer-momentum spillover** across a supplier/customer graph (incremental
-t ≈ 2.0 at a monthly horizon, ≈ 3.1 at its natural ten-day horizon). A third
-result is structural: text-change and cross-firm-momentum signals have opposite
-optimal holding periods, each matching its economic mechanism.
+Current answer: not demonstrably, at this sample and trial count. A
+pre-committed 2³ convention factorial (point-in-time membership ×
+availability lag × signal grid; `reports/factorial_v0.md`) showed that for
+the borderline factors the evaluation conventions were doing the work. Under
+the frozen honest convention set (v0), the 10-K text-change factor and the
+customer-momentum spillover factor lose their signal (sector-neutral
+incremental t = +0.24 and +0.21); the abnormal-8-K-frequency family survives
+attenuated (daily variant t = −2.29, monthly t = −2.00) but sits below the
+full-ledger multiple-testing ceiling (≈ 2.5). The registry holds **0 accepted
+factors**; the strongest candidate (C15, daily 8-K frequency) is unconfirmed.
 
 ## Method
 
-Each candidate receives a permanent ID (`FACTORS.md`) and is scored by the
-monthly cross-sectional Spearman rank-IC between the signal and forward returns.
-The decision statistic is the **incremental** IC — the candidate residualized,
-each month, against a six-factor price/volume control set (12-1 and short-horizon
-momentum, realized volatility, and a dollar-volume size proxy) — so a factor is
-credited only for information those controls do not already carry. Every result
-is reported raw and sector-neutral (within-GICS demeaning). Trials are logged in
-`reports/factor_preregistration.md`; significance is read against an effective
-trial count rather than a nominal t = 2 (see *Significance*). Every number
+Each of the fifteen registered candidates receives a permanent ID
+(`FACTORS.md`) and is scored by the monthly cross-sectional Spearman rank-IC
+between the signal and forward returns. The decision statistic is the
+**incremental** IC — the candidate residualized, each month, against a
+six-factor price/volume control set (12-1 and short-horizon momentum,
+realized volatility, and a dollar-volume size proxy) — so a factor is
+credited only for information those controls do not already carry. Headline
+numbers are sector-neutral (within-GICS demeaning of all rank series).
+
+**Evaluation conventions are frozen (v0, 2026-07-13):** point-in-time S&P 500
+membership, a one-calendar-day availability lag between a signal's
+computation date and its first use, and daily-updated signal caches
+(`reports/factorial_v0.md`). These are the code defaults; the judge's
+`--no-pit` / `--no-daily` / `--lag 0` flags exist only for attribution work.
+Every trial is logged in `reports/factor_preregistration.md`, and
+significance for any external claim is read against the full ledger count via
+a two-sided expected-max ceiling (see *Significance*). Every number
 reproduces from `data/cache/` via `scripts/factor_orthogonality.py`.
 
-Factors are organized into two groups: **candidates** (`C1`–`C14`, the
-hypotheses under test) and **baseline** (`B1`–`B6`, the price/volume controls).
-Code keys factors by name; the C/B labels are for reference.
+Factors are organized into two groups: **candidates** (`C1`–`C15`, the
+hypotheses under test) and **baseline** (`B1`–`B6`, the price/volume
+controls). Code keys factors by name; the C/B labels are for reference.
 
 ## Data
 
@@ -44,134 +54,123 @@ Code keys factors by name; the C/B labels are for reference.
 
 ## Findings
 
-### 8-K abnormal filing frequency (C11)
+### The conventions were doing the work
 
-For each firm-month, the count of 8-K filings is z-scored against the firm's own
-trailing 24-month distribution. A spike in filing activity relative to the firm's
-baseline predicts lower forward returns: the cross-section under-reacts to
-clustered disclosure.
+A pre-committed 2³ factorial varied point-in-time membership (on/off),
+availability lag (0/1 calendar day), and signal grid (month-end vs daily
+caches) for the four flagship factors — 19 informative cells, each a
+ledgered look (`reports/factorial_v0.md`). Sector-neutral incremental t over
+the six-factor baseline, 168 months:
 
-On the full cross-section (all 499 names, 100,618 filings):
+| factor | pre-PIT | v0 | attribution |
+|---|---|---|---|
+| C1 10-K text change (TF-IDF) | +1.48 | **+0.24** | PIT main effect −1.21; lag and grid verified inert |
+| C10 customer-momentum spillover | +1.40 | **+0.21** | PIT −0.69 and t+1 lag −0.55 compound |
+| C11 8-K abnormal frequency, monthly | −2.81 | **−2.00** | PIT only (lag and grid verified inert for it) |
+| C15 8-K abnormal frequency, daily | −3.29 / −3.67 | **−2.29** | PIT attenuates; the t+1 lag *strengthens* it |
+
+The mechanism behind the PIT effect is identified: point-in-time filtering
+*raises* every factor's candidate coverage share (index non-members are
+sparse in filings and graph edges), and the pre-PIT borderline cluster — C1
+at +1.5, C5 at +2.1, C10 at +1.5–2.0 — was carried by non-member rows. A
+sensitivity cell holding the price/volume controls to the same t+1 standard
+moves C15 by −0.04 (robust at −2.33) and moves C1/C10 to +0.10/−0.05.
+
+Re-evaluated on the same v0 panel (two further ledgered looks), the
+remaining open text candidates fall with C1: C5 general-embedding similarity
++2.08 → +1.43, C6 new-content fraction −1.72 → −0.73. C1, C5, C6, and C10
+are rejected under v0. C10's rejection keeps its pre-registered path back:
+replication on SEC-disclosed major-customer relationships (rule-based,
+point-in-time), independent of the LLM extraction that found the effect.
+Pre-PIT diagnostics — the encoder A/B ordering (general-semantic > lexical >
+finance-tuned) and the opposite IC-decay horizons of the text and graph
+families (text HAC t ≈ 2.7 at 63 days, spillover ≈ 3.1 at 10 days) — are
+attribution-era observations on the inflated panel; none is re-established
+under v0.
+
+### 8-K abnormal filing frequency (C11 monthly, C15 daily)
+
+For each firm, the count of 8-K filings over a trailing window is z-scored
+against the firm's own history; a spike in filing activity predicts lower
+forward returns. Two registered variants: C11 (calendar-month count vs a
+trailing 24-month baseline, month-end grid) and C15 (trailing
+21-trading-day count vs a lagged non-overlapping baseline, daily grid —
+registered before evaluation, scored as its own trial).
+
+v0 numbers (sector-neutral incremental IC over the baseline, 168 months,
+~386 names per month):
 
 | | incremental IC | t |
 |---|---|---|
-| over price/volume baseline | −0.008 | −1.9 |
-| baseline, sector-neutral | −0.011 | −2.8 |
+| C15 daily | −0.0111 | −2.29 |
+| C11 monthly | −0.0089 | −2.00 |
 
-The sector-neutral effect holds in both sample halves (2012–2019 t = −2.1,
-2020–2026 t = −1.9) and uses only information available at each month-end. Its
-economic magnitude is coverage-dependent: on the 179 larger, filing-active names
-first evaluated, the quintile long/short earned +0.41%/month (t = 2.5); on the
-full cross-section it is +0.11%/month (t = 1.2). The signal is robust in rank
-terms and concentrated in the more actively-filing segment of the index. An
-adversarial code review verified the point-in-time construction (excluding all
-month-end-day filings strengthens the result) and localized the effect in time:
-months where the current month's count is available at the sample date score
-t = −3.7, while a one-month lag eliminates the signal — the effect decays
-within one month, so implementation latency is the binding constraint.
+C15 confirms the mechanism an adversarial review isolated in C11: the signal
+lives in the current, still-fresh window (pre-PIT, fresh-attach months
+scored t = −3.7 while a one-month lag erased it). Under the one-day
+availability lag C15 *strengthens* (−1.85 → −2.29 under PIT) — same-close
+attachment diluted the signal rather than carrying it. It is insensitive to
+control timing (−2.33 with controls lagged) and has 95% coverage. The
+predictive content is the frequency anomaly specifically: constructions
+reading 8-K item content (hard-negative items) or tone (Loughran-McDonald
+sentiment) carried nothing even pre-PIT (sector-neutral |t| ≤ 0.9).
 
-The predictive content is the frequency *anomaly* specifically. Constructions
-that read 8-K item content — a hard-negative-item count (restatements, officer
-departures, delistings, debt-acceleration, agreement terminations) — and 8-K
-text sentiment (Loughran-McDonald negative-word density) carry no incremental
-signal on the full corpus (sector-neutral t = +0.1, +0.2, +0.1). The market
-prices the content of individual 8-Ks; what it under-weights is the clustering
-of filing activity itself.
+Both variants sit below the full-ledger ceiling of ≈ 2.5. Status: strongest
+current candidates, unconfirmed; no significance claim is made.
 
-### Cross-firm momentum spillover (C10)
+### LightGBM combiner (scope)
 
-A firm's customers' prior-month return, propagated across the directed
-customer edges of the LLM-extracted company graph, predicts the firm's own
-next-period return — the Cohen–Frazzini (2008) economic-links effect, in which
-value crosses supply-chain relationships with a lag because investor attention
-is siloed by firm.
-
-| | incremental IC | t |
-|---|---|---|
-| over baseline, 21-day horizon | +0.014 | +2.0 |
-| baseline, sector-neutral | +0.010 | +1.5 |
-| over baseline, 10-day horizon (HAC) | — | +3.1 |
-
-The incremental IC *increases* after removing the firm's own momentum, consistent
-with a genuine lag effect rather than a momentum proxy, and survives
-sector-neutralization — unlike a symmetric all-edge-type variant, which does not.
-It holds sign across both sample halves; the quintile long/short is +0.32%/month
-(t = 1.7). At the ten-day horizon predicted by the fast propagation of momentum
-across links, the Newey-West/HAC-corrected incremental t reaches ≈ 3.1.
-
-Status: unconfirmed. The graph edges are LLM-extracted and therefore not strictly
-point-in-time. Promotion is gated on replication using SEC-disclosed
-major-customer relationships (rule-based, point-in-time), independent of the
-extraction method used to identify the effect.
-
-### 10-K text change and the encoder A/B (C1, C3, C5)
-
-Year-over-year similarity between a firm's consecutive 10-K filings
-(Cohen-Malloy-Nguyen 2020, *Lazy Prices*) is measured three ways — bag-of-words
-TF-IDF cosine (C1), a general-purpose sentence embedding (C5, BGE), and a
-finance-tuned embedding (C3) — as a controlled A/B on the same document pairs.
-
-| measurement | incremental t (baseline) | sector-neutral t |
-|---|---|---|
-| C5 general embedding | +1.8 | +2.1 |
-| C1 TF-IDF | +1.5 | +1.5 |
-| C3 finance-tuned embedding | +1.2 | +2.0 |
-
-The general-purpose embedding carries information beyond bag-of-words (incremental
-t = 1.4 of C5 over C1); the finance-tuned encoder is redundant with TF-IDF
-(incremental t = 0.1 over C1). The ordering — general-semantic > lexical >
-finance-tuned — is the durable qualitative result; the individual magnitudes sit
-at the multiple-testing ceiling.
-
-### Holding-horizon structure
-
-An IC-decay analysis across horizons from 5 to 126 trading days separates the
-signal families by their economic clock. The text-change factors are
-slow-diffusion: their IC rises monotonically out to a 3–6 month horizon, and the
-general-embedding factor reaches an HAC-corrected incremental t ≈ 2.7 at 63 days.
-Customer-momentum spillover is fast: its IC peaks near 10 days (HAC t ≈ 3.1) and
-decays thereafter. The two families have opposite optimal holding periods —
-quarters for disclosure-text diffusion, weeks for cross-firm momentum — each
-consistent with the mechanism proposed for it. (Overlapping-return t-statistics
-at multi-month horizons are HAC-corrected throughout; the nominal statistics
-overstate significance by roughly 2× at the longest horizons.)
+The walk-forward combiner (`ml_combiner.py`) predicts 21-day returns from C1
+plus four price/volume controls; the SEC candidates were never in its
+feature set. Its out-of-sample attribution — baseline-only Sharpe 1.02 ≥
+full 0.98, i.e. adding C1 does not help — predates the v0 conventions. It
+shows the combiner is a momentum machine; it is not a test of the SEC
+signals.
 
 ## Significance and multiple testing
 
-The candidate factors are correlated same-family measurements, so the effective
-number of independent tests is well below the nominal count. Estimated from the
-eigenspectrum of the factor IC-correlation matrix, the effective breadth is ≈ 7–9
-tests, placing the noise ceiling at E[max |t| | null] ≈ 2.0. Abnormal 8-K
-frequency (sector-neutral t ≈ 2.8) and customer-momentum spillover at its natural
-horizon (HAC t ≈ 3.1) clear this ceiling; the 10-K text-change cluster sits at it.
-Reported t-statistics for factors evaluated on thin cross-sections carry a
-larger per-month sampling-noise component; the number of months (≈ 165), not the
-number of names, sets the significance sample size.
+The ledger holds 52 rows to date, of which N = 44 record a computed
+evaluation statistic (the rest are registrations or infrastructure notes;
+superseded rows count — they were looks). Selection is over |t|, so the
+significance bar for any external claim is the two-sided expected-max
+ceiling E[max |t| | null] = `emax_null(2N)` = **2.49**. No factor clears it;
+the strongest is C15 at −2.29. The candidates are correlated same-family
+measurements: an eigenspectrum estimate puts the effective number of
+independent bets at ≈ 7–9. That effective-N describes redundancy — how many
+distinct ideas were really tried — and is never the significance
+denominator. The number of months (165–168), not the number of names, sets
+each statistic's sample size.
 
 ## Scope and caveats
 
-- **Survivorship.** The universe is current index constituents; roughly 38% of
-  names that passed through the S&P 500 over 2011–2026 are absent. This
-  attenuates the measured ICs.
-- **8-K segment dependence.** The frequency factor's portfolio-level spread is
-  concentrated in the larger, filing-active segment of the index; on the full
-  cross-section the rank signal holds (sector-neutral t = −2.8) while the
-  quintile spread is +0.11%/month.
-- **Graph edges** are LLM-extracted (mild forward-knowledge exposure) with both
-  endpoints in the S&P 500 — the regime in which the cross-firm-momentum effect
-  is weakest — which makes the observed magnitude a lower bound on the underlying
-  effect and motivates the point-in-time confirmation described above.
+- **Survivorship.** v0 applies point-in-time index membership, which removes
+  forward bias (names enter the panel only while index members) but not
+  survivor bias: roughly 38% of names that passed through the index over
+  2011–2026 are absent entirely (departed-name gap 194 in 2011 → 23 in
+  2025), which attenuates measured ICs.
+- **8-K economics.** The quintile-spread magnitudes on record (+0.41%/month
+  on the 179-name subset, +0.11%/month at full coverage, for C11) are
+  pre-PIT; v0 portfolio-level economics have not been measured. The rank
+  signal decays within a month — implementation latency is the binding
+  constraint, which is what C15's daily grid addresses.
+- **Graph edges** are LLM-extracted (mild forward-knowledge exposure) with
+  both endpoints in the S&P 500 — the regime where the cross-firm momentum
+  effect is documented to be weakest. The SEC-disclosed-customer replication
+  is C10's pre-registered path back.
 - **Size proxy.** A dollar-volume liquidity measure stands in for market
-  capitalization pending point-in-time shares outstanding; sector labels are a
-  current GICS snapshot.
+  capitalization pending point-in-time shares outstanding; sector labels are
+  a current GICS snapshot.
 
 ## Prior-results correction
 
 Builds of this repository before 2026-06 reported a strategy-level result (a
 long-only Sharpe near 0.8 and an FF5+momentum alpha with t ≈ 3). An internal
-audit traced that alpha to a one-month benchmark misalignment in the attribution
-code; corrected, it is approximately zero. Those figures are withdrawn. The
-results above are the post-audit measurements and reproduce from cache.
+audit traced that alpha to a one-month benchmark misalignment in the
+attribution code; corrected, it is approximately zero. Those figures are
+withdrawn. Separately, factor statistics quoted before 2026-07-13 were
+computed under pre-v0 conventions (current-constituent panel, same-close
+attachment); they are superseded by the v0 numbers above and appear here
+only as labeled attribution context.
 
 ## Reproduce
 
@@ -187,12 +186,14 @@ python -m alpha_graph.data.market --max-tickers 500 --years-back 15
 python -m alpha_graph.signals.lazy_prices                       # C1  10-K TF-IDF
 python -m alpha_graph.signals.embed_sim_10k --tag bge --model BAAI/bge-base-en-v1.5   # C5
 python -m alpha_graph.data.relationships                        # LLM company graph
-python -m alpha_graph.signals.graph_signal --customer-momentum  # C10 customer momentum
-python -m alpha_graph.signals.event_freq_8k                     # C11 abnormal 8-K frequency
+python -m alpha_graph.signals.graph_signal --customer-momentum --daily  # C10 daily cache
+python -m alpha_graph.signals.event_freq_8k                     # C11 monthly 8-K frequency
+python -m alpha_graph.signals.event_freq_8k --daily             # C15 daily 8-K frequency
 
-# evaluate (incremental IC over the price/volume baseline, sector-neutral)
-python scripts/factor_orthogonality.py evaluate --candidate evt8k_freq_z --accepted BASELINE --sector-neutral
-python scripts/factor_orthogonality.py evaluate --candidate spillover_cust_mom --accepted BASELINE
+# evaluate (defaults are the frozen v0 conventions: PIT, lag 1, daily grid;
+# --no-pit / --no-daily / --lag 0 are for attribution work only)
+python scripts/factor_orthogonality.py evaluate --candidate evt8k_freq_z_d --accepted BASELINE --sector-neutral  # C15
+python scripts/factor_orthogonality.py evaluate --candidate evt8k_freq_z --accepted BASELINE --sector-neutral    # C11
 ```
 
 ## Tests
