@@ -15,19 +15,23 @@ customer-momentum spillover factor lose their signal (sector-neutral
 incremental t = +0.24 and +0.21); the abnormal-8-K-frequency family survives
 attenuated (daily variant t = −2.29, monthly t = −2.00) but sits below the
 full-ledger multiple-testing ceiling. Later the same day, earnings drift
-(C17 SUE/PEAD, incremental t = +2.09, textbook one-month decay) and
+(C17 SUE/PEAD, incremental t = +1.70 after an availability correction,
+drift concentrated at ~1 month) and
 clustered insider buying (C16, calendar-time FF5+MOM alpha +7.67%/yr,
 HAC t +3.33) were evaluated under pre-pinned bars: C17 is a below-ceiling
 candidate; C16 passed its pinned bar but a shifted-event placebo attributes
 the alpha to portfolio composition rather than event timing, so its
 ceiling-clearing claim was retracted the same day (see the ledger's
 re-grade). The registry holds **0 accepted factors**, and no result is
-currently treated as clearing the statistical bar (N = 73 looks, two-sided
-ceiling ≈ 2.66).
+currently treated as clearing the statistical bar (N = 133 tracked looks,
+two-sided E[max] ceiling ≈ 2.86 — a mean, not a significance bar; the 5%
+family-wise threshold is ≈ 3.55). A concurrency-conditioned insider variant
+(C20) was registered, evaluated against a pre-pinned three-condition bar,
+and rejected the same day.
 
 ## Method
 
-Each of the nineteen registered candidates receives a permanent ID
+Each of the twenty registered candidates receives a permanent ID
 (`FACTORS.md`) and is scored by the monthly cross-sectional Spearman rank-IC
 between the signal and forward returns. The decision statistic is the
 **incremental** IC — the candidate residualized, each month, against a
@@ -46,9 +50,10 @@ significance for any external claim is read against the full ledger count via
 a two-sided expected-max ceiling (see *Significance*). Every number
 reproduces from `data/cache/` via `scripts/factor_orthogonality.py`.
 
-Factors are organized into two groups: **candidates** (`C1`–`C15`, the
-hypotheses under test) and **baseline** (`B1`–`B6`, the price/volume
-controls). Code keys factors by name; the C/B labels are for reference.
+Factors are organized into two groups: **candidates** (`C1`–`C20`, the
+hypotheses under test) and **baseline** (`B1`–`B9` — the judge's default
+set stays B1–B6; B7–B9 PIT fundamentals are opt-in via `--accepted
+EXTENDED`). Code keys factors by name; the C/B labels are for reference.
 
 ## Data
 
@@ -57,7 +62,7 @@ controls). Code keys factors by name; the C/B labels are for reference.
 | 10-K | 7,646 filings, 2011–2026 |
 | 10-Q | 21,487 filings, 2011–2026 |
 | 8-K | 100,618 filings, 2011–2026, all 499 names |
-| Prices | 499 tickers, daily OHLCV, 2011–2026 |
+| Prices | 503 tickers, daily OHLCV, 2011–2026 (spinoff-seam registry: `data/cache/market_data_seams.parquet`) |
 | Company graph | 11,025 extracted relationship rows (3,113 unique directed edges after per-pair dedup), supplier/customer/competitor, LLM-extracted from 10-K business sections, each backed by a source sentence |
 
 ### Paid-data staging
@@ -133,8 +138,11 @@ v0 numbers (sector-neutral incremental IC over the baseline, 168 months,
 
 | | incremental IC | t |
 |---|---|---|
-| C15 daily | −0.0111 | −2.29 |
-| C11 monthly | −0.0089 | −2.00 |
+| C15 daily | −0.0113 | −2.34 |
+| C11 monthly | −0.0090 | −2.02 |
+
+(Post-price-repair quotes, 2026-07-14; the factorial-era values −2.29/−2.00
+remain in the table above as the v0-freeze record.)
 
 C15 is consistent with the mechanism an adversarial review isolated in C11:
 the signal lives in the current, still-fresh window (pre-PIT, fresh-attach
@@ -146,7 +154,8 @@ predictive content is the frequency anomaly specifically: constructions
 reading 8-K item content (hard-negative items) or tone (Loughran-McDonald
 sentiment) carried nothing even pre-PIT (sector-neutral |t| ≤ 1.0).
 
-Both variants sit below the full-ledger ceiling of ≈ 2.66. Status:
+Both variants sit below the full-ledger ceiling (≈ 2.86 at the current
+count). Status:
 candidates, unconfirmed; no significance claim is made.
 
 ### C15 tradeable backtest (gate-2): failed, live path closed
@@ -178,17 +187,17 @@ signals.
 
 ## Significance and multiple testing
 
-As of end of day 2026-07-13, N = 73 ledger rows record a computed evaluation
+As of 2026-07-14, N = 133 tracked ledger looks record a computed evaluation
 statistic (registrations and infrastructure notes excluded; superseded rows
 count — they were looks, as do the 12 back-filled looks from the 2026-07-10
 IC-decay sweep). Selection is over |t|, so the reference bar for any
 external claim is the two-sided expected-max ceiling E[max |t| | null] =
-`emax_null(2N)` = **2.66** — with two review caveats now recorded in the
+`emax_null(2N)` = **2.86** — with two review caveats now recorded in the
 ledger: the E[max] ceiling is a mean, not a significance bar (the 5%
 family-wise threshold at this N is ≈ 3.4), and row-based counting
 understates statistic-level looks (≈ 150–185, ceiling ≈ 2.9). No result is
 currently treated as clearing the bar: C16's +3.33 was re-graded after a
-composition placebo (see the ledger), and C17 +2.09 / C15 −2.29 / C11
+composition placebo (see the ledger), and C17 +1.70 / C15 −2.34 / C11
 −2.00 sit below it. The candidates are correlated same-family
 measurements: an eigenspectrum estimate puts the effective number of
 independent bets at ≈ 7–9. That effective-N describes redundancy — how many

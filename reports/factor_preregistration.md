@@ -16,52 +16,41 @@ restricts nothing; it preserves the option to make a strong claim later
 
 Refer to factors by their permanent IDs (see `FACTORS.md`).
 
-## Current accounting (2026-07-13)
+## Current accounting (restated 2026-07-14 after the ten-lens review; the
+## authoritative count lives in the LATEST "Accounting refresh" table row)
 
-- **Counting rule.** N = every ledger row that records a computed evaluation
-  statistic — including SUPERSEDED rows (they were looks; voiding a number
-  does not un-spend it) — excluding pure registration lines and
-  infrastructure/bug-fix notes.
-- **Count.** 64 ledger rows as of today (including the 19 factorial cells,
-  the 2 v0 re-evals, and the 12 back-filled 2026-07-10 IC-decay-sweep looks
-  below). Excluded: 8 — 1 pure registration (C10,
-  2026-07-08); 5 infrastructure/bug-fix rows (B5/B6+sector controls
-  2026-07-07 "conditioning, not trials"; PIT implementation 2026-07-11;
-  ic_tools/pit_universe code review 2026-07-11; RENAME_MAP audit 2026-07-11;
-  build_graph dedup fix 2026-07-13); 2 multiple-testing accounting notes
-  (2026-07-09, tallies of already-counted looks). **N = 56.**
-- **Ceiling.** Selection here is over |t| (signs are not pre-registered), so
-  the bar is the two-sided ceiling `alpha_graph.eval.ic_tools.emax_null(2N)`
-  = emax_null(112) = **2.57**. The counting judgment calls barely move it:
-  counting all 64 rows gives 2.62; also dropping the two borderline counted
-  rows (the superseded 3-way A/B, which records no number of its own, and
-  the C8–C9 factor-correlation diagnostic, which touches no returns) gives
-  2.56.
-- **Binding rule.** This ceiling is the significance bar for ANY external
-  claim from this ledger. Effective-N (correlation-based, ~7-9 independent
-  bets among the factors) describes redundancy only and is never the
-  denominator.
-
-**Update (2026-07-13, end of day; re-graded after the five-lens review).**
-17 further looks landed after the count above: the 3 gate-2 tradeable cells,
-C17's 5, C16's 3 + 3 + the first-day decomposition + the review placebo,
-C18's 1. **N = 73, ceiling emax_null(146) = 2.66.** Status against the bar:
-C16-corrected full-sample alpha HAC t = +3.33 exceeds this expected
-best-of-N noise level but is treated as **NOT clearing the statistical
-bar**, for three review findings: (1) a shifted-event placebo (+126td,
-timing destroyed) reproduces α +8.18%/yr t +3.16 — the statistic measures
-the composition of insider-bought stocks, not event timing, so its null is
-not zero-centered; (2) even at face value, 3.33 < ≈3.4, the 5% family-wise
-threshold at N=73 (the E[max] ceiling is a mean, not a significance bar);
-(3) row-based counting understates statistic-level looks (≈150–185 →
-ceiling ≈2.9). C16's path forward, to be pinned as registered variants
-before running: a matched-composition null (shifted-event or
-characteristics-matched calendar-time control) and a routine-buyer screen
-(ED alone = 13.4% of events, active 88.9% of days; top-10 tickers 28.4%).
-C17 +2.09, C15 −2.29, C11 −2.00 remain below the ceiling. Registry shows
-**0 accepted**; nothing currently clears the statistical bar, and clearing
-it would still only be necessary, not sufficient (the economics gates
-killed C15).
+- **Tracked count.** N = 133 (hybrid basis, see next bullet), two-sided
+  ceiling `emax_null(266)` = **2.86**. Standings: C16 +3.33 (candidate,
+  NOT treated as clearing — composition placebo), C17 +1.70, C15 −2.34,
+  C11 −2.02 (post-price-repair quotes); C18, C20 rejected. **0 accepted.**
+- **Counting-basis disclosure (review finding).** The historical count is
+  a hybrid: rows counted at row level except the C16 investigation
+  (counted at statistic level). Brackets: strict-row basis ≈95 → ceiling
+  2.75; statistic-level basis ≈250–300 → ceiling ≈3.08, 5% family-wise
+  z ≈ 3.9. No standing or verdict changes under any basis.
+- **Binding rules (amended 2026-07-14):**
+  1. The E[max] ceiling is a MEAN, not a significance bar (using it as a
+     bar ⇒ ~43% family-wise error). External claims are graded against
+     the 5% family-wise threshold at the tracked N (≈3.55 at N=133),
+     and every accounting refresh must print both numbers.
+  2. Every new ledger row carries `family` (XS-IC / HAC-alpha /
+     event-paired / other) and `role` (sel / null). `role=null` is valid
+     only when the row was pinned as a placebo/control in a
+     pre-computation registration; null rows feed their family's
+     empirical null pool and do NOT count toward selection-N. (This stops
+     the accounting from punishing due diligence: placebo draws can never
+     be promoted, so they should not raise everyone else's bar.)
+  3. Pinned bars may not reference medians of fewer than 20 seeds;
+     preferred form is a 99-seed empirical rank. Every registration must
+     include one power/MDE sentence (forecast SE from the nearest
+     realized analogue; if the MDE at 80% power exceeds the economic
+     effect the bar targets, redesign before spending looks — C20's bar
+     rejected its own fully-true motivating hypothesis ~90% of the time,
+     and that was forecastable).
+  4. Commit-then-run: registrations/pins land in their own commit before
+     any result is computed; result rows quote the registration commit.
+  5. Effective-N (correlation-based ~7-9) remains a redundancy
+     descriptor only, never the denominator.
 
 ## Economic hypothesis (one, not many)
 
