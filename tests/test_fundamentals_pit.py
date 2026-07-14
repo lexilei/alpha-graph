@@ -11,12 +11,21 @@ Builder (signals/fundamentals_pit.py):
   - a missing quarter (window span > TTM_MAX_SPAN_DAYS) leaves TTM undefined;
   - negative book equity passes through (real);
   - PIT perturbation: appending later filings changes nothing dated earlier.
+
+Panel wiring (ml_combiner.build_feature_panel):
+  - B7 log_mktcap_pit = log(latest share count FILED on or before t x close),
+    BRK-B excluded, NaN before the first share filing;
+  - B8/B9 attach as-of avail_date with the v0 t+1 availability lag
+    (Friday -> Monday across a weekend), divided by the market cap at t;
+  - negative equity produces a negative book_to_market_pit;
+  - missing caches leave all three columns NaN.
 """
 
 import numpy as np
 import pandas as pd
 import pytest
 
+import alpha_graph.signals.ml_combiner as ml
 from alpha_graph.signals.fundamentals_pit import (
     TAG_EQUITY,
     TAG_EQUITY_NCI,
@@ -200,3 +209,124 @@ def test_late_filed_old_period_never_rolls_state_backwards():
     df = compute(facts=facts)
     assert list(df["avail_date"]) == [pd.Timestamp("2020-08-01")]
     assert df.iloc[0]["book_equity"] == 7e9
+
+
+# --------------------------------------------------------------------------- #
+# Panel wiring: B7 mktcap, B8/B9 merges (lag semantics per
+# tests/test_availability_grid.py), BRK-B exclusion
+# --------------------------------------------------------------------------- #
+
+def _write_market(tmp_path, cal, tickers=("AAA",), close=100.0):
+    rows = [{"ticker": t, "date": d, "close": close, "volume": 1e6,
+             "ret_21d": 0.01}
+            for t in tickers for d in cal]
+    pd.DataFrame(rows).to_parquet(tmp_path / "market_data.parquet", index=False)
+
+
+def _write_shares(tmp_path, rows):
+    cols = ["ticker", "cik", "end", "filed", "shares", "concept", "form",
+            "class_summed"]
+    pd.DataFrame(rows, columns=cols).to_parquet(
+        tmp_path / "shares_outstanding_pit.parquet", index=False)
+
+
+def _share_row(ticker, end, filed, shares,
+               concept="dei:EntityCommonStockSharesOutstanding"):
+    return {"ticker": ticker, "cik": "0000000001", "end": pd.Timestamp(end),
+            "filed": pd.Timestamp(filed), "shares": shares, "concept": concept,
+            "form": "10-Q", "class_summed": False}
+
+
+def test_panel_b7_shares_asof_and_brkb_excluded(tmp_path, monkeypatch):
+    monkeypatch.setattr(ml, "CACHE_DIR", tmp_path)
+    cal = pd.bdate_range("2020-01-06", periods=6)
+    _write_market(tmp_path, cal, tickers=("AAA", "BRK-B"), close=100.0)
+    _write_shares(tmp_path, [
+        _share_row("AAA", "2019-12-31", cal[2], 1e9),
+        _share_row("BRK-B", "2019-12-31", cal[0], 1.5e6,
+                   concept="us-gaap:WeightedAverageNumberOfSharesOutstandingBasic"),
+    ])
+    panel = ml.build_feature_panel(pit_universe=False, availability_lag_days=1)
+
+    aaa = panel[panel["ticker"] == "AAA"].set_index("date")["log_mktcap_pit"]
+    # shares_asof semantics: filed <= t, NO extra lag on B7
+    assert aaa[cal[:2]].isna().all()
+    assert aaa[cal[2:]].eq(np.log(1e9 * 100.0)).all()
+    # BRK-B: Class-A-equivalent series -> excluded, NaN throughout
+    brk = panel[panel["ticker"] == "BRK-B"]
+    assert brk["log_mktcap_pit"].isna().all()
+    assert brk["book_to_market_pit"].isna().all()
+    assert brk["earnings_yield_pit"].isna().all()
+
+
+def test_panel_b8_b9_lag_semantics_and_division(tmp_path, monkeypatch):
+    monkeypatch.setattr(ml, "CACHE_DIR", tmp_path)
+    # Thu, Fri, Mon, Tue around a weekend (the availability-grid pattern)
+    cal = pd.to_datetime(["2020-01-02", "2020-01-03", "2020-01-06",
+                          "2020-01-07"])
+    _write_market(tmp_path, cal, close=100.0)
+    _write_shares(tmp_path, [_share_row("AAA", "2019-09-30", "2019-11-01", 1e9)])
+    pd.DataFrame([{
+        "ticker": "AAA", "avail_date": pd.Timestamp("2020-01-03"),  # Friday
+        "book_equity": 20e9, "net_income_ttm": 5e9,
+    }]).to_parquet(tmp_path / "fundamentals_pit.parquet", index=False)
+
+    panel = ml.build_feature_panel(pit_universe=False, availability_lag_days=1)
+    got = panel[panel["ticker"] == "AAA"].set_index("date")
+
+    cap = 1e9 * 100.0
+    # Friday avail + t+1 lag -> first usable at the MONDAY close
+    for col, num in [("book_to_market_pit", 20e9), ("earnings_yield_pit", 5e9)]:
+        assert np.isnan(got.loc[pd.Timestamp("2020-01-02"), col])
+        assert np.isnan(got.loc[pd.Timestamp("2020-01-03"), col])
+        assert got.loc[pd.Timestamp("2020-01-06"), col] == pytest.approx(num / cap)
+        assert got.loc[pd.Timestamp("2020-01-07"), col] == pytest.approx(num / cap)
+
+
+def test_panel_negative_equity_gives_negative_bm(tmp_path, monkeypatch):
+    monkeypatch.setattr(ml, "CACHE_DIR", tmp_path)
+    cal = pd.bdate_range("2020-01-06", periods=4)
+    _write_market(tmp_path, cal, close=50.0)
+    _write_shares(tmp_path, [_share_row("AAA", "2019-09-30", "2019-11-01", 2e9)])
+    pd.DataFrame([{
+        "ticker": "AAA", "avail_date": cal[0],
+        "book_equity": -8e9, "net_income_ttm": np.nan,
+    }]).to_parquet(tmp_path / "fundamentals_pit.parquet", index=False)
+
+    panel = ml.build_feature_panel(pit_universe=False, availability_lag_days=1)
+    got = panel[panel["ticker"] == "AAA"].set_index("date")
+    assert got.loc[cal[1], "book_to_market_pit"] == pytest.approx(-8e9 / 1e11)
+    # NaN TTM never attaches, and must not blank anything else
+    assert got["earnings_yield_pit"].isna().all()
+
+
+def test_panel_missing_caches_all_three_nan(tmp_path, monkeypatch):
+    monkeypatch.setattr(ml, "CACHE_DIR", tmp_path)
+    cal = pd.bdate_range("2020-01-06", periods=4)
+    _write_market(tmp_path, cal)
+    panel = ml.build_feature_panel(pit_universe=False, availability_lag_days=1)
+    for col in ["log_mktcap_pit", "book_to_market_pit", "earnings_yield_pit"]:
+        assert col in panel.columns
+        assert panel[col].isna().all()
+
+
+# --------------------------------------------------------------------------- #
+# Judge: EXTENDED accepted-set shorthand (scripts/ is not a package)
+# --------------------------------------------------------------------------- #
+
+def test_judge_extended_is_baseline_plus_b7_b9():
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "factor_orthogonality",
+        Path(__file__).resolve().parents[1] / "scripts" / "factor_orthogonality.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.EXTENDED == mod.BASELINE + [
+        "log_mktcap_pit", "book_to_market_pit", "earnings_yield_pit",
+    ]
+    # the judge's defaults are UNCHANGED: prior looks stay comparable
+    assert "log_mktcap_pit" not in mod.BASELINE
+    assert "log_mktcap_pit" not in mod.DEFAULT_CANDIDATES

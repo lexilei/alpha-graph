@@ -182,7 +182,14 @@ def build_feature_panel(
     v0 convention (frozen 2026-07-13 after the factorial; see
     reports/factorial_v0.md): pit_universe=True, availability_lag_days=1,
     daily_signals=True — the defaults above. lag_controls stays False
-    (factorial sensitivity switch, not part of v0).
+    (factorial sensitivity switch, not part of v0; its scope is the 6
+    price/volume controls and does not extend to B7-B9).
+
+    B7-B9 PIT fundamentals controls (FACTORS.md): log_mktcap_pit is a
+    same-close price feature (PIT shares, filed <= t, x close);
+    book_to_market_pit / earnings_yield_pit are filing-date as-of merges of
+    fundamentals_pit.parquet (avail_date = the filed date completing each
+    value) under availability_lag_days, divided by the market cap at t.
     """
     market_path = CACHE_DIR / "market_data.parquet"
     if not market_path.exists():
@@ -225,12 +232,48 @@ def build_feature_panel(
     )
 
     # Factor 17: size/liquidity proxy — log of 63d median dollar volume.
-    # NOT true market cap (no PIT shares outstanding yet); its job is to catch
-    # text factors that secretly rank by company size.
+    # Liquidity control; true PIT market cap is B7 below (B6 stays: liquidity
+    # and size are different controls); its job is to catch text factors that
+    # secretly rank by company size.
     dv = (panel["close"] * panel["volume"]).replace(0, np.nan)
     panel["log_dollar_volume"] = np.log(
         dv.groupby(panel["ticker"]).transform(lambda s: s.rolling(63).median())
     )
+
+    # B7 log_mktcap_pit: PIT market cap — the latest share count FILED on or
+    # before t (shares_asof semantics: filed <= t, no extra lag — a same-close
+    # price feature like the other controls; states_table is the shares_asof
+    # collapse for all tickers in one global as-of merge) times the same-day
+    # close, logged. BRK-B is excluded (Class-A-equivalent weighted-average
+    # series — wrong units for the B-share price; see data/shares_pit.py);
+    # GOOG/GOOGL both carry the company-total series (duplication is fine for
+    # a control). Closes are split-adjusted, so caps before a ticker's LATER
+    # splits are understated by the split factor (market_cap_panel's caveat) —
+    # acceptable for a size control. The unlogged cap is kept (_mktcap_pit) as
+    # the B8/B9 denominator and dropped before return.
+    shares_path = CACHE_DIR / "shares_outstanding_pit.parquet"
+    if shares_path.exists():
+        from alpha_graph.data.shares_pit import (
+            CAP_UNIT_MISMATCH_TICKERS,
+            states_table,
+        )
+        states = states_table(pd.read_parquet(shares_path),
+                              exclude_tickers=CAP_UNIT_MISMATCH_TICKERS)
+        panel = _merge_asof_signal(
+            panel, states.rename(columns={"shares": "_shares_pit"}),
+            left_date="date", right_date="filed",
+            on="ticker", cols=["_shares_pit"],
+        )
+        cap = panel["_shares_pit"] * panel["close"]
+        panel["_mktcap_pit"] = cap.where(cap > 0)
+        panel["log_mktcap_pit"] = np.log(panel["_mktcap_pit"])
+        panel = panel.drop(columns=["_shares_pit"])
+        # restore the (ticker, date) order the lag_controls/PIT steps assume
+        panel = panel.sort_values(["ticker", "date"])
+    else:
+        panel["_mktcap_pit"] = np.nan
+        panel["log_mktcap_pit"] = np.nan
+        logger.debug("No shares_outstanding_pit.parquet — B7 will be NaN")
 
     panel = panel.drop(columns=["daily_ret", "close", "volume"], errors="ignore")
 
@@ -438,6 +481,36 @@ def build_feature_panel(
     else:
         panel["sue_pead"] = np.nan
         logger.debug("No sue_pead.parquet — C17 will be NaN")
+
+    # --- B8/B9 PIT fundamentals controls: as-filed book equity and trailing
+    # 4-quarter net income (fundamentals_pit.parquet), each attached as-of its
+    # avail_date = the FILED date of the filing that completed the value (TTM:
+    # max of the 4 constituents' filed dates), availability-lagged like every
+    # other filing merge (v0: t+1), then divided by the PIT market cap at t
+    # (B7's unlogged cap). Negative book equity is real and kept. NaN wherever
+    # the numerator has no filed value yet or the cap is unavailable (e.g.
+    # BRK-B, or no share count filed yet). ---
+    fund_path = CACHE_DIR / "fundamentals_pit.parquet"
+    if fund_path.exists():
+        fu = pd.read_parquet(fund_path)
+        fu["avail_date"] = pd.to_datetime(fu["avail_date"])
+        for col in ["book_equity", "net_income_ttm"]:
+            ev = fu.dropna(subset=[col])[["ticker", "avail_date", col]]
+            ev = ev.sort_values(["ticker", "avail_date"])
+            panel = _merge_asof_signal(
+                panel, ev,
+                left_date="date", right_date="avail_date",
+                on="ticker", cols=[col],
+                availability_lag_days=availability_lag_days,
+            )
+        panel["book_to_market_pit"] = panel["book_equity"] / panel["_mktcap_pit"]
+        panel["earnings_yield_pit"] = panel["net_income_ttm"] / panel["_mktcap_pit"]
+        panel = panel.drop(columns=["book_equity", "net_income_ttm"])
+    else:
+        panel["book_to_market_pit"] = np.nan
+        panel["earnings_yield_pit"] = np.nan
+        logger.debug("No fundamentals_pit.parquet — B8/B9 will be NaN")
+    panel = panel.drop(columns=["_mktcap_pit"])
 
     # Drop rows with no target
     panel = panel.dropna(subset=["fwd_return_21d"])

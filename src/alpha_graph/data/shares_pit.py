@@ -36,6 +36,14 @@ from alpha_graph.config import CACHE_DIR
 
 SHARES_PIT_PATH = CACHE_DIR / "shares_outstanding_pit.parquet"
 
+# Tickers whose share series is NOT in the units their price trades in:
+# BRK-B's only usable series is the basic-EPS weighted average reported in
+# CLASS-A-EQUIVALENT units (B shares are 1/1500 A), so shares x B-share
+# price is off by three orders of magnitude (the fetch script's validation
+# flags it via its implied sub-$1B cap). Consumers building market caps
+# from prices must exclude these; the raw rows stay in the table.
+CAP_UNIT_MISMATCH_TICKERS = ("BRK-B",)
+
 _FACT_COLS = ("end", "filed", "shares")
 
 
@@ -89,6 +97,36 @@ def _facts_for(ticker_or_frame: str | pd.DataFrame) -> pd.DataFrame:
             "single-ticker frame"
         )
     return frame
+
+
+def states_table(
+    facts: pd.DataFrame | None = None,
+    exclude_tickers: tuple[str, ...] = (),
+) -> pd.DataFrame:
+    """As-of state rows for every ticker: (ticker, filed, shares).
+
+    The panel-scale companion to :func:`shares_asof`: the same
+    _state_series collapse per ticker, concatenated, so one backward
+    merge_asof on ``filed`` (by=ticker) attaches the latest known count
+    to a long (ticker, date) panel in a single pass — same values as
+    calling shares_asof per ticker, without the per-row loop.
+    """
+    if facts is None:
+        facts = _load_cached(str(SHARES_PIT_PATH))
+    if exclude_tickers:
+        facts = facts[~facts["ticker"].isin(set(exclude_tickers))]
+    parts = []
+    for ticker, g in facts.groupby("ticker", sort=True):
+        s = _state_series(g)
+        if s.empty:
+            continue
+        s.insert(0, "ticker", ticker)
+        parts.append(s)
+    if not parts:
+        return pd.DataFrame({"ticker": pd.Series(dtype=str),
+                             "filed": pd.Series(dtype="datetime64[ns]"),
+                             "shares": pd.Series(dtype=float)})
+    return pd.concat(parts, ignore_index=True)
 
 
 def shares_asof(

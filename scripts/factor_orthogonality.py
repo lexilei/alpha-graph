@@ -226,6 +226,14 @@ BASELINE = [
     "momentum_252_21", "log_dollar_volume",
 ]
 
+# BASELINE + the B7-B9 PIT fundamentals controls (FACTORS.md), for
+# `evaluate --accepted EXTENDED`. Opt-in only: the judge's default and the
+# BASELINE shorthand are UNCHANGED, so every prior ledger look stays
+# comparable.
+EXTENDED = BASELINE + [
+    "log_mktcap_pit", "book_to_market_pit", "earnings_yield_pit",
+]
+
 
 def main():
     p = argparse.ArgumentParser(description="Factor orthogonality + incremental-IC tester")
@@ -258,6 +266,8 @@ def main():
     args = p.parse_args()
     if args.accepted == ["BASELINE"]:
         args.accepted = list(BASELINE)
+    elif args.accepted == ["EXTENDED"]:
+        args.accepted = list(EXTENDED)
 
     panel = load_panel(args.panel, pit=args.pit, lag=args.lag, daily=args.daily,
                        lag_controls=args.lag_controls)
