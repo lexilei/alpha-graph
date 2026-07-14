@@ -437,6 +437,112 @@ def test_small_cross_section_rebalances_skipped():
     np.testing.assert_allclose(res.turnover.to_numpy(), [1.0, 0.0], rtol=0, atol=TOL)
 
 
+def test_explicit_eligibility_blocks_stale_signal_after_exit():
+    dates = list(pd.bdate_range("2020-01-06", periods=5))
+    names = ["A", "B", "C", "D", "E", "F"]
+    prices = _prices_long(dates, {t: [100.0] * len(dates) for t in names})
+    signal = _signal_long([
+        (dates[0], {t: float(i) for i, t in enumerate(names, start=1)}),
+    ])
+    eligibility = pd.DataFrame([
+        {"ticker": t, "date": d, "eligible": not (t == "F" and d >= dates[2])}
+        for d in dates
+        for t in names
+    ])
+
+    res = run_ls_backtest(
+        prices,
+        signal,
+        eligibility=eligibility,
+        rebalance=2,
+        execution="close",
+        n_quantiles=3,
+        max_weight=1.0,
+    )
+
+    first = res.target_weights[res.target_weights["date"] == dates[0]]
+    second = res.target_weights[res.target_weights["date"] == dates[2]]
+    assert "F" in set(first["ticker"])
+    assert "F" not in set(second["ticker"])
+    assert res.meta["explicit_eligibility"] is True
+
+
+def test_eligibility_gap_resets_signal_carry_on_reentry():
+    dates = list(pd.bdate_range("2020-01-06", periods=5))
+    names = ["A", "B", "C", "D"]
+    prices = _prices_long(dates, {t: [100.0] * len(dates) for t in names})
+    signal = _signal_long([
+        (dates[0], {"A": 4.0, "B": 3.0, "C": 2.0, "D": 1.0}),
+        (dates[4], {"A": 4.0}),
+    ])
+    eligibility = pd.DataFrame([
+        {"ticker": t, "date": d, "eligible": not (t == "A" and d in dates[1:3])}
+        for d in dates
+        for t in names
+    ])
+
+    res = run_ls_backtest(
+        prices,
+        signal,
+        eligibility=eligibility,
+        rebalance=1,
+        execution="close",
+        n_quantiles=2,
+        max_weight=1.0,
+    )
+
+    # A is eligible again on d3, but its pre-exit score must not reappear until
+    # the caller supplies a new score on d4.
+    d3 = res.target_weights[res.target_weights["date"] == dates[3]]
+    d4 = res.target_weights[res.target_weights["date"] == dates[4]]
+    assert "A" not in set(d3["ticker"])
+    assert "A" in set(d4["ticker"])
+
+
+def test_eligibility_validation_fails_closed():
+    dates = list(pd.bdate_range("2020-01-06", periods=2))
+    prices = _prices_long(dates, {"A": [100.0, 100.0], "B": [100.0, 100.0]})
+    signal = _signal_long([(dates[0], {"A": 2.0, "B": 1.0})])
+    duplicate = pd.DataFrame({
+        "ticker": ["A", "A"],
+        "date": [dates[0], dates[0]],
+    })
+    with pytest.raises(ValueError, match="duplicate ticker/date"):
+        run_ls_backtest(
+            prices,
+            signal,
+            eligibility=duplicate,
+            rebalance=1,
+            n_quantiles=2,
+            max_weight=1.0,
+        )
+
+
+def test_missing_eligibility_liquidates_instead_of_holding_old_book():
+    dates = list(pd.bdate_range("2020-01-06", periods=3))
+    prices = _prices_long(dates, {
+        "A": [100.0, 100.0, 100.0],
+        "B": [100.0, 100.0, 100.0],
+    })
+    signal = _signal_long([(dates[0], {"A": 2.0, "B": 1.0})])
+    eligibility = pd.DataFrame([
+        {"ticker": ticker, "date": d, "eligible": d == dates[0]}
+        for d in dates
+        for ticker in ("A", "B")
+    ])
+    res = run_ls_backtest(
+        prices,
+        signal,
+        eligibility=eligibility,
+        rebalance=1,
+        n_quantiles=2,
+        max_weight=1.0,
+    )
+    assert res.meta["n_forced_cash_insufficient_eligibility"] == 1
+    assert res.turnover.loc[dates[1]] == pytest.approx(1.0)
+    assert res.turnover.loc[dates[2]] == 0.0
+
+
 # --------------------------------------------------------------------------- #
 # report
 # --------------------------------------------------------------------------- #

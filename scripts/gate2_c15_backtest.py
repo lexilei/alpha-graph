@@ -34,6 +34,7 @@ import pandas as pd
 from loguru import logger
 
 from alpha_graph.config import CACHE_DIR
+from alpha_graph.data.pit_universe import membership_mask
 from alpha_graph.eval.ff_attribution import ff_attribution
 from alpha_graph.eval.ic_tools import default_lags, hac_tstat
 from alpha_graph.portfolio import CostModel, run_ls_backtest, summarize
@@ -74,6 +75,8 @@ def main() -> None:
     prices = pd.read_parquet(CACHE_DIR / "market_data.parquet")[
         ["ticker", "date", "close", "open"]
     ]
+    eligibility = prices[["ticker", "date"]].copy()
+    eligibility["eligible"] = membership_mask(eligibility)
     sector_map = (
         pd.read_parquet(CACHE_DIR / "sector_map.parquet")
         .set_index("ticker")["sector"]
@@ -108,6 +111,7 @@ def main() -> None:
         res = run_ls_backtest(
             prices=prices,
             signal=sig,
+            eligibility=eligibility,
             rebalance="M",
             execution=spec["execution"],
             n_quantiles=N_QUANTILES,

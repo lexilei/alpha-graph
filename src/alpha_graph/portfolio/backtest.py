@@ -5,6 +5,10 @@ Semantics (documented choices — read before interpreting any output)
 - The signal frame is ALREADY availability-dated by the caller. At each
   rebalance decision date t the engine uses, per ticker, the latest non-NaN
   signal value with date <= t (as-of join). No further lagging happens here.
+- Optional `eligibility` is a DAILY state frame. When supplied, a name can
+  enter a target only when it is explicitly eligible on the decision date.
+  Signal carry is reset across ineligible spells, so an index removal cannot
+  leak a stale score into a later rebalance or re-entry.
 - execution="close": trade at the close of the decision date t.
   execution="next_open": trade at the open of the next trading day after t
   (the promotion gate's "next tradable window"; requires an `open` column
@@ -114,13 +118,16 @@ def run_ls_backtest(
     direction: int = 1,
     costs: CostModel | None = None,
     max_weight: float = 0.05,
+    eligibility: pd.DataFrame | None = None,
 ) -> BacktestResult:
     """Run a decile-style long-short backtest with share-based accounting.
 
     prices: long frame with columns ticker, date, close (+ open for
     execution="next_open"). signal: long frame with columns ticker, date,
-    value — already availability-dated by the caller. See module docstring
-    for all semantics.
+    value — already availability-dated by the caller. eligibility: optional
+    daily long frame with ticker/date and an optional boolean `eligible`
+    column; row presence means eligible when that column is omitted. Missing
+    ticker-dates fail closed. See module docstring for all semantics.
     """
     costs = costs if costs is not None else CostModel()
     if not isinstance(costs, CostModel):
@@ -135,6 +142,10 @@ def run_ls_backtest(
     for col in ("ticker", "date", "value"):
         if col not in signal.columns:
             raise ValueError(f"signal is missing column {col!r}")
+    if eligibility is not None:
+        for col in ("ticker", "date"):
+            if col not in eligibility.columns:
+                raise ValueError(f"eligibility is missing column {col!r}")
 
     px = prices.copy()
     px["date"] = pd.to_datetime(px["date"])
@@ -160,7 +171,40 @@ def run_ls_backtest(
     if sig_w.empty:
         raise ValueError("signal frame is empty")
     union = dates.union(sig_w.index)
-    sig_asof = sig_w.reindex(union).ffill()          # latest non-NaN value per ticker, as-of
+    sig_union = sig_w.reindex(union)
+
+    elig_w: pd.DataFrame | None = None
+    if eligibility is not None:
+        eg = eligibility.copy()
+        eg["date"] = pd.to_datetime(eg["date"])
+        if eg.duplicated(["ticker", "date"]).any():
+            raise ValueError("eligibility has duplicate ticker/date rows")
+        if "eligible" not in eg.columns:
+            eg["eligible"] = True
+        values = set(eg["eligible"].dropna().unique())
+        if not values.issubset({True, False, 0, 1}):
+            raise ValueError("eligibility.eligible must contain only booleans")
+        elig_w = (
+            _pivot(eg, "eligible")
+            .reindex(index=union, columns=sig_union.columns)
+            .fillna(False)
+            .astype(bool)
+        )
+
+        # Carry sparse signals only within one continuous eligible spell.
+        sig_asof = pd.DataFrame(index=union, columns=sig_union.columns, dtype=float)
+        for ticker in sig_union.columns:
+            eligible_t = elig_w[ticker]
+            spell = (~eligible_t).cumsum()
+            sig_asof[ticker] = (
+                sig_union[ticker]
+                .where(eligible_t)
+                .groupby(spell)
+                .ffill()
+                .where(eligible_t)
+            )
+    else:
+        sig_asof = sig_union.ffill()                 # latest non-NaN value per ticker, as-of
 
     decisions = _decision_dates(dates, sig_w.index.min(), rebalance)
     pos = {d: i for i, d in enumerate(dates)}
@@ -198,6 +242,7 @@ def run_ls_backtest(
     skipped_small = 0
     n_trades = 0
     n_skip_unchanged = 0
+    n_forced_cash = 0
 
     def _contrib(hold: np.ndarray, dp: np.ndarray) -> np.ndarray:
         out = np.where(hold != 0.0, hold * dp, 0.0)
@@ -207,15 +252,27 @@ def run_ls_backtest(
 
     def _form_target(decision_date: pd.Timestamp, exec_row: int) -> np.ndarray | None:
         """Full-vector target weights, or None if the cross-section is too small."""
-        nonlocal skipped_small
+        nonlocal n_forced_cash, skipped_small
         row = sig_asof.loc[decision_date]
         scores = row.dropna()
         tradeable = notna_c[exec_row]
         if use_open:
             tradeable = tradeable & notna_o[exec_row]
+        if elig_w is not None:
+            eligible_today = elig_w.loc[decision_date].reindex(tickers, fill_value=False)
+            tradeable = tradeable & eligible_today.to_numpy(dtype=bool)
         keep = [t for t in scores.index if t in col_of and tradeable[col_of[t]]]
         if len(keep) < n_quantiles:
             skipped_small += 1
+            if elig_w is not None and started:
+                if np.any(h != 0.0):
+                    n_forced_cash += 1
+                    logger.warning(
+                        "rebalance {} has {} eligible names < n_quantiles={}; "
+                        "liquidating the existing book to cash",
+                        decision_date.date(), len(keep), n_quantiles,
+                    )
+                return np.zeros(n_tk)
             logger.warning(
                 "rebalance {} skipped: {} valid names < n_quantiles={}",
                 decision_date.date(), len(keep), n_quantiles,
@@ -355,7 +412,9 @@ def run_ls_backtest(
             "n_executed_trades": n_trades,
             "n_skipped_unchanged_target": n_skip_unchanged,
             "n_skipped_small_cross_section": skipped_small,
+            "n_forced_cash_insufficient_eligibility": n_forced_cash,
             "n_decisions_dropped_no_next_open": dropped_tail,
+            "explicit_eligibility": eligibility is not None,
             "liquidations": liquidations,
             "start": idx[0],
             "end": idx[-1],
