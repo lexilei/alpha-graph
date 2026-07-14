@@ -126,3 +126,35 @@ def test_stale_legacy_pickle_ignored(tmp_path, monkeypatch):
 def test_load_model_missing_returns_none(tmp_path, monkeypatch):
     monkeypatch.setattr(ml_combiner, "CACHE_DIR", tmp_path)
     assert ml_combiner._load_model() is None
+
+
+# --- predict_current staleness guard ---
+
+def test_staleness_days_on_tiny_panel():
+    """The staleness helper measures the calendar gap off a panel's max date."""
+    panel = pd.DataFrame({
+        "ticker": ["A", "A", "B"],
+        "date": pd.to_datetime(["2026-03-30", "2026-04-02", "2026-04-01"]),
+        "fwd_return_21d": [0.01, 0.02, -0.01],
+    })
+    asof = panel["date"].max()
+    assert ml_combiner._staleness_days(asof, pd.Timestamp("2026-04-02")) == 0
+    assert ml_combiner._staleness_days(asof, pd.Timestamp("2026-04-09")) == 7
+    assert ml_combiner._staleness_days(asof, pd.Timestamp("2026-07-13")) == 102
+
+
+def test_staleness_threshold_semantics():
+    """Gap of exactly STALENESS_MAX_DAYS does not trip the guard; one more does."""
+    asof = pd.Timestamp("2026-01-01")
+    at_limit = ml_combiner._staleness_days(asof, pd.Timestamp("2026-01-08"))
+    beyond = ml_combiner._staleness_days(asof, pd.Timestamp("2026-01-09"))
+    assert at_limit == ml_combiner.STALENESS_MAX_DAYS
+    assert not at_limit > ml_combiner.STALENESS_MAX_DAYS
+    assert beyond > ml_combiner.STALENESS_MAX_DAYS
+
+
+def test_staleness_days_never_negative():
+    """A panel date in the future (clock skew) floors at 0, not negative."""
+    assert ml_combiner._staleness_days(
+        pd.Timestamp("2026-04-05"), pd.Timestamp("2026-04-02")
+    ) == 0

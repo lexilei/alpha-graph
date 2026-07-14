@@ -693,13 +693,47 @@ def feature_importance(panel: pd.DataFrame) -> pd.DataFrame:
     return importance
 
 
+STALENESS_MAX_DAYS = 7  # calendar days before predict_current warns
+
+
+def _staleness_days(panel_max_date: pd.Timestamp, now: pd.Timestamp) -> int:
+    """Calendar days between the panel's max date and `now`, floored at 0.
+
+    Pure helper so the predict_current staleness guard is testable
+    without building the full feature panel.
+    """
+    gap = pd.Timestamp(now) - pd.Timestamp(panel_max_date)
+    return max(0, gap.days)
+
+
 def predict_current(
     tickers: list[str] | None = None,
 ) -> pd.DataFrame:
-    """Generate current predictions using the latest saved model.
+    """Score the latest panel rows with the saved model — RESEARCH
+    DIAGNOSTICS ONLY. NEVER wire this to a broker.
 
-    This is the production inference path — loads the saved model and
-    generates predictions for the current cross-section of stocks.
+    This output is not a live trading signal, for three concrete reasons:
+
+    1. Stale by construction: build_feature_panel() drops rows via
+       ``dropna(subset=["fwd_return_21d"])`` before this function takes
+       the per-ticker "latest" row, so that row is the last date whose
+       21-trading-day forward return is already known — about 21 trading
+       days behind the last cached close, never today.
+    2. Frozen, inconsistent caches: the market cache ends 2026-04-02
+       while some signal caches carry later dates; nothing here
+       refreshes data, so the cross-section is whatever the caches last
+       held, merged as-of across mismatched end dates.
+    3. Feature drift: FEATURE_COLS is the 5-feature legacy set and
+       excludes every SEC candidate factor (cos_10q_yoy, embed_sim_*,
+       tone_shift_10k, new_content_frac, cos_latest_filing, spillover_*,
+       evt8k_*), so the model scores a subset of the panel actually
+       studied in FACTORS.md.
+
+    Guards: if the panel's max date is more than STALENESS_MAX_DAYS
+    calendar days behind now, a warning is logged (nothing is raised —
+    research repo). The returned frame carries an ``asof_date`` column
+    (the panel max date used) so no caller can mistake it for today's
+    signal.
     """
     model = _load_model()
     if model is None:
@@ -710,6 +744,17 @@ def predict_current(
     panel = build_feature_panel()
     if panel.empty:
         return pd.DataFrame()
+
+    # Staleness guard: the panel ends where the target-labelled data ends,
+    # not today. Warn when the gap exceeds the threshold.
+    asof_date = panel["date"].max()
+    stale_days = _staleness_days(asof_date, pd.Timestamp.now())
+    if stale_days > STALENESS_MAX_DAYS:
+        logger.warning(
+            f"predict_current panel max date {asof_date.date()} is "
+            f"{stale_days} calendar days behind now: "
+            f"STALE — research only, not a live signal"
+        )
 
     # Use only the latest date per ticker
     latest = panel.sort_values("date").groupby("ticker").tail(1).copy()
@@ -732,6 +777,8 @@ def predict_current(
     ) * 2  # [-1, +1]
 
     result = latest[["ticker", "date", "ml_predicted_return", "ml_signal"]].copy()
+    # Stamp the panel max date so no caller mistakes this for today's signal
+    result["asof_date"] = asof_date
     result = result.sort_values("ml_signal", ascending=False).reset_index(drop=True)
 
     # Save
