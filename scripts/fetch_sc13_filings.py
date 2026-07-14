@@ -38,6 +38,20 @@ silently ends the panel at 2024-12-16 (browse-edgar type=SC+13 has the same
 blind spot). Both vocabularies are captured (in the submissions rows AND in
 master.idx) and canonicalized to SC 13D / SC 13D/A / SC 13G / SC 13G/A.
 
+CIK SUCCESSION: the submissions API is per-CIK, and several panel companies
+changed CIK inside the window (holdco reorgs, redomiciliations, TPL's 2021
+trust->corp conversion), so querying only the CURRENT CIK silently loses every
+pre-reorg subject filing — TPL lost its only three activist 13D originals
+(Horizon Kinetics 2016-03-08, SoftVest 2019-03-15, Santa Monica Partners
+2019-04-08). OLD_CIK_MAP below carries the verified old CIKs; their spines are
+fetched like any subject, tagged with the PANEL ticker, and merged through the
+same subject-role filter and accession dedup. XOM needs no entry: the
+filing_acceptance corpus already carries both its CIKs. Discovery route for
+future additions: screen tickers whose earliest sc13 row starts years after
+2010-07 despite an older company, name-match the company lineage in
+data/cache/sc13_master_idx.parquet party names, then verify the candidate CIK's
+submissions JSON (entity name / formerNames, in-window subject-role rows).
+
 TIMEZONE: acceptanceDateTime is handled as in fetch_acceptance_datetimes.py
 (API UTC -> tz-naive US/Eastern wall time, row-local mislabeled-ET rules A/B).
 The filer-level blanket rule C is NOT applied: it targeted companies whose OWN
@@ -94,8 +108,33 @@ FORM_CANON = {"SCHEDULE 13D": "SC 13D", "SCHEDULE 13D/A": "SC 13D/A",
 RAW_FORMS = KEEP_FORMS | set(FORM_CANON)
 MIN_DATE = "2010-07-01"  # panel event-history start
 FIRST_QUARTER = (2010, 3)
-REQUEST_INTERVAL = 0.13  # ~8 req/s, SEC's stated fair-access ceiling is 10
+REQUEST_INTERVAL = 0.17  # ~6 req/s, comfortably under SEC's 10 req/s ceiling
 MAX_AGE_DAYS = 7.0
+
+# Old CIKs of panel companies whose LISTED entity changed CIK inside the
+# window. Each verified 2026-07-14 against its submissions JSON (entity name /
+# formerNames, in-window subject-role SC 13 rows) after name-matching the
+# master.idx party list. Look-alikes deliberately excluded: Viacom Inc 1339947
+# (pre-2019 VIAB, a different listed lineage that merged INTO CBS=813828),
+# Broadcom Corp 1054374 (BRCM, the company Avago ACQUIRED), BlackRock
+# closed-end funds 832327/880280, T Rowe Price Associates 80255 and Duke
+# Energy Carolinas 30371 (subsidiaries — their listed years pre-date the
+# window), Google Ventures / CapitalG / Linden Capital / Ares Management LLC
+# (filers, never our subjects).
+OLD_CIK_MAP: dict[str, list[str]] = {
+    "TPL": ["0000097517"],   # Texas Pacific Land Trust -> corp 1811074, 2021-01
+    "BLK": ["0001364742"],   # BlackRock Inc. (now BlackRock Finance) -> holdco 2012383, 2024-10
+    "PSKY": ["0000813828"],  # CBS Corp -> ViacomCBS -> Paramount Global -> Skydance holdco 2041610, 2025-08
+    "DIS": ["0001001039"],   # Walt Disney Co (now TWDC Enterprises 18) -> holdco 1744489, 2019-03
+    "GOOG": ["0001288776"],  # Google Inc. -> Alphabet 1652044, 2015-10
+    "BG": ["0001144519"],    # Bunge Ltd -> Bunge Global SA 1996862, 2023-11
+    "APA": ["0000006769"],   # Apache Corp -> APA Corp holdco 1841666, 2021-03
+    "CI": ["0000701221"],    # Cigna Corp (now Cigna Holding) -> Cigna Group 1739940, 2018-12
+    "MDT": ["0000064670"],   # Medtronic Inc -> Medtronic plc 1613103, 2015-01
+    "AVGO": ["0001441634",   # Avago Technologies Ltd -> Broadcom Ltd, 2016-02
+             "0001649338"],  # Broadcom Ltd (now Broadcom Pte.) -> Broadcom Inc 1730168, 2018-04
+    "LIN": ["0000884905"],   # Praxair Inc (now Linde Inc) -> Linde plc 1707925, 2018-10
+}
 
 _last_request_t = 0.0
 
@@ -145,6 +184,23 @@ def load_corpus() -> pd.DataFrame:
         logger.info(f"CIKs with several tickers, keeping first: {dupes.to_dict('records')}")
         corpus = corpus.drop_duplicates("cik", keep="first")
     return corpus
+
+
+def augment_corpus_with_old_ciks(corpus: pd.DataFrame) -> pd.DataFrame:
+    """corpus + one row per OLD_CIK_MAP entry, tagged with the PANEL ticker so
+    pre-reorg subject filings land in the panel history. Rejects an old CIK
+    that collides with a live corpus CIK and map tickers that left the panel
+    (either would mean the map is stale). Pure; tested."""
+    extra = pd.DataFrame(
+        [{"cik": cik, "ticker": t} for t, ciks in OLD_CIK_MAP.items() for cik in ciks])
+    unknown = sorted(set(OLD_CIK_MAP) - set(corpus["ticker"]))
+    if unknown:
+        raise ValueError(f"OLD_CIK_MAP tickers not in the corpus: {unknown}")
+    out = pd.concat([corpus, extra], ignore_index=True)
+    if not out["cik"].is_unique:
+        dup = sorted(out.loc[out["cik"].duplicated(keep=False), "cik"].unique())
+        raise ValueError(f"OLD_CIK_MAP collides with current corpus CIKs: {dup}")
+    return out.sort_values(["cik", "ticker"]).reset_index(drop=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -351,6 +407,10 @@ def build_table(corpus: pd.DataFrame) -> pd.DataFrame:
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT, "Accept-Encoding": "gzip, deflate"})
 
+    corpus = augment_corpus_with_old_ciks(corpus)
+    n_old = sum(len(v) for v in OLD_CIK_MAP.values())
+    logger.info(f"Corpus augmented with {n_old} pre-reorg CIKs "
+                f"for {len(OLD_CIK_MAP)} succession tickers")
     raw = fetch_all_spines(session, corpus)
     logger.info(f"raw SC 13 associations fetched: {len(raw):,}")
     spine = normalize(raw)
@@ -388,10 +448,15 @@ def validation_report(df: pd.DataFrame, corpus: pd.DataFrame) -> None:
     print("  SC 13D/13G FILINGS — VALIDATION")
     print("=" * 72)
     print(f"\nrows: {len(df):,}   subjects: {df['subject_ticker'].nunique()} "
-          f"of {len(corpus)} corpus companies   "
+          f"of {corpus['ticker'].nunique()} corpus companies   "
           f"span {df['filing_date'].min().date()} -> {df['filing_date'].max().date()}")
     print(f"acceptance_ts non-null: {df['acceptance_ts'].notna().mean() * 100:.2f}%   "
           f"filer resolved: {df['filer_cik'].notna().mean() * 100:.2f}%")
+    old_ciks = {c for cs in OLD_CIK_MAP.values() for c in cs}
+    per_old = df[df["subject_cik"].isin(old_ciks)].groupby("subject_ticker").size()
+    print(f"pre-reorg rows via OLD_CIK_MAP: {int(per_old.sum()):,} across "
+          f"{len(per_old)}/{len(OLD_CIK_MAP)} succession tickers  "
+          + "  ".join(f"{t}:{n}" for t, n in per_old.items()))
     unresolved = df[df["filer_cik"].isna()]
     if len(unresolved):
         print(f"  unresolved-filer sample (of {len(unresolved)}):")
@@ -415,8 +480,8 @@ def validation_report(df: pd.DataFrame, corpus: pd.DataFrame) -> None:
 
     d13 = df[df["form"] == "SC 13D"]
     breadth = d13["subject_ticker"].nunique()
-    print(f"\nBREADTH CEILING: {breadth}/{len(corpus)} subjects with >=1 original SC 13D "
-          f"({d13.shape[0]:,} originals)")
+    print(f"\nBREADTH CEILING: {breadth}/{corpus['ticker'].nunique()} subjects "
+          f"with >=1 original SC 13D ({d13.shape[0]:,} originals)")
     n_fam = df[df["form"].str.startswith("SC 13D")]["subject_ticker"].nunique()
     print(f"  incl. amendments: {n_fam} subjects touched by the 13D family")
     per_year = d13.groupby(d13["filing_date"].dt.year)["subject_ticker"].nunique()

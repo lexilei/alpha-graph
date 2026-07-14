@@ -6,9 +6,11 @@ excluded) and canonicalization of EDGAR's post-2024-12-18 "SCHEDULE 13x"
 vocabulary, the SUBJECT-role filter (blank Williams Act file number = the
 corpus company is the FILER about someone else -> dropped), the 2010-07
 window, key normalization (digits-only accession, zero-padded CIKs), the
-amendment flag, dedup on accession, master.idx party parsing, filer
-resolution from idx parties (joint filings -> lowest CIK; unresolved -> null),
-and the UTC -> ET acceptance conversion with row-local mislabeled-ET rules A/B.
+amendment flag, dedup on accession (including across succession CIKs),
+the OLD_CIK_MAP corpus augmentation (panel-ticker tagging, stale-map guards),
+master.idx party parsing, filer resolution from idx parties (joint filings ->
+lowest CIK; unresolved -> null), and the UTC -> ET acceptance conversion with
+row-local mislabeled-ET rules A/B.
 """
 
 import importlib.util
@@ -16,6 +18,7 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "fetch_sc13_filings.py"
 _spec = importlib.util.spec_from_file_location("fetch_sc13_filings", _SCRIPT)
@@ -99,6 +102,56 @@ def test_normalize_dedup_on_accession():
     out = mod.normalize(raw)
     assert len(out) == 1
     assert out.iloc[0]["subject_cik"] == "0000940944"  # lowest CIK wins, deterministic
+
+
+def test_normalize_dedup_across_succession_ciks():
+    # A filing listed under BOTH the old and the new CIK of the same company
+    # (succession overlap) must survive exactly once, deterministically.
+    raw = pd.DataFrame([
+        _raw_row(subject_cik="1811074", subject_ticker="TPL",
+                 accession="0000899140-19-000068", form="SC 13D",
+                 filing_date="2019-03-15"),
+        _raw_row(subject_cik="97517", subject_ticker="TPL",
+                 accession="0000899140-19-000068", form="SC 13D",
+                 filing_date="2019-03-15"),
+    ])
+    out = mod.normalize(raw)
+    assert len(out) == 1
+    assert out.iloc[0]["subject_cik"] == "0000097517"
+    assert out.iloc[0]["subject_ticker"] == "TPL"
+
+
+# ------------------------------------------------------------- old-CIK corpus
+def test_old_cik_map_format():
+    assert mod.OLD_CIK_MAP, "succession map must not be empty"
+    all_ciks = [c for cs in mod.OLD_CIK_MAP.values() for c in cs]
+    for t, ciks in mod.OLD_CIK_MAP.items():
+        assert t == t.upper() and isinstance(ciks, list) and ciks
+        for c in ciks:
+            assert len(c) == 10 and c.isdigit()  # zero-padded, joins subject_cik
+    assert len(all_ciks) == len(set(all_ciks))
+
+
+def test_augment_corpus_tags_old_ciks_with_panel_ticker(monkeypatch):
+    monkeypatch.setattr(mod, "OLD_CIK_MAP", {"TPL": ["0000097517"]})
+    corpus = pd.DataFrame([{"cik": "0001811074", "ticker": "TPL"},
+                           {"cik": "0000320193", "ticker": "AAPL"}])
+    out = mod.augment_corpus_with_old_ciks(corpus)
+    assert len(out) == 3
+    assert out.loc[out["cik"] == "0000097517", "ticker"].tolist() == ["TPL"]
+    assert set(corpus["cik"]) < set(out["cik"])  # current corpus untouched
+
+
+def test_augment_corpus_rejects_stale_map(monkeypatch):
+    corpus = pd.DataFrame([{"cik": "0001811074", "ticker": "TPL"}])
+    # old CIK colliding with a live corpus CIK
+    monkeypatch.setattr(mod, "OLD_CIK_MAP", {"TPL": ["0001811074"]})
+    with pytest.raises(ValueError, match="collides"):
+        mod.augment_corpus_with_old_ciks(corpus)
+    # map ticker that left the panel
+    monkeypatch.setattr(mod, "OLD_CIK_MAP", {"ZZZ": ["0000097517"]})
+    with pytest.raises(ValueError, match="not in the corpus"):
+        mod.augment_corpus_with_old_ciks(corpus)
 
 
 # ------------------------------------------------------------- master.idx
