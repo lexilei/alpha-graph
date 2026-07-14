@@ -75,6 +75,10 @@ def main() -> None:
     prices = pd.read_parquet(CACHE_DIR / "market_data.parquet")[
         ["ticker", "date", "close", "open"]
     ]
+    # Membership snapshots end 2026-01-14 + 60d carry-forward: masked reruns
+    # force-liquidate the tail after ~2026-03-15, and that window grows as
+    # the CSV ages. Fail-closed is deliberate; refresh the CSV before
+    # interpreting any tail behavior.
     eligibility = prices[["ticker", "date"]].copy()
     eligibility["eligible"] = membership_mask(eligibility)
     sector_map = (
@@ -163,7 +167,11 @@ def main() -> None:
         "construction": "monthly compounded net returns; lags via "
                         "default_lags(21, 21, ic=series)",
     }
-    ff = ff_attribution(net)
+    # excess=True: the net series is a self-financing dollar-neutral spread
+    # (already excess-like); subtracting rf misstates alpha by ~-rf. The
+    # frozen report's -1.55%/yr row predates this convention (see its
+    # audit note).
+    ff = ff_attribution(net, excess=True)
     out["base_ff5_mom"] = {
         k: ff[k] for k in ("model", "n_days", "hac_lags", "alpha_ann",
                            "alpha_t_hac", "r2", "resid_vol_ann", "ir_resid")

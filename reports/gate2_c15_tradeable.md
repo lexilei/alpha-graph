@@ -1,6 +1,6 @@
 # Gate-2 tradeable backtest: C15 decile long-short (2026-07-13)
 
-One honest pass of the pre-registered tradeable backtest for C15
+The registered tradeable-backtest pass for C15
 (`evt8k_freq_z_d`, daily abnormal 8-K filing frequency), graded against the
 frozen promotion gate `reports/promotion_gate_c11.md`. The design below was
 fixed before any result existed; nothing was tuned, and per the gate's
@@ -12,6 +12,43 @@ are decisively negative; break-even is 4.2 bp/side against a required
 6.0 bp/side. The C15 research-level result (v0 sector-neutral incremental
 t = −2.29, itself below the ledger ceiling) stands as what it is: a real but
 untradeably small predictive effect.
+
+## Post-run implementation audit
+
+An implementation review later on 2026-07-13 found that the engine forward-
+filled each ticker's last signal indefinitely and checked only price presence
+when forming a target. A stock removed from the PIT universe could therefore
+remain selectable with a stale pre-removal score. The engine now accepts an
+explicit daily eligibility frame and resets signal carry across ineligible
+spells; regression tests cover both removal and re-entry.
+
+The numerical tables below are retained as the immutable record of the
+registered run, but they are not an exact PIT performance estimate and must
+not be cited as one. The run already failed the frozen economics gates by a
+wide margin, so its live path remains closed. The bug fix does not authorize a
+rescue rerun; any later full-universe replication is a research data-integrity
+exercise only.
+
+Three further review annotations (2026-07-13, five-lens review; the recorded
+tables are unchanged):
+
+1. **Reruns at HEAD differ from the recorded tables.** The script now passes
+   the eligibility mask, so a rerun gives the corrected-engine numbers (base
+   gross +1.91%/yr, net Sharpe +0.02, break-even 4.54 bp/side, monthly HAC
+   t +0.08 — criteria 2/4/5 still fail decisively; the old stale-score bug
+   *depressed* the recorded numbers). The recorded tables reproduce only at
+   pinned commit `3a86cad`.
+2. **The FF alpha row (−1.55%/yr, t −0.90) is a convention artifact.** It was
+   computed under `excess=False` (rf subtracted from a self-financing
+   dollar-neutral spread); under the correct `excess=True` convention added
+   later the same day, alpha is +0.06%/yr (t +0.03) — i.e. ≈ −rf was the
+   entire "negative alpha." No gate criterion read this number; criterion 3
+   used the monthly net HAC t.
+3. **Wording correction:** the phrase "nets to zero by construction of the
+   break-even" below is wrong as written — the base case used 3 bp/side, not
+   the 4.21 bp break-even. Net ≈ 0 because trading (1.24%/yr) + borrow
+   (0.50%/yr) happens to ≈ gross (1.74%/yr): a coincidence of magnitudes,
+   not a construction.
 
 ## Registration (echo)
 
