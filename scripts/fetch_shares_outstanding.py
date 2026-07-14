@@ -35,8 +35,9 @@ median, only ~1.5x inside the drop threshold. A name with a longer
 post-reverse-split history (median pulled further from the old regime) would
 have TRUE rows falsely dropped. As a tripwire, any would-drop row on a
 ticker whose raw series carries a real-split signature (>=50x persistent
-level break with >=4 rows on both sides — has_split_signature) is
-WARNING-logged for operator hand-checking before being dropped anyway.
+level break; fires with as few as 3 rows beyond the break, 2 for breaks
+>=100x — has_split_signature) is WARNING-logged for operator hand-checking
+before being dropped anyway.
 
 MULTI-CLASS RESOLUTION: when one filing reports several classes as separate
 facts they surface as duplicate (end, filed) rows that must be SUMMED
@@ -253,13 +254,19 @@ def resolve_multiclass(df: pd.DataFrame) -> pd.DataFrame:
 def has_split_signature(shares, min_ratio: float = 50.0,
                         min_side: int = 4) -> bool:
     """True when a time-ordered share-count series contains a >=min_ratio
-    persistent level break with >=min_side rows on both sides — the
-    signature of a real (reverse) split, as opposed to a lone scale mistag.
+    persistent level break — the signature of a real (reverse) split, as
+    opposed to a lone scale mistag.
 
-    At each cut with min_side rows on both sides, compare the MEDIANS of the
-    min_side rows just before vs just after the cut. A lone mistag spike
-    cannot pull a 4-row median to its scale, so PKG-style x1000 rows do not
-    trip; EXE's 1-for-200 reverse split does. Windows are local because a
+    At each cut with min_side rows on both sides OF THE CUT, compare the
+    MEDIANS of the min_side rows just before vs just after the cut. A lone
+    mistag spike cannot pull a 4-row median to its scale, so PKG-style x1000
+    rows do not trip; EXE's 1-for-200 reverse split does. Note the window
+    may straddle the BREAK: a 4-row median is decided by its middle two
+    values, so 3 rows beyond the break suffice, and a half-straddling
+    window's midpoint median lets a >=2x-min_ratio break fire with just 2 —
+    NOT the ">=4 rows on both sides of the break" this docstring once
+    claimed. Safe direction: this gate only ADDS hand-check warnings, never
+    drops. Windows are local because a
     post-split regime can be short (EXE re-issued shares in its 2021
     bankruptcy reorg after only 4 filings at the post-split count) —
     whole-side medians would dilute such a break away.
