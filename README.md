@@ -14,12 +14,20 @@ the frozen honest convention set (v0), the 10-K text-change factor and the
 customer-momentum spillover factor lose their signal (sector-neutral
 incremental t = +0.24 and +0.21); the abnormal-8-K-frequency family survives
 attenuated (daily variant t = −2.29, monthly t = −2.00) but sits below the
-full-ledger multiple-testing ceiling (≈ 2.6). The registry holds **0 accepted
-factors**; the strongest candidate (C15, daily 8-K frequency) is unconfirmed.
+full-ledger multiple-testing ceiling. Later the same day, earnings drift
+(C17 SUE/PEAD, incremental t = +2.09, textbook one-month decay) and
+clustered insider buying (C16, calendar-time FF5+MOM alpha +7.67%/yr,
+HAC t +3.33) were evaluated under pre-pinned bars: C17 is a below-ceiling
+candidate; C16 passed its pinned bar but a shifted-event placebo attributes
+the alpha to portfolio composition rather than event timing, so its
+ceiling-clearing claim was retracted the same day (see the ledger's
+re-grade). The registry holds **0 accepted factors**, and no result is
+currently treated as clearing the statistical bar (N = 73 looks, two-sided
+ceiling ≈ 2.66).
 
 ## Method
 
-Each of the fifteen registered candidates receives a permanent ID
+Each of the nineteen registered candidates receives a permanent ID
 (`FACTORS.md`) and is scored by the monthly cross-sectional Spearman rank-IC
 between the signal and forward returns. The decision statistic is the
 **incremental** IC — the candidate residualized, each month, against a
@@ -51,6 +59,29 @@ controls). Code keys factors by name; the C/B labels are for reference.
 | 8-K | 100,618 filings, 2011–2026, all 499 names |
 | Prices | 499 tickers, daily OHLCV, 2011–2026 |
 | Company graph | 11,025 extracted relationship rows (3,113 unique directed edges after per-pair dedup), supplier/customer/competitor, LLM-extracted from 10-K business sections, each backed by a source sentence |
+
+### Paid-data staging
+
+No commercial dataset has been purchased. The approved procurement path is
+documented in `reports/delisted_data_decision.md`. Its unauthenticated download
+plan can be inspected without a subscription:
+
+```bash
+python -m alpha_graph.data.sharadar plan --profile validation --start 2009-01-01
+```
+
+After written license confirmation, `fetch` requires both
+`NASDAQ_DATA_LINK_API_KEY` and an explicit `--license-expires` date. Raw and
+schema-validated Parquet snapshots remain isolated under `data/raw/sharadar/`
+and `data/cache/sharadar/`; they never overwrite `market_data.parquet`. Blind
+identity and coverage QA runs with:
+
+```bash
+python -m alpha_graph.data.sharadar_qa --snapshot SNAPSHOT_ID
+```
+
+The QA command exits nonzero until all machine gates and high-risk manual
+identity adjudications pass.
 
 ## Findings
 
@@ -115,8 +146,8 @@ predictive content is the frequency anomaly specifically: constructions
 reading 8-K item content (hard-negative items) or tone (Loughran-McDonald
 sentiment) carried nothing even pre-PIT (sector-neutral |t| ≤ 1.0).
 
-Both variants sit below the full-ledger ceiling of ≈ 2.6. Status: strongest
-current candidates, unconfirmed; no significance claim is made.
+Both variants sit below the full-ledger ceiling of ≈ 2.66. Status:
+candidates, unconfirmed; no significance claim is made.
 
 ### C15 tradeable backtest (gate-2): failed, live path closed
 
@@ -147,13 +178,18 @@ signals.
 
 ## Significance and multiple testing
 
-The ledger holds 64 rows to date, of which N = 56 record a computed
-evaluation statistic (the rest are registrations or infrastructure notes;
-superseded rows count — they were looks, as do the 12 back-filled looks from
-the 2026-07-10 IC-decay sweep, ledgered 2026-07-13). Selection is over |t|,
-so the significance bar for any external claim is the two-sided expected-max
-ceiling E[max |t| | null] = `emax_null(2N)` = **2.57**. No factor clears it;
-the strongest is C15 at −2.29. The candidates are correlated same-family
+As of end of day 2026-07-13, N = 73 ledger rows record a computed evaluation
+statistic (registrations and infrastructure notes excluded; superseded rows
+count — they were looks, as do the 12 back-filled looks from the 2026-07-10
+IC-decay sweep). Selection is over |t|, so the reference bar for any
+external claim is the two-sided expected-max ceiling E[max |t| | null] =
+`emax_null(2N)` = **2.66** — with two review caveats now recorded in the
+ledger: the E[max] ceiling is a mean, not a significance bar (the 5%
+family-wise threshold at this N is ≈ 3.4), and row-based counting
+understates statistic-level looks (≈ 150–185, ceiling ≈ 2.9). No result is
+currently treated as clearing the bar: C16's +3.33 was re-graded after a
+composition placebo (see the ledger), and C17 +2.09 / C15 −2.29 / C11
+−2.00 sit below it. The candidates are correlated same-family
 measurements: an eigenspectrum estimate puts the effective number of
 independent bets at ≈ 7–9. That effective-N describes redundancy — how many
 distinct ideas were really tried — and is never the significance
@@ -166,14 +202,17 @@ each statistic's sample size.
   forward bias (names enter the panel only while index members) but not
   survivor bias: roughly 38% of names that passed through the index over
   2011–2026 are absent entirely (departed-name gap 194 in 2011 → 23 in
-  2025), which attenuates measured ICs.
+  2025). The resulting ICs are survivor-conditioned; the direction of the
+  bias is not known in advance.
 - **8-K economics.** The quintile-spread magnitudes on record (+0.41%/month
   on the 179-name subset, +0.11%/month at full coverage, for C11) are
   pre-PIT. v0 portfolio-level economics were measured by the gate-2
   tradeable backtest (2026-07-13, see the C15 section): the daily grid
   recovers ≈ +1.74%/yr gross on a decile L/S, but the same within-month
   decay that motivated it makes turnover cost the binding constraint — net
-  ≈ zero at base costs.
+  ≈ zero at base costs. A post-run audit found that stale scores could cross
+  PIT membership exits. The figures remain the registered historical record
+  but are not an exact PIT estimate; the failed live path remains closed.
 - **Graph edges** are LLM-extracted (mild forward-knowledge exposure) with
   both endpoints in the S&P 500 — the regime where the cross-firm momentum
   effect is documented to be weakest. The SEC-disclosed-customer replication
