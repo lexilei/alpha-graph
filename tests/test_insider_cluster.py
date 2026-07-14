@@ -11,8 +11,11 @@ two ledgered build-time pins):
   - entity exclusion per the implemented structural rule: tenpct-only owners
     (no officer/director flag) never qualify; amendments and sales never
     qualify;
-  - entry at t+1 (first credited return = the session after the entry close)
-    and exit after exactly 63 trading days;
+  - credited-return window: exactly 63 trading days starting at
+    pos(event) + credit_offset — offset 1 = the original implementation
+    (credits the filing-day overnight close(d)->close(d+1)), offset 2 = the
+    corrected headline timing per the ledgered entry-credit disambiguation
+    (buy at close(d+1), first credit close(d+1)->close(d+2));
   - days with zero active names are 0.0 (cash) and stay in the series;
   - PIT: later filings change nothing earlier.
 """
@@ -22,10 +25,12 @@ import pandas as pd
 import pytest
 
 from alpha_graph.signals.insider_cluster import (
+    ORIGINAL_CREDIT_OFFSET,
     add_adv_diagnostic,
     build_events,
     build_series,
     compute,
+    dropped_first_day_returns,
     qualifying_buys,
 )
 
@@ -161,15 +166,16 @@ def test_amendments_and_sales_never_qualify():
 
 
 # --------------------------------------------------------------------------- #
-# Portfolio: entry t+1, exit after 63 trading days, cash days
+# Portfolio: credited window (both timings), exit after 63 days, cash days
 # --------------------------------------------------------------------------- #
 
-def test_entry_t1_and_exit_63_exact():
+def test_original_timing_credits_63_days_from_first_close():
     market = _market()
     cal = pd.DatetimeIndex(np.sort(market["date"].unique()))
     series, events = build_series(
         _events([_row(owner="O1", filing="2020-02-03"),
-                 _row(owner="O2", filing="2020-02-10")]), market)
+                 _row(owner="O2", filing="2020-02-10")]), market,
+        credit_offset=ORIGINAL_CREDIT_OFFSET)
     assert bool(events.loc[0, "tradeable"])
     pos0 = cal.get_loc(pd.Timestamp("2020-02-10"))
     active = series["ret"].to_numpy()[pos0 + 1: pos0 + 64]
@@ -180,16 +186,35 @@ def test_entry_t1_and_exit_63_exact():
     assert (series["n_active"].to_numpy()[pos0 + 1: pos0 + 64] == 1).all()
 
 
-def test_event_on_non_trading_day_enters_next_session():
+def test_corrected_timing_credits_63_days_from_second_close():
+    # default = the corrected headline timing (credit_offset=2): the
+    # filing-day overnight close(d)->close(d+1) is NOT credited
     market = _market()
+    cal = pd.DatetimeIndex(np.sort(market["date"].unique()))
     series, _ = build_series(
         _events([_row(owner="O1", filing="2020-02-03"),
-                 _row(owner="O2", filing="2020-02-08")]),  # a Saturday
-        market)
-    # first trading day >= Sat 02-08 is Mon 02-10 (the entry close);
-    # the first credited return is Tue 02-11
-    assert series.loc[pd.Timestamp("2020-02-10"), "ret"] == 0.0
-    assert series.loc[pd.Timestamp("2020-02-11"), "ret"] == pytest.approx(0.01)
+                 _row(owner="O2", filing="2020-02-10")]), market)
+    pos0 = cal.get_loc(pd.Timestamp("2020-02-10"))
+    active = series["ret"].to_numpy()[pos0 + 2: pos0 + 65]
+    assert len(active) == 63
+    assert np.allclose(active, 0.01)
+    assert series["ret"].iloc[pos0 + 1] == 0.0        # dropped overnight day
+    assert series["ret"].iloc[pos0 + 65] == 0.0       # day 65: exited
+    assert (series["n_active"].to_numpy()[pos0 + 2: pos0 + 65] == 1).all()
+
+
+def test_event_on_non_trading_day_enters_next_session():
+    market = _market()
+    ev = _events([_row(owner="O1", filing="2020-02-03"),
+                  _row(owner="O2", filing="2020-02-08")])  # a Saturday
+    # first trading day >= Sat 02-08 is Mon 02-10; original timing credits
+    # from Tue 02-11, corrected timing from Wed 02-12
+    orig, _ = build_series(ev, market, credit_offset=ORIGINAL_CREDIT_OFFSET)
+    assert orig.loc[pd.Timestamp("2020-02-10"), "ret"] == 0.0
+    assert orig.loc[pd.Timestamp("2020-02-11"), "ret"] == pytest.approx(0.01)
+    corr, _ = build_series(ev, market)
+    assert corr.loc[pd.Timestamp("2020-02-11"), "ret"] == 0.0
+    assert corr.loc[pd.Timestamp("2020-02-12"), "ret"] == pytest.approx(0.01)
 
 
 def test_days_without_active_names_are_cash_and_kept():
@@ -254,3 +279,19 @@ def test_adv_diagnostic_exact():
     out = add_adv_diagnostic(events, market)
     assert out.loc[0, "adv_20d"] == pytest.approx(1e8)
     assert out.loc[0, "dollar_over_adv"] == pytest.approx(3e-3)
+
+
+# --------------------------------------------------------------------------- #
+# Dropped-first-day decomposition
+# --------------------------------------------------------------------------- #
+
+def test_dropped_first_day_returns_exact():
+    # constant +1%/day market: every event's dropped close(d)->close(d+1)
+    # return is exactly 0.01
+    market = _market()
+    events = _events([_row(owner="O1", filing="2020-02-03"),
+                      _row(owner="O2", filing="2020-02-10")])
+    _, events = build_series(events, market)
+    first = dropped_first_day_returns(events, market)
+    assert len(first) == 1
+    assert first.iloc[0] == pytest.approx(0.01)

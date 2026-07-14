@@ -32,22 +32,36 @@ pinned:
   at the last trading day ≤ event_date) — DIAGNOSTIC ONLY per the pin.
 - Calendar-time portfolio (Mitchell–Stafford, long-only equal-weight): with
   pos(e) = index of the first trading day ≥ event_date on the market
-  calendar (entry at the next close after the 2nd filing), a name is active
-  on trading day t iff pos(e) + 1 <= pos(t) <= pos(e) + 63 for one of its
-  events (t+1 convention: the first credited return is the next session's
-  close-to-close return; names deduplicate across overlapping events).
-  Daily return = equal-weight mean of active names' close-to-close returns
-  (adjusted close). Days with zero active names — or none with a return —
-  are 0.0, i.e. cash earning nothing, and stay IN the series/regression.
-  BUILD-TIME PIN (ledgered 2026-07-13, pre-evaluation; not a look): the
-  protocol did not state empty-day handling.
+  calendar, a name's credited-return days are the `hold_days` (63) trading
+  days starting `credit_offset` sessions after pos(e); names deduplicate
+  across overlapping events. Daily return = equal-weight mean of active
+  names' close-to-close returns (adjusted close). Days with zero active
+  names — or none with a return — are 0.0, i.e. cash earning nothing, and
+  stay IN the series/regression. BUILD-TIME PIN (ledgered 2026-07-13,
+  pre-evaluation; not a look): the protocol did not state empty-day
+  handling.
+- ENTRY-CREDIT DISAMBIGUATION (ledgered 2026-07-13; orchestrator-authorized
+  semantics correction of the same registered hypothesis, not a new
+  factor): the pinned "entry next close after the 2nd filing (t+1)" was
+  first implemented as credit_offset=1 — first credited return
+  close(d)→close(d+1), the filing-day overnight, which a buyer AT the next
+  close cannot capture (Form 4s are heavily after-hours; announcement
+  reaction concentrates exactly there). Corrected headline timing:
+  credit_offset=2 — buy at close(d+1), P&L credited close(d+1)→close(d+2)
+  onward, active-return days [event_date+2, event_date+1+63], same 63-day
+  holding length. Both series are built; the original stays cached
+  unchanged, labeled "includes the uncapturable filing-day overnight",
+  and the corrected run re-decides the status under the SAME pinned bar.
 - Events dated outside the market calendar (before its first or after its
   last day) cannot be entered and are flagged tradeable=False; they stay in
   the events cache but contribute nothing to the series.
 
 Caches:
-- data/cache/insider_cluster_c16.parquet — daily series: ret, n_active
-  (names contributing a return that day), n_active_events.
+- data/cache/insider_cluster_c16.parquet — daily series, ORIGINAL timing
+  (credit_offset=1): ret, n_active (names contributing a return that day),
+  n_active_events.
+- data/cache/insider_cluster_c16_corrected.parquet — same schema, the
+  corrected timing (credit_offset=2); the headline series.
 - data/cache/insider_cluster_c16_events.parquet — one row per event.
 
 Evaluation (the 3 pinned looks, printed by main): FF5+MOM attribution
@@ -73,7 +87,15 @@ HOLD_TDAYS = 63        # trading days held after entry
 ADV_WINDOW = 20        # trading days in the ADV diagnostic
 FULL_T_BAR = 2.0       # pinned success bar on the full-sample alpha HAC t
 
+# First credited close-to-close return, in sessions after pos(event):
+# 2 = corrected headline timing (buy at close(d+1), credit from close(d+1)→
+# close(d+2)); 1 = the original implementation (credits the filing-day
+# overnight close(d)→close(d+1), uncapturable at the next close).
+CREDIT_OFFSET = 2
+ORIGINAL_CREDIT_OFFSET = 1
+
 SERIES_CACHE = "insider_cluster_c16.parquet"
+SERIES_CORR_CACHE = "insider_cluster_c16_corrected.parquet"
 EVENTS_CACHE = "insider_cluster_c16_events.parquet"
 
 TRANS_COLS = ["ticker", "owner_cik", "filing_date", "dollar_value"]
@@ -148,11 +170,13 @@ def build_events(qual: pd.DataFrame,
 
 def build_series(events: pd.DataFrame, market: pd.DataFrame,
                  hold_days: int = HOLD_TDAYS,
+                 credit_offset: int = CREDIT_OFFSET,
                  ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Daily equal-weight series over the market calendar + flagged events.
 
-    Active on trading day t: pos(event)+1 <= pos(t) <= pos(event)+hold_days,
-    pos(event) = first trading day >= event_date. Empty days = 0.0 (cash).
+    Credited on trading day t: pos(event) + credit_offset <= pos(t) <=
+    pos(event) + credit_offset + hold_days - 1, pos(event) = first trading
+    day >= event_date. Empty days = 0.0 (cash).
     """
     px = market.pivot(index="date", columns="ticker", values="close").sort_index()
     rets = px.pct_change(fill_method=None)
@@ -171,7 +195,8 @@ def build_series(events: pd.DataFrame, market: pd.DataFrame,
         if not row.tradeable:
             continue
         pos0 = int(cal.searchsorted(row.event_date, side="left"))
-        start, stop = pos0 + 1, min(pos0 + hold_days, n - 1)
+        start = pos0 + credit_offset
+        stop = min(pos0 + credit_offset + hold_days - 1, n - 1)
         if start > stop:
             continue
         n_active_events[start:stop + 1] += 1
@@ -218,13 +243,36 @@ def add_adv_diagnostic(events: pd.DataFrame, market: pd.DataFrame,
 
 def compute(trans: pd.DataFrame, market: pd.DataFrame,
             window_days: int = WINDOW_CAL_DAYS, hold_days: int = HOLD_TDAYS,
-            adv_window: int = ADV_WINDOW) -> tuple[pd.DataFrame, pd.DataFrame]:
+            adv_window: int = ADV_WINDOW,
+            credit_offset: int = CREDIT_OFFSET) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Full pipeline: transactions + market -> (daily series, events)."""
     qual = qualifying_buys(trans)
     events = build_events(qual, window_days=window_days)
-    series, events = build_series(events, market, hold_days=hold_days)
+    series, events = build_series(events, market, hold_days=hold_days,
+                                  credit_offset=credit_offset)
     events = add_adv_diagnostic(events, market, adv_window=adv_window)
     return series, events
+
+
+def dropped_first_day_returns(events: pd.DataFrame,
+                              market: pd.DataFrame) -> pd.Series:
+    """Per-event close(d)->close(d+1) return — the day the corrected timing
+    drops relative to the original implementation (the filing-day overnight
+    plus the next session). NaN/no-data events are skipped."""
+    px = market.pivot(index="date", columns="ticker", values="close").sort_index()
+    rets = px.pct_change(fill_method=None)
+    cal = px.index
+    out = []
+    for row in events.itertuples():
+        if not getattr(row, "tradeable", True) or row.ticker not in rets.columns:
+            continue
+        t = int(cal.searchsorted(row.event_date, side="left")) + 1
+        if t > len(cal) - 1:
+            continue
+        v = float(rets.iloc[t][row.ticker])
+        if not np.isnan(v):
+            out.append(v)
+    return pd.Series(out, dtype=float)
 
 
 # --------------------------------------------------------------------------- #
@@ -272,9 +320,12 @@ def main() -> None:
     trans = pd.read_parquet(CACHE_DIR / "form4_trans.parquet")
     market = pd.read_parquet(CACHE_DIR / "market_data.parquet",
                              columns=["date", "ticker", "close", "volume"])
-    series, events = compute(trans, market)
+    series_corr, events = compute(trans, market)                 # headline
+    series_orig, _ = compute(trans, market,
+                             credit_offset=ORIGINAL_CREDIT_OFFSET)
 
-    series.to_parquet(CACHE_DIR / SERIES_CACHE)
+    series_orig.to_parquet(CACHE_DIR / SERIES_CACHE)
+    series_corr.to_parquet(CACHE_DIR / SERIES_CORR_CACHE)
     events.to_parquet(CACHE_DIR / EVENTS_CACHE, index=False)
 
     per_year = events["event_date"].dt.year.value_counts().sort_index()
@@ -287,18 +338,27 @@ def main() -> None:
     logger.info(f"dollar_over_adv (diagnostic): median "
                 f"{events['dollar_over_adv'].median():.4f}")
 
-    looks = pinned_looks(series)
-    for k, res in enumerate(looks, start=1):
-        logger.info(
-            f"look {k}/3 ({res['window']} {res['start']}->{res['end']}, "
-            f"{res['n_days']}d): alpha {res['alpha_ann']:+.2%}/yr "
-            f"(HAC t {res['alpha_t_hac']:+.2f}), mkt beta "
-            f"{res['loadings']['mkt_rf']:+.3f}, R2 {res['r2']:.3f}, "
-            f"avg active {res['avg_active']:.1f}, "
-            f"days with >=1 name {res['pct_days_active']:.1%}"
-        )
-    logger.info(f"pinned bar (full t >= +{FULL_T_BAR}, both halves alpha > 0) "
-                f"-> {decide(looks)}")
+    first = dropped_first_day_returns(events, market)
+    logger.info(f"dropped first day close(d)->close(d+1), per event: "
+                f"mean {first.mean():+.4%}, median {first.median():+.4%}, "
+                f"n {len(first)}")
+
+    for label, series in (("original timing (filing-day overnight included)",
+                           series_orig),
+                          ("corrected timing", series_corr)):
+        looks = pinned_looks(series)
+        for k, res in enumerate(looks, start=1):
+            logger.info(
+                f"[{label}] look {k}/3 ({res['window']} "
+                f"{res['start']}->{res['end']}, {res['n_days']}d): "
+                f"alpha {res['alpha_ann']:+.2%}/yr "
+                f"(HAC t {res['alpha_t_hac']:+.2f}), mkt beta "
+                f"{res['loadings']['mkt_rf']:+.3f}, R2 {res['r2']:.3f}, "
+                f"avg active {res['avg_active']:.1f}, "
+                f"days with >=1 name {res['pct_days_active']:.1%}"
+            )
+        logger.info(f"[{label}] pinned bar (full t >= +{FULL_T_BAR}, both "
+                    f"halves alpha > 0) -> {decide(looks)}")
 
 
 if __name__ == "__main__":
