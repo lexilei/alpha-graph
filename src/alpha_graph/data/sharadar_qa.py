@@ -128,6 +128,7 @@ def validate_thresholds(value: dict) -> dict:
         "calendar_endpoint_gap_days_max",
         "calendar_internal_gap_days_max",
         "calendar_expected_dates",
+        "sep_quarantined_rows_max",
     }
     missing = sorted(({"schema_version"} | rates | counts) - set(value))
     if missing:
@@ -433,7 +434,8 @@ def resolve_identity_intervals(
     return pd.DataFrame(rows)
 
 
-def _price_dates_by_ticker(prices: pd.DataFrame) -> dict[str, pd.DatetimeIndex]:
+def _valid_price_rows(prices: pd.DataFrame) -> pd.DataFrame:
+    """Return price rows whose numeric fields are all present and finite."""
     required = {"ticker", "date", *PRICE_NUMERIC_COLUMNS}
     missing = sorted(required - set(prices.columns))
     if missing:
@@ -443,24 +445,120 @@ def _price_dates_by_ticker(prices: pd.DataFrame) -> dict[str, pd.DatetimeIndex]:
     frame["date"] = pd.to_datetime(frame["date"])
     numeric = frame[list(PRICE_NUMERIC_COLUMNS)].apply(pd.to_numeric, errors="coerce")
     valid = numeric.notna().all(axis=1) & np.isfinite(numeric).all(axis=1)
-    frame = frame[valid]
+    return frame[valid]
+
+
+def _price_dates_by_ticker(prices: pd.DataFrame) -> dict[str, pd.DatetimeIndex]:
+    frame = _valid_price_rows(prices)
     return {
         ticker: pd.DatetimeIndex(group["date"].drop_duplicates().sort_values())
         for ticker, group in frame.groupby("ticker", sort=False)
     }
 
 
+def _price_dates_by_listing(
+    prices: pd.DataFrame,
+    row_resolution: pd.DataFrame,
+) -> dict[str, pd.DatetimeIndex]:
+    """Group numeric-valid observed dates by resolved listing key."""
+    frame = _valid_price_rows(prices)
+    frame["ticker_norm"] = frame["ticker"].map(_ticker_norm)
+    pairs = frame[["ticker_norm", "date"]].drop_duplicates()
+    resolved = row_resolution[["ticker_norm", "date", "listing_key"]].drop_duplicates()
+    merged = pairs.merge(resolved, on=["ticker_norm", "date"], how="inner")
+    return {
+        key: pd.DatetimeIndex(group["date"].drop_duplicates().sort_values())
+        for key, group in merged.groupby("listing_key", sort=False)
+    }
+
+
+def resolve_sep_rows(
+    prices: pd.DataFrame,
+    vendor_tickers: pd.DataFrame,
+    *,
+    identity_map: dict[str, str] | None = None,
+    tolerance_days: int = 7,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Resolve each SEP (ticker, date) row to exactly one listing window.
+
+    A row matches a TICKERS window when the normalized tickers agree and the
+    row date lies inside [firstpricedate - tolerance, lastpricedate +
+    tolerance]. Vendor IDs collapse to listing IDs through the approved
+    identity registry where available. Rows matching zero or multiple
+    listings are quarantined and must never enter coverage numerators.
+    """
+    missing = sorted({"ticker", "date"} - set(prices.columns))
+    if missing:
+        raise SharadarError(f"SEP row resolution missing columns: {missing}")
+    rows = prices[["ticker", "date"]].copy()
+    rows["ticker_norm"] = rows["ticker"].map(_ticker_norm)
+    rows["date"] = pd.to_datetime(rows["date"], errors="raise")
+    mapping = identity_map or {}
+    windows = vendor_tickers.loc[
+        vendor_tickers["bounds_complete"] & vendor_tickers["vendor_id"].map(_nonblank),
+        ["ticker_norm", "vendor_id", "firstpricedate", "lastpricedate"],
+    ].copy()
+    windows["listing_key"] = windows["vendor_id"].map(
+        lambda value: mapping.get(str(value), f"unverified:{value}")
+    )
+    tolerance = pd.Timedelta(days=tolerance_days)
+    pairs = rows[["ticker_norm", "date"]].drop_duplicates()
+    merged = pairs.merge(windows, on="ticker_norm", how="inner")
+    merged = merged[
+        (merged["firstpricedate"] <= merged["date"] + tolerance)
+        & (merged["lastpricedate"] >= merged["date"] - tolerance)
+    ]
+    matches = merged.drop_duplicates(["ticker_norm", "date", "listing_key"]).groupby(
+        ["ticker_norm", "date"], as_index=False
+    ).agg(
+        listing_count=("listing_key", "nunique"),
+        listing_key=("listing_key", "first"),
+        candidate_listings=("listing_key", lambda values: "|".join(sorted(values))),
+    )
+    out = rows.merge(matches, on=["ticker_norm", "date"], how="left")
+    out["listing_count"] = out["listing_count"].fillna(0).astype(int)
+    out["candidate_listings"] = out["candidate_listings"].fillna("")
+    resolved = out.loc[
+        out["listing_count"] == 1,
+        ["ticker", "ticker_norm", "date", "listing_key"],
+    ].copy()
+    quarantined = out.loc[
+        out["listing_count"] != 1,
+        ["ticker", "ticker_norm", "date", "listing_count", "candidate_listings"],
+    ].copy()
+    quarantined["quarantine_reason"] = np.where(
+        quarantined["listing_count"] == 0, "zero_listings", "multiple_listings"
+    )
+    return resolved.reset_index(drop=True), quarantined.reset_index(drop=True)
+
+
 def price_coverage(
     crosswalk: pd.DataFrame,
     prices: pd.DataFrame,
     calendar: pd.DatetimeIndex,
+    *,
+    row_resolution: pd.DataFrame | None = None,
+    identity_map: dict[str, str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
-    observed_by_ticker = _price_dates_by_ticker(prices)
+    if row_resolution is None:
+        observed_by_key = _price_dates_by_ticker(prices)
+
+        def interval_key(row) -> str | None:
+            return row.vendor_ticker
+    else:
+        observed_by_key = _price_dates_by_listing(prices, row_resolution)
+        mapping = identity_map or {}
+
+        def interval_key(row) -> str | None:
+            if not _nonblank(row.vendor_id):
+                return None
+            return mapping.get(str(row.vendor_id), f"unverified:{row.vendor_id}")
+
     interval_rows = []
     year_counts: dict[int, list[int]] = defaultdict(lambda: [0, 0])
     for row in crosswalk.itertuples(index=False):
         expected = calendar[(calendar >= row.valid_from) & (calendar <= row.valid_to)]
-        observed_dates = observed_by_ticker.get(row.vendor_ticker, pd.DatetimeIndex([]))
+        observed_dates = observed_by_key.get(interval_key(row), pd.DatetimeIndex([]))
         observed = expected.isin(observed_dates) if len(expected) else np.array([], dtype=bool)
         expected_n = int(len(expected))
         observed_n = int(observed.sum())
@@ -1172,6 +1270,8 @@ def _write_report(path: Path, run: dict, issues: pd.DataFrame) -> None:
         f"{run['departed_target']['target']} ({run['departed_target']['coverage']:.3%})",
         f"- Member-day price coverage: {run['price_coverage']['coverage']:.3%}",
         f"- Minimum annual price coverage: {run['price_coverage']['min_year_coverage']:.3%}",
+        f"- SEP rows quarantined by identity resolution: "
+        f"{run['sep_row_resolution']['quarantined_rows']}",
         f"- Minimum month-end membership Jaccard: "
         f"{run['membership']['min_jaccard']:.3%}",
         f"- Known identity cases approved: {run['known_cases']['approved']}/"
@@ -1279,14 +1379,6 @@ def _audit_snapshot_unlocked(
     calendar_end_gap = calendar_stats["end_gap_days"]
     calendar_min_month_coverage = calendar_stats["min_month_weekday_coverage"]
     calendar_internal_gap = calendar_stats["max_internal_gap_days"]
-    interval_coverage, by_year, price_summary = price_coverage(crosswalk, prices, calendar)
-    numeric_prices = prices[list(PRICE_NUMERIC_COLUMNS)].apply(
-        pd.to_numeric, errors="coerce"
-    )
-    invalid_price_rows = int(
-        (~(numeric_prices.notna().all(axis=1)
-           & np.isfinite(numeric_prices).all(axis=1))).sum()
-    )
     panel_identities = resolve_panel_identities(
         panel,
         tickers,
@@ -1341,6 +1433,23 @@ def _audit_snapshot_unlocked(
     else:
         panel_identities["listing_id"] = None
         panel_identities["issuer_id"] = None
+    sep_resolution, sep_quarantine = resolve_sep_rows(
+        prices, tickers, identity_map=identity_map
+    )
+    interval_coverage, by_year, price_summary = price_coverage(
+        crosswalk,
+        prices,
+        calendar,
+        row_resolution=sep_resolution,
+        identity_map=identity_map,
+    )
+    numeric_prices = prices[list(PRICE_NUMERIC_COLUMNS)].apply(
+        pd.to_numeric, errors="coerce"
+    )
+    invalid_price_rows = int(
+        (~(numeric_prices.notna().all(axis=1)
+           & np.isfinite(numeric_prices).all(axis=1))).sum()
+    )
     target_crosswalk = crosswalk.copy()
     target_crosswalk["vendor_id"] = target_crosswalk.apply(
         lambda row: (
@@ -1470,6 +1579,14 @@ def _audit_snapshot_unlocked(
             "severity": "high",
             "subject": "SEP",
             "detail": f"{invalid_price_rows} rows have null or non-finite price fields",
+        })
+    if len(sep_quarantine) > thresholds["sep_quarantined_rows_max"]:
+        issues_list.append({
+            "gate": "sep_row_quarantine",
+            "severity": "high",
+            "subject": "SEP",
+            "detail": f"{len(sep_quarantine)} rows resolve to zero or multiple "
+                      f"listings > {thresholds['sep_quarantined_rows_max']}",
         })
     if calendar_weekday_coverage < thresholds["calendar_weekday_coverage_min"]:
         issues_list.append({
@@ -1677,6 +1794,17 @@ def _audit_snapshot_unlocked(
             "calendar_max_internal_gap_days": calendar_internal_gap,
             "invalid_numeric_rows": invalid_price_rows,
         },
+        "sep_row_resolution": {
+            "rows": int(len(prices)),
+            "resolved_rows": int(len(sep_resolution)),
+            "quarantined_rows": int(len(sep_quarantine)),
+            "quarantined_zero_listing_rows": int(
+                (sep_quarantine["quarantine_reason"] == "zero_listings").sum()
+            ),
+            "quarantined_multiple_listing_rows": int(
+                (sep_quarantine["quarantine_reason"] == "multiple_listings").sum()
+            ),
+        },
         "membership": {
             "months": len(membership),
             "daily_checkpoints": len(membership_daily),
@@ -1725,6 +1853,7 @@ def _audit_snapshot_unlocked(
     ], how="left", validate="one_to_one"), output / "identity_crosswalk.parquet")
     for frame, name in (
         (departed_rows, "departed_target.parquet"),
+        (sep_quarantine, "sep_quarantine.parquet"),
         (panel_identities, "panel_identity_crosswalk.parquet"),
         (identity_registry, "identity_registry_review.parquet"),
         (alias_overlaps, "alias_window_overlaps.parquet"),

@@ -42,6 +42,7 @@ from alpha_graph.data.sharadar_qa import (
     price_coverage,
     resolve_panel_identities,
     resolve_identity_intervals,
+    resolve_sep_rows,
 )
 
 
@@ -1026,6 +1027,7 @@ def _synthetic_audit_kwargs(
         "cross_section_max": max(names_count, 515),
         "unresolved_primary_key_duplicates_max": 0,
         "unresolved_identity_ambiguities_max": 0,
+        "sep_quarantined_rows_max": 0,
         "known_case_approval_rate_min": 0.0,
         "identity_registry_coverage_min": 0.0,
         "calendar_weekday_coverage_min": 1.0,
@@ -1074,6 +1076,63 @@ def test_blind_qa_end_to_end_synthetic_snapshot(tmp_path):
             **kwargs,
             "output_dir": kwargs["raw_root"] / kwargs["snapshot"],
         })
+
+
+def test_resolve_sep_rows_quarantines_zero_and_multiple_listings():
+    metadata = prepare_vendor_tickers(pd.DataFrame({
+        "table": ["SEP", "SEP", "SEP"],
+        "permaticker": [1, 2, 3],
+        "ticker": ["AAA", "AAA", "BBB"],
+        "name": ["Alpha one", "Alpha two", "Beta"],
+        "firstpricedate": pd.to_datetime(["2010-01-01"] * 3),
+        "lastpricedate": pd.to_datetime(["2030-01-01"] * 3),
+    }))
+    prices = pd.DataFrame({
+        "ticker": ["AAA", "BBB", "GHOST", "BBB"],
+        "date": pd.to_datetime(
+            ["2020-01-02", "2020-01-02", "2020-01-02", "2030-01-20"]
+        ),
+    })
+    resolved, quarantined = resolve_sep_rows(prices, metadata)
+    assert list(resolved["ticker"]) == ["BBB"]
+    assert resolved.iloc[0]["listing_key"] == "unverified:3"
+    assert sorted(quarantined["quarantine_reason"]) == [
+        "multiple_listings", "zero_listings", "zero_listings",
+    ]
+    ambiguous = quarantined[quarantined["ticker"] == "AAA"].iloc[0]
+    assert ambiguous["candidate_listings"] == "unverified:1|unverified:2"
+
+    registry_resolved, registry_quarantined = resolve_sep_rows(
+        prices, metadata, identity_map={"1": "L-AAA", "2": "L-AAA"}
+    )
+    assert sorted(registry_resolved["listing_key"]) == ["L-AAA", "unverified:3"]
+    assert list(registry_quarantined["ticker"]) == ["GHOST", "BBB"]
+
+
+def test_audit_quarantines_ambiguous_sep_rows(tmp_path):
+    tickers = pd.DataFrame({
+        "table": "SEP",
+        "permaticker": [1, 2, 3, 99],
+        "ticker": ["T000", "T001", "T002", "T000"],
+        "name": ["T000", "T001", "T002", "T000 duplicate"],
+        "firstpricedate": pd.to_datetime(["2010-01-01"] * 4),
+        "lastpricedate": pd.to_datetime(["2030-01-01"] * 4),
+    })
+    kwargs = _synthetic_audit_kwargs(tmp_path, tickers=tickers)
+    run = audit_snapshot(**kwargs)
+    assert run["gate_status"] == "FAIL"
+    assert run["sep_row_resolution"]["quarantined_rows"] == 2
+    assert run["sep_row_resolution"]["quarantined_multiple_listing_rows"] == 2
+    quarantine = pd.read_parquet(kwargs["output_dir"] / "sep_quarantine.parquet")
+    assert len(quarantine) == 2
+    assert set(quarantine["ticker"]) == {"T000"}
+    # Quarantined rows are excluded from the coverage numerator.
+    assert run["price_coverage"]["expected_member_days"] == 6
+    assert run["price_coverage"]["observed_price_days"] == 4
+    issues = pd.read_parquet(kwargs["output_dir"] / "issues.parquet")
+    quarantine_issue = issues[issues["gate"] == "sep_row_quarantine"]
+    assert len(quarantine_issue) == 1
+    assert quarantine_issue.iloc[0]["severity"] == "high"
 
 
 def test_audit_fails_on_calendar_expectation_mismatch(tmp_path):
