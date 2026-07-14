@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import fcntl
+import shutil
 from datetime import date
 
 import pandas as pd
@@ -590,6 +591,146 @@ def test_purge_uses_manifest_tracked_roots(tmp_path):
     assert not raw_snapshot.exists()
     assert not staged_snapshot.exists()
     assert not qa_snapshot.exists()
+
+
+def test_purge_resumes_from_journal_after_interruption(tmp_path, monkeypatch):
+    import alpha_graph.data.sharadar as sharadar
+
+    raw_snapshot = tmp_path / "raw" / "purge-me"
+    staged_snapshot = tmp_path / "staged" / "purge-me"
+    _write_complete_snapshot(raw_snapshot, staged_snapshot, {"SEP": _sep_frame()})
+    qa_snapshot = tmp_path / "qa" / "purge-me"
+    qa_snapshot.mkdir(parents=True)
+    (qa_snapshot / "run.json").write_text("{}")
+    kwargs = {
+        "raw_root": tmp_path / "raw",
+        "staged_root": tmp_path / "staged",
+        "qa_root": tmp_path / "qa",
+        "certificate_root": tmp_path / "certificates",
+    }
+
+    real_rmtree = shutil.rmtree
+    calls = {"count": 0}
+
+    def dying_rmtree(path, *args, **kw):
+        if calls["count"] >= 1:
+            raise OSError("simulated crash")
+        calls["count"] += 1
+        return real_rmtree(path, *args, **kw)
+
+    monkeypatch.setattr(sharadar.shutil, "rmtree", dying_rmtree)
+    with pytest.raises(OSError, match="simulated crash"):
+        purge_snapshot_data("purge-me", **kwargs)
+    journal_path = tmp_path / "certificates" / "purge-me.journal.json"
+    journal = json.loads(journal_path.read_text())
+    assert journal["status"] == "IN_PROGRESS"
+    assert journal["phases"] == {"qa": "DELETED", "staged": "PENDING", "raw": "PENDING"}
+    assert not qa_snapshot.exists()
+    assert staged_snapshot.exists()
+    assert raw_snapshot.exists()
+    assert not (tmp_path / "certificates" / "purge-me.json").exists()
+
+    monkeypatch.setattr(sharadar.shutil, "rmtree", real_rmtree)
+    certificate = purge_snapshot_data("purge-me", **kwargs)
+    assert certificate.exists()
+    assert not raw_snapshot.exists()
+    assert not staged_snapshot.exists()
+    payload = json.loads(certificate.read_text())
+    assert payload["deleted_file_count"] == 5
+    assert payload["deleted_file_count"] == len(payload["deleted_inventory"])
+    journal = json.loads(journal_path.read_text())
+    assert journal["status"] == "COMPLETE"
+    assert journal["phases"] == {"qa": "DELETED", "staged": "DELETED", "raw": "DELETED"}
+
+
+def test_purge_completes_from_journal_when_raw_is_gone(tmp_path):
+    certificate_root = tmp_path / "certificates"
+    certificate_root.mkdir()
+    journal = {
+        "schema_version": 1,
+        "snapshot": "orphan",
+        "created_at_utc": "2020-01-01T00:00:00+00:00",
+        "storage_roots": {
+            "raw": str((tmp_path / "raw").resolve()),
+            "staged": str((tmp_path / "staged").resolve()),
+            "qa": str((tmp_path / "qa").resolve()),
+        },
+        "manifest_sha256_before_purge": "fixture-manifest-sha",
+        "deleted_inventory": [
+            {"kind": "raw", "relative_path": "manifest.json", "bytes": 10},
+            {"kind": "staged", "relative_path": "SEP/data.parquet", "bytes": 20},
+        ],
+        "phases": {"qa": "DELETED", "staged": "DELETED", "raw": "PENDING"},
+        "status": "IN_PROGRESS",
+    }
+    (certificate_root / "orphan.journal.json").write_text(json.dumps(journal))
+    # The raw root (and its manifest) is already gone; the missing-manifest
+    # guard must not block journal-driven completion.
+    certificate = purge_snapshot_data(
+        "orphan",
+        raw_root=tmp_path / "raw",
+        staged_root=tmp_path / "staged",
+        qa_root=tmp_path / "qa",
+        certificate_root=certificate_root,
+    )
+    payload = json.loads(certificate.read_text())
+    assert payload["manifest_sha256_before_purge"] == "fixture-manifest-sha"
+    assert payload["deleted_file_count"] == 2
+    assert payload["deleted_bytes"] == 30
+    final = json.loads((certificate_root / "orphan.journal.json").read_text())
+    assert final["status"] == "COMPLETE"
+    assert final["phases"]["raw"] == "DELETED"
+
+
+def test_license_json_recreated_on_in_progress_resume(tmp_path):
+    evidence = tmp_path / "license.txt"
+    evidence.write_text("written confirmation")
+    first = DownloadPart("SEP", 0, (("ticker.in[]", "AAA"),))
+    second = DownloadPart("SEP", 1, (("ticker.in[]", "BBB"),))
+    fail_second = {"flag": True}
+
+    def get_json(url, token, timeout):
+        if "BBB" in url and fail_second["flag"]:
+            raise SharadarAPIError("terminal fixture", status_code=400)
+        return {"bulk_download": {
+            "status": "SUCCEEDED",
+            "files": [{
+                "url": "https://data.nasdaq.com/api/v1/bulkdownloads/file/x.parquet",
+                "size": 0,
+            }],
+        }}
+
+    def download(url, token, destination, timeout):
+        _sep_frame().to_parquet(destination, index=False)
+        return destination.stat().st_size
+
+    client = NasdaqBulkClient("secret", json_getter=get_json, file_downloader=download)
+    kwargs = {
+        "snapshot": "resume-license",
+        "package": "SEP",
+        "license_expires": "2099-01-01",
+        "license_evidence": evidence,
+        "raw_root": tmp_path / "raw",
+        "staged_root": tmp_path / "staged",
+    }
+    with pytest.raises(SharadarAPIError, match="terminal fixture"):
+        fetch_snapshot(client, [first, second], **kwargs)
+    license_path = tmp_path / "raw" / "resume-license" / "license.json"
+    assert license_path.exists()
+    license_path.unlink()
+
+    fail_second["flag"] = False
+    manifest_path = fetch_snapshot(client, [first, second], **kwargs)
+    assert json.loads(manifest_path.read_text())["status"] == "COMPLETE"
+    recreated = json.loads(license_path.read_text())
+    assert recreated["snapshot"] == "resume-license"
+    assert recreated["package"] == "SEP"
+    assert recreated["written_confirmation_sha256"] == sha256_file(evidence)
+
+    recreated["license_expires"] = "2098-01-01"
+    license_path.write_text(json.dumps(recreated))
+    with pytest.raises(SharadarError, match="license metadata mismatch"):
+        fetch_snapshot(client, [first, second], **kwargs)
 
 
 def test_expired_license_fails_closed():

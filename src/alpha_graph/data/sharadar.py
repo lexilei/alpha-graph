@@ -735,6 +735,22 @@ def _planned_part(part: DownloadPart) -> dict:
     }
 
 
+def _license_payload(manifest: dict) -> dict:
+    """Derive the snapshot license record from its manifest fields."""
+    return {
+        "provider": manifest.get("provider", "Sharadar via Nasdaq Data Link"),
+        "package": manifest["package"],
+        "snapshot": manifest["snapshot"],
+        "license_expires": manifest["license_expires"],
+        "written_confirmation_name": manifest["license_evidence_name"],
+        "written_confirmation_sha256": manifest["license_evidence_sha256"],
+        "terms_url": manifest.get("terms_url", TERMS_URL),
+        "expiry_action": (
+            "Stop use and delete supplied Data unless written terms say otherwise"
+        ),
+    }
+
+
 def verify_snapshot_manifest(
     manifest_path: Path,
     *,
@@ -910,6 +926,22 @@ def _fetch_snapshot_unlocked(
             )
         if manifest.get("planned_parts") != [_planned_part(part) for part in plan]:
             raise SharadarError("snapshot planned-part inventory does not match the plan")
+        if license_path.exists():
+            license_record = json.loads(license_path.read_text(encoding="utf-8"))
+            for manifest_key, license_key in (
+                ("snapshot", "snapshot"),
+                ("package", "package"),
+                ("license_expires", "license_expires"),
+                ("license_evidence_sha256", "written_confirmation_sha256"),
+            ):
+                if manifest.get(manifest_key) != license_record.get(license_key):
+                    raise SharadarError(
+                        f"snapshot license metadata mismatch for {manifest_key}"
+                    )
+        else:
+            # A crash between the manifest and license writes, or a stray
+            # deletion, must not leave the snapshot unresumable.
+            _atomic_json(license_path, _license_payload(manifest))
         if manifest.get("status") == "COMPLETE":
             verify_snapshot_manifest(
                 manifest_path,
@@ -939,18 +971,7 @@ def _fetch_snapshot_unlocked(
             "parts": [],
         }
         _atomic_json(manifest_path, manifest)
-        _atomic_json(license_path, {
-            "provider": "Sharadar via Nasdaq Data Link",
-            "package": package,
-            "snapshot": snapshot,
-            "license_expires": expiry,
-            "written_confirmation_name": license_evidence.name,
-            "written_confirmation_sha256": license_evidence_sha256,
-            "terms_url": TERMS_URL,
-            "expiry_action": (
-                "Stop use and delete supplied Data unless written terms say otherwise"
-            ),
-        })
+        _atomic_json(license_path, _license_payload(manifest))
 
     records = {item["stem"]: item for item in manifest["parts"]}
     for part in plan:
@@ -1074,54 +1095,97 @@ def _purge_snapshot_data_unlocked(
     qa_root: Path = DATA_DIR / "qa" / "sharadar",
     certificate_root: Path = PROJECT_ROOT / "reports" / "data_purge",
 ) -> Path:
-    """Delete one vendor snapshot and write a non-data purge certificate."""
+    """Delete one vendor snapshot through a resumable journal, then certify.
+
+    The journal is written before any deletion and carries the complete
+    inventory plus per-root phase markers (QA, then staged, then raw). An
+    interrupted purge resumes from the journal even after the raw manifest
+    is gone; the certificate is written only after every phase completes.
+    """
     raw_snapshot = _snapshot_path(raw_root, snapshot)
     staged_snapshot = _snapshot_path(staged_root, snapshot)
     qa_snapshot = _snapshot_path(qa_root, snapshot)
-    manifest_path = raw_snapshot / "manifest.json"
-    if not manifest_path.exists():
-        raise SharadarError(f"cannot purge {snapshot}: manifest is missing")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    roots = (("qa", qa_snapshot), ("staged", staged_snapshot), ("raw", raw_snapshot))
     expected_roots = {
         "raw": str(raw_root.resolve()),
         "staged": str(staged_root.resolve()),
         "qa": str(qa_root.resolve()),
     }
-    if manifest.get("storage_roots") != expected_roots:
-        raise SharadarError("purge roots do not match the snapshot manifest")
-    for root in (raw_snapshot, staged_snapshot, qa_snapshot):
-        _reject_symlinks(root)
-    manifest_sha = sha256_file(manifest_path) if manifest_path.exists() else None
-    inventory = []
-    for kind, root in (
-        ("raw", raw_snapshot),
-        ("staged", staged_snapshot),
-        ("qa", qa_snapshot),
-    ):
-        if root.exists():
-            inventory.extend({
-                "kind": kind,
-                "relative_path": str(path.relative_to(root)),
-                "bytes": path.stat().st_size,
-            } for path in root.rglob("*") if path.is_file())
+    certificate_root.mkdir(parents=True, exist_ok=True)
+    journal_path = certificate_root / f"{snapshot}.journal.json"
+    certificate = certificate_root / f"{snapshot}.json"
+
+    journal = None
+    if journal_path.exists():
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        if journal.get("schema_version") != 1 or journal.get("snapshot") != snapshot:
+            raise SharadarError(f"purge journal does not match snapshot {snapshot}")
+        if journal.get("storage_roots") != expected_roots:
+            raise SharadarError("purge journal roots do not match the requested roots")
+        if journal.get("status") == "COMPLETE":
+            if any(root.exists() or root.is_symlink() for _, root in roots):
+                # The snapshot name was reused after a completed purge;
+                # journal the new deletion from scratch.
+                journal = None
+            elif certificate.exists():
+                return certificate
+
+    if journal is None:
+        manifest_path = raw_snapshot / "manifest.json"
+        if not manifest_path.exists():
+            raise SharadarError(f"cannot purge {snapshot}: manifest is missing")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("storage_roots") != expected_roots:
+            raise SharadarError("purge roots do not match the snapshot manifest")
+        for _, root in roots:
+            _reject_symlinks(root)
+        inventory = []
+        for kind, root in roots:
+            if root.exists():
+                inventory.extend({
+                    "kind": kind,
+                    "relative_path": str(path.relative_to(root)),
+                    "bytes": path.stat().st_size,
+                } for path in root.rglob("*") if path.is_file())
+        journal = {
+            "schema_version": 1,
+            "snapshot": snapshot,
+            "created_at_utc": _utc_now(),
+            "storage_roots": expected_roots,
+            "manifest_sha256_before_purge": sha256_file(manifest_path),
+            "deleted_inventory": inventory,
+            "phases": {kind: "PENDING" for kind, _ in roots},
+            "status": "IN_PROGRESS",
+        }
+        _atomic_json(journal_path, journal)
+
+    for kind, root in roots:
+        if root.exists() or root.is_symlink():
+            _reject_symlinks(root)
             shutil.rmtree(root)
+        if journal["phases"].get(kind) != "DELETED":
+            journal["phases"][kind] = "DELETED"
+            journal["updated_at_utc"] = _utc_now()
+            _atomic_json(journal_path, journal)
+
     remaining = [
-        str(path) for path in (raw_snapshot, staged_snapshot, qa_snapshot)
-        if path.exists() or path.is_symlink()
+        str(root) for _, root in roots if root.exists() or root.is_symlink()
     ]
     if remaining:
         raise SharadarError(f"purge left snapshot artifacts behind: {remaining}")
-    certificate_root.mkdir(parents=True, exist_ok=True)
-    certificate = certificate_root / f"{snapshot}.json"
+    inventory = journal["deleted_inventory"]
     _atomic_json(certificate, {
         "schema_version": 1,
         "snapshot": snapshot,
         "purged_at_utc": _utc_now(),
-        "manifest_sha256_before_purge": manifest_sha,
+        "manifest_sha256_before_purge": journal["manifest_sha256_before_purge"],
         "deleted_file_count": len(inventory),
         "deleted_bytes": sum(item["bytes"] for item in inventory),
         "deleted_inventory": inventory,
     })
+    journal["status"] = "COMPLETE"
+    journal["completed_at_utc"] = _utc_now()
+    _atomic_json(journal_path, journal)
     return certificate
 
 
