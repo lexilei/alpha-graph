@@ -119,3 +119,65 @@ def test_duplicate_pnl_dates_raise():
     pnl = synth_pnl(f)
     with pytest.raises(ValueError, match="duplicate"):
         ff_attribution(pd.concat([pnl, pnl.iloc[:3]]), factors=f)
+
+
+# --------------------------------------------------------------------------- #
+# excess mode (self-financing long-short pnl)
+# --------------------------------------------------------------------------- #
+
+def synth_spread(f, noise=0.002, seed=5):
+    """Self-financing L/S spread: factor exposure + alpha, NO rf component."""
+    rng = np.random.RandomState(seed)
+    return (BETA_MKT * f["mkt_rf"] + BETA_HML * f["hml"] + ALPHA
+            + noise * rng.normal(size=len(f)))
+
+
+def test_excess_mode_recovers_planted_alpha_on_spread():
+    f = synth_factors()
+    spread = synth_spread(f, noise=0.0005)
+    res = ff_attribution(spread, factors=f, excess=True)
+    assert res["alpha"] == pytest.approx(ALPHA, abs=2 * res["alpha_se_hac"])
+    assert res["loadings"]["mkt_rf"] == pytest.approx(BETA_MKT, abs=0.02)
+    assert res["loadings"]["hml"] == pytest.approx(BETA_HML, abs=0.02)
+    # default (total-return) mode on the same spread subtracts rf a second
+    # time and understates alpha by ~mean rf — many HAC standard errors here
+    total = ff_attribution(spread, factors=f, excess=False)
+    assert abs(total["alpha"] - ALPHA) > 4 * total["alpha_se_hac"]
+    assert total["alpha"] < res["alpha"]
+
+
+def test_excess_and_total_alphas_differ_by_exactly_mean_rf():
+    # Same inputs, both modes: betas identical, alphas differ by mean rf
+    # (rf is constant in the synthetic panel, so the shift is exact).
+    f = synth_factors()
+    spread = synth_spread(f)
+    res_x = ff_attribution(spread, factors=f, excess=True)
+    res_t = ff_attribution(spread, factors=f, excess=False)
+    assert res_x["alpha"] - res_t["alpha"] == pytest.approx(
+        float(f["rf"].mean()), abs=1e-12)
+    for c in MODELS["ff5_mom"]:
+        assert res_x["loadings"][c] == pytest.approx(res_t["loadings"][c])
+    assert res_x["n_days"] == res_t["n_days"] == 2000
+
+
+# --------------------------------------------------------------------------- #
+# Unit guard (percent vs decimal inputs)
+# --------------------------------------------------------------------------- #
+
+def test_percent_scaled_pnl_raises():
+    f = synth_factors()
+    with pytest.raises(ValueError, match=r"pnl daily std .* percent-scaled"):
+        ff_attribution(synth_pnl(f) * 100.0, factors=f)
+
+
+def test_percent_scaled_factors_raise():
+    f = synth_factors()
+    pnl = synth_pnl(f)
+    with pytest.raises(ValueError, match=r"mkt_rf daily std .* percent-scaled"):
+        ff_attribution(pnl, factors=f * 100.0)
+
+
+def test_decimal_inputs_pass_unit_guard():
+    f = synth_factors()
+    res = ff_attribution(synth_pnl(f), factors=f)  # must not raise
+    assert res["n_days"] == 2000

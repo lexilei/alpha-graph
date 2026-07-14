@@ -13,8 +13,16 @@ Ken French library. Pass a `factors` frame directly to stay offline (tests do).
 
 Conventions
 -----------
-- `pnl` is a daily TOTAL return series; the regression is run on pnl - rf.
-  A factors frame without an `rf` column gets rf=0 with a warning.
+- `pnl` is a daily TOTAL return series by default; the regression is run on
+  pnl - rf. Pass excess=True when pnl is already an excess or self-financing
+  series (e.g. the net of a dollar-neutral long-short book): rf subtraction
+  is then skipped, because subtracting it again misstates alpha by ~-rf.
+  A factors frame without an `rf` column gets rf=0 with a warning
+  (excess=False only; excess=True never uses rf).
+- Inputs are DECIMAL daily returns. If the aligned pnl or mkt_rf series has
+  a daily std above 0.2 (20%/day — no real strategy or factor), a ValueError
+  is raised: that scale means percent-scaled data leaked in, which would
+  otherwise scale every alpha and beta by 100 silently.
 - Alignment is an inner join on normalized dates; `n_days` is the sample the
   OLS actually saw and `n_dropped` counts non-NaN pnl days that fell out
   (outside factor coverage or factor NaN). A loss above 10% logs a warning.
@@ -68,16 +76,23 @@ def _normalize_index(idx: pd.Index, name: str) -> pd.DatetimeIndex:
 
 
 def ff_attribution(pnl: pd.Series, factors: pd.DataFrame | None = None,
-                   model: str = "ff5_mom", lags: int | None = None) -> dict:
+                   model: str = "ff5_mom", lags: int | None = None,
+                   excess: bool = False) -> dict:
     """OLS of daily excess P&L on a factor model, HAC (Newey-West) t-stats.
 
     Parameters
     ----------
-    pnl : daily strategy returns (decimal, DatetimeIndex, total not excess).
+    pnl : daily strategy returns (decimal, DatetimeIndex); total returns by
+        default, an already-excess series with excess=True.
     factors : daily factor frame with the model's columns (+ optionally `rf`),
         decimal returns. None loads data/cache/ff5_mom_daily.parquet.
     model : "ff5_mom" (mkt_rf/smb/hml/rmw/cma/mom) or "capm" (mkt_rf only).
     lags : HAC maxlags; None -> DEFAULT_HAC_LAGS = ceil(1.5*21) = 32.
+    excess : False (default) treats pnl as TOTAL returns and regresses
+        pnl - rf — use for long-only books, whose returns include the
+        risk-free component. True treats pnl as ALREADY excess and skips the
+        rf subtraction — use for self-financing dollar-neutral long-short
+        spreads, where subtracting rf again would understate alpha by ~rf.
 
     Returns
     -------
@@ -112,8 +127,9 @@ def ff_attribution(pnl: pd.Series, factors: pd.DataFrame | None = None,
     if "rf" in f.columns:
         rf = f["rf"]
     else:
-        logger.warning("factors frame has no 'rf' column — regressing pnl "
-                       "un-differenced (rf assumed 0)")
+        if not excess:
+            logger.warning("factors frame has no 'rf' column — regressing pnl "
+                           "un-differenced (rf assumed 0)")
         rf = pd.Series(0.0, index=f.index)
 
     joined = pd.concat([pnl.rename("pnl"), f[cols], rf.rename("rf")],
@@ -129,8 +145,22 @@ def ff_attribution(pnl: pd.Series, factors: pd.DataFrame | None = None,
                        f"({n_dropped / n_pnl:.0%}) — check factor coverage "
                        f"(French library lags ~2 months)")
 
+    # Unit guard: decimal daily returns have std far below 20%/day; above 0.2
+    # the input is percent-scaled (x100), which would silently scale every
+    # alpha and beta by 100 (a planted beta of 0.5 reports as ~50).
+    for label, series in (("pnl", joined["pnl"]),
+                          ("factors' mkt_rf", joined["mkt_rf"])):
+        sd = float(series.std())
+        if sd > 0.2:
+            raise ValueError(
+                f"{label} daily std {sd:.3g} exceeds 0.2 (20%/day) — no real "
+                f"return series does this; the input is likely percent-scaled, "
+                f"pass decimal returns (divide by 100)")
+
     hac_lags = DEFAULT_HAC_LAGS if lags is None else int(lags)
-    y = joined["pnl"] - joined["rf"]
+    # rf stays in the join in both modes so the regression sample is identical;
+    # excess=True only skips the subtraction.
+    y = joined["pnl"] if excess else joined["pnl"] - joined["rf"]
     X = sm.add_constant(joined[cols])
     res = sm.OLS(y, X).fit(cov_type="HAC", cov_kwds={"maxlags": hac_lags})
 
