@@ -308,6 +308,13 @@ FACTOR_SOURCES: list[FactorSource] = [
     FactorSource("C17", "sue_pead.parquet",
                  ("sue_pead",), "disclosure_date", "filing",
                  loader=_load_sue_pead),
+    # C21/C22: paper-faithful Lazy Prices edit measures on consecutive 10-Ks
+    # (difflib Ratcliff-Obershelp ratio + CMN Sim_Simple, one pinned token
+    # stream; signals/lazy_prices_edit.py). Same 10-K pair set and filing-date
+    # availability as C1 — plain filing-date as-of merge, lagged on every grid
+    # (v0: t+1). Both columns merge from the one cache.
+    FactorSource("C21/C22", "lazy_prices_edit.parquet",
+                 ("sim_minedit_10k", "sim_simple_10k"), "filing_date", "filing"),
 ]
 
 
