@@ -9,8 +9,9 @@ window, key normalization (digits-only accession, zero-padded CIKs), the
 amendment flag, dedup on accession (including across succession CIKs),
 the OLD_CIK_MAP corpus augmentation (panel-ticker tagging, stale-map guards),
 master.idx party parsing, filer resolution from idx parties (joint filings ->
-lowest CIK; unresolved -> null), and the UTC -> ET acceptance conversion with
-row-local mislabeled-ET rules A/B.
+lowest CIK; unresolved -> null), the UTC -> ET acceptance conversion with
+row-local mislabeled-ET rules A/B, and the 13D-family SGML re-source
+(<ACCEPTANCE-DATETIME> header parsing, override application + source tagging).
 """
 
 import importlib.util
@@ -263,8 +264,46 @@ def test_to_eastern_rule_b_dissemination_inconsistent():
     assert ts[0] == pd.Timestamp("2020-01-15 17:45:00")
 
 
+# ------------------------------------------------------------- SGML re-source
+_SGML_HEAD = (
+    "<SEC-DOCUMENT>0001418812-12-000079.txt : 20121128\n"
+    "<SEC-HEADER>0001418812-12-000079.hdr.sgml : 20121128\n"
+    "<ACCEPTANCE-DATETIME>20121128164857\n"
+    "ACCESSION NUMBER:\t\t0001418812-12-000079\n"
+    "CONFORMED SUBMISSION TYPE:\tSC 13D\n"
+)
+
+
+def test_parse_sgml_acceptance():
+    # MSCI 2012-11-28: the review's F2 anchor — API said 11:48:57, header 16:48:57
+    assert mod.parse_sgml_acceptance(_SGML_HEAD) == pd.Timestamp("2012-11-28 16:48:57")
+
+
+def test_parse_sgml_acceptance_absent_or_malformed():
+    assert mod.parse_sgml_acceptance("PDF garbage, no header tag") is None
+    assert mod.parse_sgml_acceptance("<ACCEPTANCE-DATETIME>2012112816485") is None  # 13 digits
+    assert mod.parse_sgml_acceptance("<ACCEPTANCE-DATETIME>20121328164857") is None  # month 13
+
+
+def test_apply_sgml_acceptance_overrides_only_fetched_rows():
+    df = pd.DataFrame({
+        "accession": ["000141881212000079", "000092189519002251"],
+        "acceptance_ts": pd.to_datetime(["2012-11-28 11:48:57", "2019-08-15 12:52:31"]),
+        "acceptance_source": ["submissions_api", "submissions_api"],
+    })
+    out = mod.apply_sgml_acceptance(
+        df, {"000141881212000079": pd.Timestamp("2012-11-28 16:48:57")})
+    assert out.loc[0, "acceptance_ts"] == pd.Timestamp("2012-11-28 16:48:57")
+    assert out.loc[0, "acceptance_source"] == "sgml_header"
+    # the un-fetched row (e.g. header fetch failed) keeps the API value + source
+    assert out.loc[1, "acceptance_ts"] == pd.Timestamp("2019-08-15 12:52:31")
+    assert out.loc[1, "acceptance_source"] == "submissions_api"
+    # input not mutated
+    assert df.loc[0, "acceptance_source"] == "submissions_api"
+
+
 def test_output_schema():
     assert mod.COLUMNS == [
         "subject_ticker", "subject_cik", "accession", "form", "is_amendment",
-        "filing_date", "acceptance_ts", "filer_name", "filer_cik",
+        "filing_date", "acceptance_ts", "acceptance_source", "filer_name", "filer_cik",
     ]

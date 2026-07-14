@@ -52,11 +52,23 @@ future additions: screen tickers whose earliest sc13 row starts years after
 data/cache/sc13_master_idx.parquet party names, then verify the candidate CIK's
 submissions JSON (entity name / formerNames, in-window subject-role rows).
 
-TIMEZONE: acceptanceDateTime is handled as in fetch_acceptance_datetimes.py
-(API UTC -> tz-naive US/Eastern wall time, row-local mislabeled-ET rules A/B).
-The filer-level blanket rule C is NOT applied: it targeted companies whose OWN
-transmissions are mislabeled, while SC 13 rows are transmitted by third-party
-filers, so a subject-level blanket would overcorrect.
+TIMEZONE: acceptanceDateTime is first handled as in fetch_acceptance_datetimes
+.py (API UTC -> tz-naive US/Eastern wall time, row-local mislabeled-ET rules
+A/B). The filer-level blanket rule C is NOT applied: it targeted companies
+whose OWN transmissions are mislabeled, while SC 13 rows are transmitted by
+third-party filers, so a subject-level blanket would overcorrect.
+
+ACCEPTANCE RE-SOURCE (13D family): without rule C, mislabeled-ET rows whose
+true acceptance is MIDDAY are undetectable — rules A/B only fire out-of-window
+or against the dissemination calendar (verified: MSCI SC 13D 2012-11-28 SGML
+header says 16:48:57 ET, the API-derived value was 11:48:57; GEN SC 13D/A
+2019-08-15 was off by -4h). The 13D family is the tradeable event, so for
+SC 13D + SC 13D/A rows (~2k) acceptance_ts is re-sourced from the
+authoritative SGML header <ACCEPTANCE-DATETIME> (native ET wall time, no tz
+inference) via a Range fetch of the first 2000 bytes of the full-submission
+.txt (pattern of fetch_sic_history.py; some EDGAR nodes ignore Range and
+reply 200, so the reader streams and hard-stops). The ~29k 13G-family rows
+keep the API route with rules A/B; acceptance_source records the route.
 
 NOT CAPTURED (verified absent from this route): the statutory event date
 ("Date of Event Which Requires Filing", the 5% crossing) — the submissions
@@ -72,6 +84,8 @@ Output (data/cache/sc13_filings.parquet), deduped on accession:
     is_amendment    form ends with "/A"
     filing_date     official filing date (datetime, midnight)
     acceptance_ts   EDGAR acceptance datetime, tz-naive ET wall time (NaT if absent)
+    acceptance_source  "sgml_header" (13D family, header fetched) or
+                    "submissions_api" (13G family; 13D rows whose header fetch failed)
     filer_name      conformed name of the filing party (None if unresolved)
     filer_cik       10-digit zero-padded CIK of the filing party (None if unresolved)
 
@@ -86,6 +100,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 import time
 from datetime import date
 
@@ -100,6 +115,7 @@ IDX_CACHE_PATH = CACHE_DIR / "sc13_master_idx.parquet"
 ACCEPTANCE_PATH = CACHE_DIR / "filing_acceptance.parquet"
 SUBMISSIONS_BASE = "https://data.sec.gov/submissions/"
 IDX_URL = "https://www.sec.gov/Archives/edgar/full-index/{year}/QTR{q}/master.idx"
+ARCHIVES_BASE = "https://www.sec.gov/Archives/edgar/data"
 USER_AGENT = "Lei Zhihan leizhihan0606@gmail.com"  # SEC fair-access identity
 KEEP_FORMS = {"SC 13D", "SC 13D/A", "SC 13G", "SC 13G/A"}
 # EDGAR's renamed form types since 2024-12-18 (structured 13D/G mandate).
@@ -373,8 +389,112 @@ def attach_filers(spine: pd.DataFrame, idx: pd.DataFrame) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------- #
-# Acceptance timestamps: UTC -> ET wall time (precedent rules A/B, no C)
+# Acceptance timestamps: UTC -> ET wall time (precedent rules A/B, no C),
+# then the 13D family re-sourced from the authoritative SGML header
 # --------------------------------------------------------------------------- #
+
+SGML_HEAD_BYTES = 2000  # <ACCEPTANCE-DATETIME> sits in the first ~150 bytes
+_ACCEPTANCE_RE = re.compile(r"<ACCEPTANCE-DATETIME>(\d{14})")
+
+
+def parse_sgml_acceptance(text: str) -> pd.Timestamp | None:
+    """<ACCEPTANCE-DATETIME>YYYYMMDDHHMMSS from an SGML header head — native
+    ET wall time, no timezone inference. None when absent or malformed."""
+    m = _ACCEPTANCE_RE.search(text)
+    if not m:
+        return None
+    try:
+        return pd.to_datetime(m.group(1), format="%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+
+
+def fetch_sgml_head(session: requests.Session, cik: str, accession: str) -> str | None:
+    """First SGML_HEAD_BYTES of the full-submission .txt via a Range request.
+
+    Some EDGAR nodes ignore Range and reply 200 with the whole document, so
+    the reader streams and hard-stops regardless of status. Tries the subject
+    CIK, then (on 404) the accession-prefix CIK — the first 10 digits of an
+    accession are the transmitting filer, which always has the file. Retries
+    once on 429/5xx/connection errors; None on permanent failure.
+    """
+    global _last_request_t
+    dashed = f"{accession[:10]}-{accession[10:12]}-{accession[12:]}"
+    cik_candidates = [str(int(cik))]
+    prefix = str(int(accession[:10]))
+    if prefix not in cik_candidates:
+        cik_candidates.append(prefix)
+
+    for ck in cik_candidates:
+        url = f"{ARCHIVES_BASE}/{ck}/{accession}/{dashed}.txt"
+        for attempt in (0, 1):
+            wait = REQUEST_INTERVAL - (time.monotonic() - _last_request_t)
+            if wait > 0:
+                time.sleep(wait)
+            _last_request_t = time.monotonic()
+            try:
+                resp = session.get(
+                    url,
+                    headers={"Range": f"bytes=0-{SGML_HEAD_BYTES - 1}",
+                             "Accept-Encoding": "identity"},
+                    stream=True, timeout=30,
+                )
+            except requests.RequestException:
+                if attempt == 0:
+                    time.sleep(2)
+                    continue
+                break
+            try:
+                if resp.status_code in (200, 206):
+                    buf = b""
+                    for chunk in resp.iter_content(chunk_size=2048):
+                        buf += chunk
+                        if len(buf) >= SGML_HEAD_BYTES:
+                            break
+                    return buf.decode("latin-1", errors="replace")
+                if resp.status_code == 404:
+                    break  # permanent for this CIK; try the prefix CIK
+                if attempt == 0 and (resp.status_code == 429 or resp.status_code >= 500):
+                    time.sleep(float(resp.headers.get("Retry-After", 5)))
+                    continue
+                break
+            finally:
+                resp.close()
+    return None
+
+
+def apply_sgml_acceptance(df: pd.DataFrame, header_ts: dict[str, pd.Timestamp]) -> pd.DataFrame:
+    """Overwrite acceptance_ts/acceptance_source from fetched SGML header
+    values (keyed by digits-only accession). Rows without a header value keep
+    the submissions-API value and source. Pure; tested."""
+    out = df.copy()
+    ts = out["accession"].map(header_ts)
+    hit = ts.notna()
+    out.loc[hit, "acceptance_ts"] = ts[hit]
+    out.loc[hit, "acceptance_source"] = "sgml_header"
+    return out
+
+
+def resource_13d_acceptance(session: requests.Session, df: pd.DataFrame) -> pd.DataFrame:
+    """Re-source acceptance_ts for every SC 13D / SC 13D/A row from its SGML
+    header (see module docstring). Requires an acceptance_source column."""
+    fam = df[df["form"].str.startswith("SC 13D")]
+    logger.info(f"SGML acceptance pass: {len(fam):,} 13D-family rows "
+                f"(~{len(fam) * REQUEST_INTERVAL / 60:.0f} min at the rate gate)")
+    header_ts: dict[str, pd.Timestamp] = {}
+    failures = 0
+    for i, r in enumerate(fam.itertuples(index=False), 1):
+        text = fetch_sgml_head(session, r.subject_cik, r.accession)
+        ts = parse_sgml_acceptance(text) if text is not None else None
+        if ts is None:
+            failures += 1
+            logger.warning(f"{r.subject_ticker} {r.accession}: no SGML acceptance; "
+                           "keeping submissions_api value")
+        else:
+            header_ts[r.accession] = ts
+        if i % 250 == 0:
+            logger.info(f"{i:,}/{len(fam):,} SGML headers fetched ({failures} failures)")
+    return apply_sgml_acceptance(df, header_ts)
 
 def to_eastern(raw: pd.Series, filing_date: pd.Series) -> tuple[pd.Series, pd.Series]:
     """API UTC -> tz-naive ET wall time; row-local mislabeled-ET corrections
@@ -400,7 +520,7 @@ def to_eastern(raw: pd.Series, filing_date: pd.Series) -> tuple[pd.Series, pd.Se
 # --------------------------------------------------------------------------- #
 
 COLUMNS = ["subject_ticker", "subject_cik", "accession", "form", "is_amendment",
-           "filing_date", "acceptance_ts", "filer_name", "filer_cik"]
+           "filing_date", "acceptance_ts", "acceptance_source", "filer_name", "filer_cik"]
 
 
 def build_table(corpus: pd.DataFrame) -> pd.DataFrame:
@@ -426,6 +546,14 @@ def build_table(corpus: pd.DataFrame) -> pd.DataFrame:
     df["acceptance_ts"], fixed = to_eastern(df["acceptance_raw"], df["filing_date"])
     logger.info(f"acceptance_ts non-null: {df['acceptance_ts'].notna().mean() * 100:.2f}%; "
                 f"tz rules A/B corrected {int(fixed.sum())} rows")
+
+    df["acceptance_source"] = "submissions_api"
+    api_ts = df["acceptance_ts"].copy()
+    df = resource_13d_acceptance(session, df)
+    delta_h = (df["acceptance_ts"] - api_ts).dt.total_seconds() / 3600
+    n_sgml = int((df["acceptance_source"] == "sgml_header").sum())
+    logger.info(f"SGML re-source: {n_sgml:,} 13D-family rows on header authority; "
+                f"{int((delta_h.abs() >= 1).sum())} moved >=1h vs the API route")
     return df[COLUMNS]
 
 
@@ -442,6 +570,13 @@ ANCHORS = [
      "and 2019's only OXY-associated 13D is OXY-as-filer on Western Midstream)"),
 ]
 
+TS_ANCHORS = [
+    # (label, accession, expected acceptance_ts) — SGML headers read by hand
+    # 2026-07-14; both are API-mislabeled midday-shift rows rules A/B cannot see.
+    ("MSCI SC 13D 2012-11-28 (ValueAct)", "000141881212000079", "2012-11-28 16:48:57"),
+    ("GEN SC 13D/A 2019-08-15 (Starboard)", "000092189519002251", "2019-08-15 16:52:31"),
+]
+
 
 def validation_report(df: pd.DataFrame, corpus: pd.DataFrame) -> None:
     print("\n" + "=" * 72)
@@ -452,6 +587,11 @@ def validation_report(df: pd.DataFrame, corpus: pd.DataFrame) -> None:
           f"span {df['filing_date'].min().date()} -> {df['filing_date'].max().date()}")
     print(f"acceptance_ts non-null: {df['acceptance_ts'].notna().mean() * 100:.2f}%   "
           f"filer resolved: {df['filer_cik'].notna().mean() * 100:.2f}%")
+    fam_13d = df["form"].str.startswith("SC 13D")
+    n_sgml = int((df["acceptance_source"] == "sgml_header").sum())
+    print(f"acceptance_source: sgml_header {n_sgml:,} of {int(fam_13d.sum()):,} "
+          f"13D-family rows ({n_sgml / max(int(fam_13d.sum()), 1) * 100:.2f}%); "
+          f"13G family stays submissions_api")
     old_ciks = {c for cs in OLD_CIK_MAP.values() for c in cs}
     per_old = df[df["subject_cik"].isin(old_ciks)].groupby("subject_ticker").size()
     print(f"pre-reorg rows via OLD_CIK_MAP: {int(per_old.sum()):,} across "
@@ -477,6 +617,11 @@ def validation_report(df: pd.DataFrame, corpus: pd.DataFrame) -> None:
         detail = (f"filer={hit.iloc[0]['filer_name']} acc={hit.iloc[0]['accession']}"
                   if len(hit) else "not found")
         print(f"  [{status}] {ticker} {form} {fdate} — {note}\n         {detail}")
+    for label, acc, expected in TS_ANCHORS:
+        hit = df[df["accession"] == acc]
+        got = str(hit.iloc[0]["acceptance_ts"]) if len(hit) else "row missing"
+        status = "OK " if got == expected else "MISS"
+        print(f"  [{status}] {label}: acceptance {got} (expect {expected})")
 
     d13 = df[df["form"] == "SC 13D"]
     breadth = d13["subject_ticker"].nunique()
