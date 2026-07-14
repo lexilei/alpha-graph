@@ -615,3 +615,56 @@ def test_summarize_single_year_concentration_and_breakeven():
     assert abs(rep["breakeven_cost_bps"]
                - 1e4 * res.daily_returns_gross.sum() / 2.0) < 1e-9
     assert rep["flags"]["one_sector_gt_50pct"] is None
+
+
+def test_offcalendar_signal_date_does_not_poison_eligibility():
+    # Review F1: a signal stamped on a NON-TRADING day (weekend filing) must
+    # inherit each name's as-of eligibility, not a synthetic all-False row
+    # that resets every carry spell and force-liquidates the book.
+    dates = list(pd.bdate_range("2020-01-06", periods=5))     # Mon..Fri
+    saturday = dates[4] + pd.Timedelta(days=1)
+    names = ["A", "B", "C", "D"]
+    prices = _prices_long(dates + list(pd.bdate_range("2020-01-13", periods=3)),
+                          {t: [100.0] * 8 for t in names})
+    all_dates = list(pd.bdate_range("2020-01-06", periods=5)) + \
+        list(pd.bdate_range("2020-01-13", periods=3))
+    signal = _signal_long([
+        (dates[0], {"A": 4.0, "B": 3.0, "C": 2.0, "D": 1.0}),
+        (saturday, {"A": 1.0}),                               # weekend stamp
+    ])
+    eligibility = pd.DataFrame([
+        {"ticker": t, "date": d, "eligible": True}
+        for d in all_dates for t in names
+    ])
+    res = run_ls_backtest(prices, signal, eligibility=eligibility,
+                          rebalance=1, execution="close",
+                          n_quantiles=2, max_weight=1.0)
+    # book survives the weekend stamp: no forced-cash event, positions on Monday
+    assert res.meta["n_forced_cash_insufficient_eligibility"] == 0
+    monday = res.target_weights[res.target_weights["date"] == all_dates[5]]
+    assert len(monday) > 0
+    # and the Saturday signal takes effect at the next decision: A drops to
+    # the bottom quantile (its new score 1.0 < D's 1.0? equal ties are stable;
+    # assert A is no longer alone in the top)
+    top_monday = set(monday.loc[monday["weight"] > 0, "ticker"])
+    assert "A" not in top_monday
+
+
+def test_ongrid_absent_ticker_date_still_fails_closed():
+    # The off-calendar guard must NOT weaken the documented contract: on a
+    # date the eligibility frame DOES cover, an absent ticker-row = ineligible.
+    dates = list(pd.bdate_range("2020-01-06", periods=4))
+    names = ["A", "B", "C", "D"]
+    prices = _prices_long(dates, {t: [100.0] * 4 for t in names})
+    signal = _signal_long([(dates[0], {t: float(i) for i, t in
+                                       enumerate(names, start=1)})])
+    rows = [{"ticker": t, "date": d, "eligible": True}
+            for d in dates for t in names
+            if not (t == "D" and d == dates[2])]              # D's row absent on d2
+    res = run_ls_backtest(prices, signal, eligibility=pd.DataFrame(rows),
+                          rebalance=1, execution="close",
+                          n_quantiles=2, max_weight=1.0)
+    d2 = res.target_weights[res.target_weights["date"] == dates[2]]
+    assert "D" not in set(d2["ticker"])                       # fail-closed held
+    d3 = res.target_weights[res.target_weights["date"] == dates[3]]
+    assert "D" not in set(d3["ticker"])                       # carry was reset too

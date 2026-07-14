@@ -46,7 +46,10 @@ Semantics (documented choices — read before interpreting any output)
   (survivor-biased universe, no dividend/cash handling) used for the
   report's beta.
 - Rebalances where the valid cross-section has fewer than n_quantiles names
-  are SKIPPED (previous book held) and counted in `skipped_rebalances`.
+  are SKIPPED (previous book held) and counted in `skipped_rebalances` —
+  EXCEPT when explicit `eligibility` is supplied and a book is held: then
+  the book is force-liquidated to cash at real prices with trading costs
+  (fail-closed; counted in `n_forced_cash_insufficient_eligibility`).
 """
 
 from __future__ import annotations
@@ -184,12 +187,20 @@ def run_ls_backtest(
         values = set(eg["eligible"].dropna().unique())
         if not values.issubset({True, False, 0, 1}):
             raise ValueError("eligibility.eligible must contain only booleans")
-        elig_w = (
-            _pivot(eg, "eligible")
-            .reindex(index=union, columns=sig_union.columns)
-            .fillna(False)
-            .astype(bool)
-        )
+        # Off-calendar guard (review F1): a signal row stamped on a date the
+        # eligibility frame does not cover AT ALL (weekend/holiday filing —
+        # 636 Form 4 dates in-range are non-trading days) must inherit each
+        # name's as-of eligibility state, NOT a synthetic all-False row that
+        # would reset every ticker's carry spell and force-liquidate the
+        # book. On the frame's own dates the contract is unchanged: an
+        # absent ticker-date fails closed.
+        raw = _pivot(eg, "eligible").reindex(columns=sig_union.columns)
+        on_grid = raw.reindex(index=union)
+        off_calendar = ~union.isin(raw.index)
+        elig_w = on_grid.fillna(False)
+        if off_calendar.any():
+            elig_w.loc[off_calendar] = on_grid.ffill().loc[off_calendar]
+        elig_w = elig_w.fillna(False).astype(bool)
 
         # Carry sparse signals only within one continuous eligible spell.
         sig_asof = pd.DataFrame(index=union, columns=sig_union.columns, dtype=float)
