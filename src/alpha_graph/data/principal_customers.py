@@ -425,7 +425,8 @@ _SUFFIX_TOKENS = {
 HAND_ALIASES = {
     "Walmart": "WMT", "Wal-Mart": "WMT", "Wal-Mart Stores": "WMT",
     "Walmart Stores": "WMT", "Sam's Club": "WMT",
-    "AT&T": "T", "AT & T": "T", "AT&T Mobility": "T", "SBC Communications": "T",
+    "AT&T": "T", "AT & T": "T", "AT&T Mobility": "T", "AT&T Wireless": "T",
+    "SBC Communications": "T",
     "Hewlett-Packard": "HPQ", "HP": "HPQ",
     "Hewlett Packard Enterprise": "HPE", "HPE": "HPE",
     "Apple Computer": "AAPL", "Apple": "AAPL",
@@ -481,26 +482,43 @@ HAND_ALIASES = {
 }
 
 
+_GOV_RE = re.compile(
+    r"(?:U ?S |UNITED STATES |FEDERAL )(?:FEDERAL )?GOVERNMENT"
+    r"(?: AGENCIES| ENTITIES| AND ITS AGENCIES)?"
+)
+
+
 def _norm_name(name: str) -> str:
     """Normalize a company name for matching.
 
-    Uppercase; unify unicode punctuation; drop periods/commas/apostrophes;
-    hyphens and slashes become spaces; collapse whitespace; strip leading
-    "THE" and trailing legal suffixes (Inc/Corp/Co/Ltd/...).
+    Uppercase; unify unicode punctuation; drop parentheticals ("(Walmart)")
+    and SEC state-of-incorporation markers ("/DE/"); drop periods/commas/
+    apostrophes; hyphens and slashes become spaces; strip "and its
+    affiliates"-style tails; collapse whitespace; strip leading "THE" and
+    trailing legal suffixes (Inc/Corp/Co/Ltd/...). Variants of the U.S.
+    government collapse to the canonical "US GOVERNMENT".
     """
     s = unicodedata.normalize("NFKC", name)
     s = (s.replace("’", "'").replace("‘", "'")
          .replace("“", '"').replace("”", '"'))
     s = s.upper()
+    s = re.sub(r"\([^)]*\)", " ", s)              # (WALMART), (a Thales company)
+    s = re.sub(r"/\s*[A-Z]{2,3}\s*/?\s*$", " ", s)  # /DE/, /NEW, INC/RI
+    s = s.rstrip("/ ")
     s = s.replace(".", "").replace(",", " ").replace("'", "").replace('"', " ")
     s = re.sub(r"[-–—/]", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(
+        r"\s+AND\s+(?:ITS\s+|THEIR\s+)?(?:GLOBAL\s+|CONTROLLED\s+|WHOLLY\s+OWNED\s+)?"
+        r"(?:AFFILIATES|SUBSIDIARIES|AFFILIATED\s+COMPANIES)\s*$", "", s)
     toks = s.split(" ")
     while len(toks) > 1 and toks[-1] in _SUFFIX_TOKENS:
         toks.pop()
     while len(toks) > 1 and toks[0] == "THE":
         toks.pop(0)
     out = " ".join(toks)
+    if _GOV_RE.fullmatch(out):
+        return "US GOVERNMENT"
     return out if out else name.upper().strip()
 
 
@@ -539,8 +557,14 @@ def resolve_customer(name: str, alias_map: dict[str, str]) -> str | None:
 
 
 def _customer_key(name: str, ticker: str | None) -> str:
-    """Identity used for dedup and re-disclosure matching across years."""
-    return ticker if ticker else "n:" + _norm_name(name)
+    """Identity used for dedup and re-disclosure matching across years.
+
+    Guards against pandas missing values (None/NaN/pd.NA — float NaN is
+    truthy!) so a non-panel ticker can never leak into the key.
+    """
+    if isinstance(ticker, str) and ticker:
+        return ticker
+    return "n:" + _norm_name(name)
 
 
 # ---------------------------------------------------------------------------
@@ -609,12 +633,12 @@ def finalize_edges(
     """
     df = edges.copy()
     df["filing_date"] = pd.to_datetime(df["filing_date"])
-    df["customer_ticker"] = [
-        resolve_customer(n, alias_map) for n in df["customer_name"]
-    ]
+    # Compute from plain lists BEFORE column assignment: a str column would
+    # hand back missing values as float NaN, which is truthy.
+    tickers = [resolve_customer(n, alias_map) for n in df["customer_name"]]
+    df["customer_ticker"] = tickers
     df["customer_key"] = [
-        _customer_key(n, t)
-        for n, t in zip(df["customer_name"], df["customer_ticker"])
+        _customer_key(n, t) for n, t in zip(df["customer_name"], tickers)
     ]
     # One edge per (filing, customer): prefer a stated revenue_pct (larger
     # first), then longer evidence; deterministic.
@@ -704,17 +728,13 @@ def build_principal_customers(
     #   no cache, unmatched -> known non-disclosure (prefilter found no
     #                          concentration language), keys = {}
     #   no cache, matched   -> unknown (not processed / failed)
-    kept["customer_ticker_tmp"] = [
-        resolve_customer(n, alias_map) for n in kept["customer_name"]
-    ]
-    kept["customer_key_tmp"] = [
-        _customer_key(n, t)
-        for n, t in zip(kept["customer_name"], kept["customer_ticker_tmp"])
+    tmp_tickers = [resolve_customer(n, alias_map) for n in kept["customer_name"]]
+    tmp_keys = [
+        _customer_key(n, t) for n, t in zip(kept["customer_name"], tmp_tickers)
     ]
     keys_by_accession: dict[str, set] = {}
-    for r in kept.itertuples():
-        keys_by_accession.setdefault(r.accession, set()).add(r.customer_key_tmp)
-    kept = kept.drop(columns=["customer_ticker_tmp", "customer_key_tmp"])
+    for acc, key in zip(kept["accession"], tmp_keys):
+        keys_by_accession.setdefault(acc, set()).add(key)
 
     inv_rows = []
     n_unknown = 0

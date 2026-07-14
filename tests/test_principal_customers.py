@@ -126,6 +126,28 @@ def test_norm_name_suffix_and_punctuation():
     assert _norm_name("Deere & Company") == "DEERE"
     assert _norm_name("Amazon.com, Inc.") == "AMAZONCOM"
     assert _norm_name("AT&T Inc.") == "AT&T"
+    # affiliates tails, parenthetical aliases, SEC state markers
+    assert (_norm_name("Wal-Mart Stores, Inc. and its affiliates (Wal-Mart)")
+            == "WAL MART STORES")
+    assert _norm_name("Walmart Inc. and its affiliates") == "WALMART"
+    assert _norm_name("Tech Data Corporation and its global affiliates") \
+        == "TECH DATA"
+    assert _norm_name("OCCIDENTAL PETROLEUM CORP /DE/") \
+        == "OCCIDENTAL PETROLEUM"
+    # U.S. government variants collapse to one canonical key
+    assert _norm_name("the U.S. Government") == "US GOVERNMENT"
+    assert _norm_name("the U.S. federal government") == "US GOVERNMENT"
+    assert _norm_name("the United States Government") == "US GOVERNMENT"
+    # but foreign/state governments do not
+    assert _norm_name("the Canadian government") != "US GOVERNMENT"
+
+
+def test_affiliate_tail_resolves_to_panel_ticker():
+    amap = build_alias_map({"WMT": ["Walmart Inc."],
+                            "OXY": ["OCCIDENTAL PETROLEUM CORP /DE/"]})
+    assert resolve_customer(
+        "Wal-Mart Stores, Inc. and its affiliates (Wal-Mart)", amap) == "WMT"
+    assert resolve_customer("Occidental Petroleum Corporation", amap) == "OXY"
 
 
 def test_hand_alias_only_applies_to_panel_tickers():
@@ -204,16 +226,24 @@ def test_nonpanel_customer_kept_but_flagged():
         {"supplier_ticker": "SUP", "accession": "a1",
          "filing_date": _d("2020-02-01"), "customer_name": "the U.S. Government",
          "revenue_pct": 15.0, "evidence": "e2", "model": "m"},
+        {"supplier_ticker": "SUP", "accession": "a1",
+         "filing_date": _d("2020-02-01"), "customer_name": "Airbus S.A.S.",
+         "revenue_pct": None, "evidence": "e3", "model": "m"},
     ])
     inventory = pd.DataFrame([
         {"supplier_ticker": "SUP", "filing_date": _d("2020-02-01"),
-         "known": True, "keys": ("WMT", "n:US GOVERNMENT")},
+         "known": True, "keys": ("WMT", "n:US GOVERNMENT", "n:AIRBUS SAS")},
     ])
     out = finalize_edges(edges, amap, inventory)
-    assert len(out) == 2  # non-panel row KEPT
+    # both non-panel rows KEPT — distinct non-panel customers in the same
+    # filing must not collapse into one via a shared missing key
+    assert len(out) == 3
     gov = out[out["customer_name_raw"] == "the U.S. Government"].iloc[0]
     assert pd.isna(gov["customer_ticker"])
     assert not gov["tradeable"]
+    # the key must be the canonical name key, never NaN (float-NaN tickers
+    # are truthy — regression guard)
+    assert gov["customer_key"] == "n:US GOVERNMENT"
     wmt = out[out["customer_name_raw"] == "Walmart Inc."].iloc[0]
     assert wmt["customer_ticker"] == "WMT"
     assert wmt["tradeable"]
