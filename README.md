@@ -14,7 +14,7 @@ the frozen honest convention set (v0), the 10-K text-change factor and the
 customer-momentum spillover factor lose their signal (sector-neutral
 incremental t = +0.24 and +0.21); the abnormal-8-K-frequency family survives
 attenuated (daily variant t = −2.29, monthly t = −2.00) but sits below the
-full-ledger multiple-testing ceiling (≈ 2.5). The registry holds **0 accepted
+full-ledger multiple-testing ceiling (≈ 2.6). The registry holds **0 accepted
 factors**; the strongest candidate (C15, daily 8-K frequency) is unconfirmed.
 
 ## Method
@@ -50,7 +50,7 @@ controls). Code keys factors by name; the C/B labels are for reference.
 | 10-Q | 21,487 filings, 2011–2026 |
 | 8-K | 100,618 filings, 2011–2026, all 499 names |
 | Prices | 499 tickers, daily OHLCV, 2011–2026 |
-| Company graph | 10,997 supplier/customer/competitor edges, LLM-extracted from 10-K business sections, each backed by a source sentence |
+| Company graph | 11,025 extracted relationship rows (3,113 unique directed edges after per-pair dedup), supplier/customer/competitor, LLM-extracted from 10-K business sections, each backed by a source sentence |
 
 ## Findings
 
@@ -60,7 +60,7 @@ A pre-committed 2³ factorial varied point-in-time membership (on/off),
 availability lag (0/1 calendar day), and signal grid (month-end vs daily
 caches) for the four flagship factors — 19 informative cells, each a
 ledgered look (`reports/factorial_v0.md`). Sector-neutral incremental t over
-the six-factor baseline, 168 months:
+the six-factor baseline, 165–168 months:
 
 | factor | pre-PIT | v0 | attribution |
 |---|---|---|---|
@@ -105,23 +105,23 @@ v0 numbers (sector-neutral incremental IC over the baseline, 168 months,
 | C15 daily | −0.0111 | −2.29 |
 | C11 monthly | −0.0089 | −2.00 |
 
-C15 confirms the mechanism an adversarial review isolated in C11: the signal
-lives in the current, still-fresh window (pre-PIT, fresh-attach months
-scored t = −3.7 while a one-month lag erased it). Under the one-day
+C15 is consistent with the mechanism an adversarial review isolated in C11:
+the signal lives in the current, still-fresh window (pre-PIT, fresh-attach
+months scored t = −3.7 while a one-month lag erased it). Under the one-day
 availability lag C15 *strengthens* (−1.85 → −2.29 under PIT) — same-close
 attachment diluted the signal rather than carrying it. It is insensitive to
 control timing (−2.33 with controls lagged) and has 95% coverage. The
 predictive content is the frequency anomaly specifically: constructions
 reading 8-K item content (hard-negative items) or tone (Loughran-McDonald
-sentiment) carried nothing even pre-PIT (sector-neutral |t| ≤ 0.9).
+sentiment) carried nothing even pre-PIT (sector-neutral |t| ≤ 1.0).
 
-Both variants sit below the full-ledger ceiling of ≈ 2.5. Status: strongest
+Both variants sit below the full-ledger ceiling of ≈ 2.6. Status: strongest
 current candidates, unconfirmed; no significance claim is made.
 
 ### LightGBM combiner (scope)
 
 The walk-forward combiner (`ml_combiner.py`) predicts 21-day returns from C1
-plus four price/volume controls; the SEC candidates were never in its
+plus four price/volume controls; no SEC candidate beyond C1 was ever in its
 feature set. Its out-of-sample attribution — baseline-only Sharpe 1.02 ≥
 full 0.98, i.e. adding C1 does not help — predates the v0 conventions. It
 shows the combiner is a momentum machine; it is not a test of the SEC
@@ -129,11 +129,12 @@ signals.
 
 ## Significance and multiple testing
 
-The ledger holds 52 rows to date, of which N = 44 record a computed
+The ledger holds 64 rows to date, of which N = 56 record a computed
 evaluation statistic (the rest are registrations or infrastructure notes;
-superseded rows count — they were looks). Selection is over |t|, so the
-significance bar for any external claim is the two-sided expected-max
-ceiling E[max |t| | null] = `emax_null(2N)` = **2.49**. No factor clears it;
+superseded rows count — they were looks, as do the 12 back-filled looks from
+the 2026-07-10 IC-decay sweep, ledgered 2026-07-13). Selection is over |t|,
+so the significance bar for any external claim is the two-sided expected-max
+ceiling E[max |t| | null] = `emax_null(2N)` = **2.57**. No factor clears it;
 the strongest is C15 at −2.29. The candidates are correlated same-family
 measurements: an eigenspectrum estimate puts the effective number of
 independent bets at ≈ 7–9. That effective-N describes redundancy — how many
