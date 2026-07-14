@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 import networkx as nx
@@ -111,6 +112,77 @@ def _load_business_text(filing_path: Path) -> tuple[str, str, str]:
     return text, data.get("company_name", ""), data.get("filing_date", "")
 
 
+def _parse_confidence(value) -> float | None:
+    """Parse an LLM-reported confidence into a float clamped to [0, 1].
+
+    Returns None for missing/None/NaN/inf/unparseable values so callers
+    drop the row explicitly (and count it) instead of letting NaN flow
+    through and silently fail every `>= min_conf` comparison.
+    """
+    if value is None:
+        return None
+    try:
+        conf = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(conf):
+        return None
+    return max(0.0, min(1.0, conf))
+
+
+def _normalize_ws(text: str) -> str:
+    """Lowercase and collapse whitespace runs to single spaces."""
+    return " ".join(text.split()).lower()
+
+
+def _evidence_in_text(evidence, text: str) -> bool:
+    """Whitespace-normalized, case-insensitive substring check.
+
+    True iff the evidence quote (whitespace collapsed, lowercased)
+    appears in the section text (same normalization). Empty or
+    non-string evidence never verifies.
+    """
+    if not isinstance(evidence, str) or not evidence.strip() or not text:
+        return False
+    return _normalize_ws(evidence) in _normalize_ws(text)
+
+
+def _validate_relationships(
+    raw_rels: list[dict],
+    universe_set: set[str],
+    business_text: str,
+) -> tuple[list[dict], int]:
+    """Normalize raw LLM relationship dicts into validated rows.
+
+    Keeps only rows whose target is in the universe and whose relation is
+    a known type. Rows with missing/None/NaN confidence are dropped and
+    counted (returned as the second element). Each kept row gains
+    `evidence_verified`: whether the evidence quote appears verbatim
+    (whitespace-normalized, case-insensitive) in the section text the
+    LLM was shown. Failing rows are flagged, never dropped.
+    """
+    valid_rels: list[dict] = []
+    n_bad_conf = 0
+    for rel in raw_rels:
+        target = rel.get("target_ticker", "")
+        relation = rel.get("relation", "")
+        if target not in universe_set or relation not in RELATIONSHIP_TYPES:
+            continue
+        conf = _parse_confidence(rel.get("confidence"))
+        if conf is None:
+            n_bad_conf += 1
+            continue
+        evidence = rel.get("evidence", "") or ""
+        valid_rels.append({
+            "target_ticker": target,
+            "relation": relation,
+            "confidence": conf,
+            "evidence": evidence,
+            "evidence_verified": _evidence_in_text(evidence, business_text),
+        })
+    return valid_rels, n_bad_conf
+
+
 def extract_relationships_for_filing(
     ticker: str,
     filing_path: Path,
@@ -174,19 +246,17 @@ def extract_relationships_for_filing(
         logger.error(f"[{ticker}] Failed to parse LLM response: {e}")
         parsed = {"relationships": []}
 
-    # Validate: only keep relationships with tickers in universe
-    universe_set = set(universe_tickers)
-    valid_rels = []
-    for rel in parsed.get("relationships", []):
-        target = rel.get("target_ticker", "")
-        relation = rel.get("relation", "")
-        if target in universe_set and relation in RELATIONSHIP_TYPES:
-            valid_rels.append({
-                "target_ticker": target,
-                "relation": relation,
-                "confidence": max(0.0, min(1.0, float(rel.get("confidence", 0.5)))),
-                "evidence": rel.get("evidence", ""),
-            })
+    # Validate: universe/type filter, explicit confidence guard, and the
+    # evidence-substring check against the exact text the LLM was shown
+    # (business_text is only in memory here, at extraction time).
+    valid_rels, n_bad_conf = _validate_relationships(
+        parsed.get("relationships", []), set(universe_tickers), business_text
+    )
+    if n_bad_conf:
+        logger.debug(
+            f"[{ticker}] {filing_date}: dropped {n_bad_conf} relationship(s) "
+            f"with missing/None/NaN confidence"
+        )
 
     result = {
         "ticker": ticker,
@@ -218,7 +288,14 @@ def extract_all_relationships(
     its own JSON, so an interrupted run resumes where it stopped.
 
     Returns DataFrame with: source, target, relation, confidence, evidence,
-    filing_date, model. Saves to CACHE_DIR / "relationships.parquet".
+    evidence_verified, filing_date, model. Saves to
+    CACHE_DIR / "relationships.parquet".
+
+    Guards: rows with missing/None/NaN confidence are dropped and counted
+    (per-filing caches written before this guard may carry them).
+    evidence_verified is computed at extraction time against the section
+    text the LLM saw; cached results that predate the flag are treated as
+    un-verified (False) — use audit_evidence() to recompute offline.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -243,7 +320,7 @@ def extract_all_relationships(
     )
 
     all_rows = []
-    n_done = n_failed = 0
+    n_done = n_failed = n_bad_conf = 0
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {
             ex.submit(extract_relationships_for_filing, t, p, universe): (t, p)
@@ -260,12 +337,21 @@ def extract_all_relationships(
                 continue
 
             for rel in result.get("relationships", []):
+                # Cached JSONs written before the confidence guard can
+                # still carry missing/None/NaN — drop and count here too.
+                conf = _parse_confidence(rel.get("confidence"))
+                if conf is None:
+                    n_bad_conf += 1
+                    continue
                 all_rows.append({
                     "source": ticker,
                     "target": rel["target_ticker"],
                     "relation": rel["relation"],
-                    "confidence": rel["confidence"],
-                    "evidence": rel["evidence"],
+                    "confidence": conf,
+                    "evidence": rel.get("evidence", ""),
+                    # Caches from before the evidence check lack the flag:
+                    # treat missing as un-verified.
+                    "evidence_verified": bool(rel.get("evidence_verified", False)),
                     "filing_date": result["filing_date"],
                     "model": result.get("model", ""),
                 })
@@ -278,6 +364,8 @@ def extract_all_relationships(
 
     if n_failed:
         logger.warning(f"{n_failed}/{len(jobs)} filings failed — rerun to retry (cached ones skip)")
+    if n_bad_conf:
+        logger.debug(f"Dropped {n_bad_conf} relationship row(s) with missing/None/NaN confidence")
 
     df = pd.DataFrame(all_rows)
     if df.empty:
@@ -301,6 +389,91 @@ def extract_all_relationships(
         logger.info(f"    {rel}: {count}")
 
     return df
+
+
+def audit_evidence(
+    relationships_df: pd.DataFrame,
+    filings_dir: Path | str = FILINGS_DIR,
+    max_filings: int | None = None,
+) -> dict:
+    """Offline audit: re-check each edge's `evidence` quote against filing text.
+
+    Existing caches predate the extraction-time evidence check (their
+    `evidence_verified` column is missing — treated as un-verified), so this
+    recomputes verification from the filings on disk. For every
+    (source, filing_date) group it loads the matching filing(s) under
+    `filings_dir/<source>/` via the same loader extraction used (same
+    section preference, same truncation) and tests whitespace-normalized,
+    case-insensitive containment. A row verifies if its evidence appears
+    in ANY same-day filing for that ticker.
+
+    Read-only: modifies no cache. A full run loads every filing on disk
+    (hours of IO at universe scale) — pass `max_filings` to smoke-test.
+
+    Returns a report dict with: n_filings_requested, n_filings_found,
+    n_filings_missing, n_rows_checked, n_verified, hit_rate, and `rows`
+    (a DataFrame: source, target, relation, filing_date,
+    evidence_verified_audit).
+    """
+    filings_dir = Path(filings_dir)
+    df = relationships_df.copy()
+    if "evidence_verified" not in df.columns:
+        df["evidence_verified"] = False  # missing column = un-verified
+    df["filing_date"] = pd.to_datetime(df["filing_date"])
+
+    groups = list(df.groupby(["source", "filing_date"], sort=True))
+    if max_filings is not None:
+        groups = groups[:max_filings]
+
+    rows = []
+    n_filings_missing = 0
+    for (source, fdate), g in groups:
+        date_str = pd.Timestamp(fdate).strftime("%Y-%m-%d")
+        candidates = sorted((filings_dir / source).glob(f"*_{date_str}_*.json"))
+        texts = []
+        for p in candidates:
+            try:
+                text, _, _ = _load_business_text(p)
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+                logger.debug(f"audit_evidence: cannot read {p}: {e}")
+                continue
+            texts.append(_normalize_ws(text))
+        if not texts:
+            n_filings_missing += 1
+        for _, row in g.iterrows():
+            evidence = row.get("evidence", "")
+            verified = (
+                isinstance(evidence, str)
+                and bool(evidence.strip())
+                and any(_normalize_ws(evidence) in t for t in texts)
+            )
+            rows.append({
+                "source": source,
+                "target": row["target"],
+                "relation": row["relation"],
+                "filing_date": fdate,
+                "evidence_verified_audit": verified,
+            })
+
+    rows_df = pd.DataFrame(rows)
+    n_checked = len(rows_df)
+    n_verified = int(rows_df["evidence_verified_audit"].sum()) if n_checked else 0
+    report = {
+        "n_filings_requested": len(groups),
+        "n_filings_found": len(groups) - n_filings_missing,
+        "n_filings_missing": n_filings_missing,
+        "n_rows_checked": n_checked,
+        "n_verified": n_verified,
+        "hit_rate": (n_verified / n_checked) if n_checked else float("nan"),
+        "rows": rows_df,
+    }
+    logger.info(
+        f"audit_evidence: {n_verified}/{n_checked} rows verified "
+        f"(hit rate {report['hit_rate']:.1%}) over {len(groups)} filings, "
+        f"{n_filings_missing} filing(s) not found on disk"
+        if n_checked else "audit_evidence: no rows to check"
+    )
+    return report
 
 
 def build_graph(
