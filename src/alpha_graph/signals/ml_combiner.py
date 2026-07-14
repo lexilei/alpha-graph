@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import pickle
 from datetime import datetime
 from pathlib import Path
 
@@ -76,6 +75,77 @@ FEATURE_COLS = [
     "volatility_21d",
     "volume_zscore",
 ]
+
+# Model persistence. LightGBM models are stored in LightGBM's native text
+# format — no pickle on the load path. The sklearn GradientBoosting fallback
+# (lightgbm missing) has no native format and still pickles, loudly, to a
+# separate filename. The pre-2026-07 pickle (ml_combiner_model.pkl) is
+# deliberately NOT migrated: it is ignored with a warning; retrain to
+# produce the native file.
+MODEL_FILENAME_NATIVE = "ml_combiner_model.txt"
+MODEL_FILENAME_SKLEARN = "ml_combiner_model_sklearn.pkl"
+MODEL_FILENAME_LEGACY = "ml_combiner_model.pkl"
+
+
+def _save_model(model) -> Path:
+    """Persist a trained combiner model under CACHE_DIR.
+
+    LGBMRegressor (the normal case) is saved via its underlying Booster in
+    LightGBM's native text format; a raw Booster is saved the same way.
+    The sklearn fallback model keeps pickle behind an explicit warning.
+    """
+    booster = getattr(model, "booster_", None)  # sklearn wrapper (LGBMRegressor)
+    if booster is None:
+        lgb = _get_lgb()
+        if lgb is not None and isinstance(model, lgb.Booster):
+            booster = model
+
+    if booster is not None:
+        path = CACHE_DIR / MODEL_FILENAME_NATIVE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        booster.save_model(str(path))
+        return path
+
+    # No lightgbm: sklearn GradientBoosting fallback has no native format.
+    import pickle
+    logger.warning("pickle fallback, sklearn model: saving via pickle "
+                   f"({MODEL_FILENAME_SKLEARN})")
+    path = CACHE_DIR / MODEL_FILENAME_SKLEARN
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as f:
+        pickle.dump(model, f)
+    return path
+
+
+def _load_model():
+    """Load the saved combiner model, or None if no usable file exists.
+
+    Prefers the native LightGBM text file (loaded as lgb.Booster — for
+    regression its predict() matches LGBMRegressor.predict exactly; no
+    sklearn-side transform applies). Falls back to the sklearn pickle
+    only if that is what was saved. Legacy pickles are ignored.
+    """
+    native_path = CACHE_DIR / MODEL_FILENAME_NATIVE
+    sklearn_path = CACHE_DIR / MODEL_FILENAME_SKLEARN
+    legacy_path = CACHE_DIR / MODEL_FILENAME_LEGACY
+
+    if native_path.exists():
+        lgb = _get_lgb()
+        if lgb is None:
+            logger.error(f"lightgbm required to load {native_path}")
+            return None
+        return lgb.Booster(model_file=str(native_path))
+
+    if sklearn_path.exists():
+        import pickle
+        logger.warning("pickle fallback, sklearn model: loading from "
+                       f"{sklearn_path}")
+        with open(sklearn_path, "rb") as f:
+            return pickle.load(f)
+
+    if legacy_path.exists():
+        logger.warning(f"stale pickle model ignored; retrain: {legacy_path}")
+    return None
 
 
 def build_feature_panel(
@@ -533,10 +603,8 @@ def walk_forward_train_predict(
         avg_ic = np.mean([m["ic"] for m in models if not np.isnan(m["ic"])])
         logger.info(f"Walk-forward complete: avg IC = {avg_ic:.4f} over {len(models)} months")
 
-        # Save the latest model for live prediction
-        model_path = CACHE_DIR / "ml_combiner_model.pkl"
-        with open(model_path, "wb") as f:
-            pickle.dump(models[-1]["model"], f)
+        # Save the latest model for research diagnostics (predict_current)
+        model_path = _save_model(models[-1]["model"])
         logger.info(f"Saved latest model to {model_path}")
 
     # Save results
@@ -633,13 +701,10 @@ def predict_current(
     This is the production inference path — loads the saved model and
     generates predictions for the current cross-section of stocks.
     """
-    model_path = CACHE_DIR / "ml_combiner_model.pkl"
-    if not model_path.exists():
+    model = _load_model()
+    if model is None:
         logger.error("No saved model. Run training first: python -m alpha_graph.signals.ml_combiner --train")
         return pd.DataFrame()
-
-    with open(model_path, "rb") as f:
-        model = pickle.load(f)
 
     # Build current feature panel
     panel = build_feature_panel()

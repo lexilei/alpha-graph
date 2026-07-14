@@ -4,11 +4,19 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import alpha_graph.signals.ml_combiner as ml_combiner
 from alpha_graph.signals.ml_combiner import (
     FEATURE_COLS,
     LGBM_PARAMS,
     compute_signal_metrics,
 )
+
+try:
+    import lightgbm
+    HAS_LGB = True
+except ImportError:
+    lightgbm = None
+    HAS_LGB = False
 
 
 def _make_results(n: int = 200, ic: float = 0.1) -> pd.DataFrame:
@@ -73,3 +81,48 @@ def test_feature_cols_expected():
         "volatility_21d", "volume_zscore",
     }
     assert expected.issubset(set(FEATURE_COLS))
+
+
+# --- Model persistence (native LightGBM format, no pickle) ---
+
+def _tiny_fit(n: int = 200):
+    """Fit a small LGBMRegressor on synthetic data."""
+    rng = np.random.RandomState(42)
+    X = pd.DataFrame(rng.normal(size=(n, len(FEATURE_COLS))), columns=FEATURE_COLS)
+    y = X["momentum_21d"] * 0.5 - X["volatility_21d"] * 0.3 + rng.normal(0, 0.1, n)
+    params = dict(LGBM_PARAMS)
+    params["n_estimators"] = 20
+    model = lightgbm.LGBMRegressor(**params)
+    model.fit(X, y)
+    return model, X
+
+
+@pytest.mark.skipif(not HAS_LGB, reason="lightgbm not installed")
+def test_native_save_load_round_trip_identical_predictions(tmp_path, monkeypatch):
+    """Native text save/load must reproduce LGBMRegressor predictions exactly."""
+    monkeypatch.setattr(ml_combiner, "CACHE_DIR", tmp_path)
+    model, X = _tiny_fit()
+
+    path = ml_combiner._save_model(model)
+    assert path == tmp_path / ml_combiner.MODEL_FILENAME_NATIVE
+    assert path.suffix == ".txt"
+    # Native text format, not a pickle
+    assert path.read_bytes()[:4] != b"\x80\x04"
+    assert b"tree" in path.read_bytes()[:100]
+
+    loaded = ml_combiner._load_model()
+    assert isinstance(loaded, lightgbm.Booster)
+    np.testing.assert_array_equal(model.predict(X), loaded.predict(X))
+
+
+@pytest.mark.skipif(not HAS_LGB, reason="lightgbm not installed")
+def test_stale_legacy_pickle_ignored(tmp_path, monkeypatch):
+    """An old ml_combiner_model.pkl must be ignored, not loaded."""
+    monkeypatch.setattr(ml_combiner, "CACHE_DIR", tmp_path)
+    (tmp_path / ml_combiner.MODEL_FILENAME_LEGACY).write_bytes(b"\x80\x04 old pickle")
+    assert ml_combiner._load_model() is None
+
+
+def test_load_model_missing_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(ml_combiner, "CACHE_DIR", tmp_path)
+    assert ml_combiner._load_model() is None
