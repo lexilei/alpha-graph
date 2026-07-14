@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "case_id": "fb_meta",
+      "symbols": ["FB", "META"],
+      "expectation": "continuous listing across ticker change"
+    },
+    {
+      "case_id": "fi_fisv",
+      "symbols": ["FI", "FISV"],
+      "expectation": "continuous listing; no double count"
+    },
+    {
+      "case_id": "ir_tt_reuse",
+      "symbols": ["IR", "TT"],
+      "expectation": "old IR maps to TT; post-2020 IR is a distinct listing"
+    },
+    {
+      "case_id": "mwv_wrk_sw",
+      "symbols": ["MWV", "WRK", "SW"],
+      "expectation": "MWV/WRK must not inherit the Smurfit WestRock SW listing"
+    },
+    {
+      "case_id": "dish_sats",
+      "symbols": ["DISH", "SATS"],
+      "expectation": "DISH membership must not inherit the old EchoStar SATS listing"
+    },
+    {
+      "case_id": "px_lin",
+      "symbols": ["PX", "LIN"],
+      "expectation": "adjudicate merger successor and price seam"
+    },
+    {
+      "case_id": "dwdp_dd",
+      "symbols": ["DWDP", "DD"],
+      "expectation": "adjudicate reorganization successor and price seam"
+    },
+    {
+      "case_id": "goog_classes",
+      "symbols": ["GOOG", "GOOGL"],
+      "expectation": "same issuer, distinct simultaneous listings"
+    },
+    {
+      "case_id": "fox_classes",
+      "symbols": ["FOX", "FOXA"],
+      "expectation": "same issuer, distinct simultaneous listings"
+    },
+    {
+      "case_id": "nws_classes",
+      "symbols": ["NWS", "NWSA"],
+      "expectation": "same issuer, distinct simultaneous listings"
+    },
+    {
+      "case_id": "discovery_classes",
+      "symbols": ["DISCA", "DISCK"],
+      "expectation": "parallel historical classes; no accidental collapse"
+    },
+    {
+      "case_id": "symc_gen_chain",
+      "symbols": ["SYMC", "NLOK", "GEN"],
+      "expectation": "complete dated ticker chain"
+    },
+    {
+      "case_id": "cbs_psky_chain",
+      "symbols": ["CBS", "VIAC", "PARA", "PSKY"],
+      "expectation": "complete dated ticker chain"
+    },
+    {
+      "case_id": "hcp_doc_chain",
+      "symbols": ["HCP", "PEAK", "DOC"],
+      "expectation": "complete dated ticker chain"
+    }
+  ]
+}

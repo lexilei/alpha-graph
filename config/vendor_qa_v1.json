@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "departed_identity_coverage_min": 0.98,
+  "departed_interval_price_coverage_min": 0.98,
+  "member_day_price_coverage_min": 0.99,
+  "member_day_price_coverage_by_year_min": 0.98,
+  "membership_month_end_jaccard_min": 0.99,
+  "cross_section_min": 490,
+  "cross_section_max": 515,
+  "unresolved_primary_key_duplicates_max": 0,
+  "unresolved_identity_ambiguities_max": 0,
+  "known_case_approval_rate_min": 1.0,
+  "identity_registry_coverage_min": 1.0,
+  "calendar_weekday_coverage_min": 0.94,
+  "calendar_month_weekday_coverage_min": 0.80,
+  "membership_difference_approval_rate_min": 1.0,
+  "calendar_endpoint_gap_days_max": 7,
+  "calendar_internal_gap_days_max": 7,
+  "calendar_expected_dates": 3716,
+  "calendar_expected_sha256": "74e37a8ac351a3b8efd1f74bdfc7c1b921688826b49b5e1e9f5c58662b144ad2"
+}
