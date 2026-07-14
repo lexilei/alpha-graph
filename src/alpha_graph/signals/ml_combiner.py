@@ -416,6 +416,29 @@ def build_feature_panel(
             panel["evt8k_freq_z_d"] = np.nan
             logger.debug("No event_freq_8k_daily.parquet — C15 will be NaN")
 
+    # --- C17: SUE / PEAD (as-filed diluted XBRL EPS; availability = earliest
+    # Item-2.02 8-K date else statement filed date, already acceptance-time
+    # refined by the builder). Filing-date-style as-of merge: the availability
+    # lag applies on every grid, like the other filing merges (v0: t+1). ---
+    sue_path = CACHE_DIR / "sue_pead.parquet"
+    if sue_path.exists():
+        su = pd.read_parquet(sue_path)
+        su["disclosure_date"] = pd.to_datetime(su["disclosure_date"])
+        su = su.rename(columns={"sue": "sue_pead"}).dropna(subset=["sue_pead"])
+        # same-day multi-quarter disclosures: keep the latest period_end
+        su = su.sort_values(["ticker", "disclosure_date", "period_end"])
+        su = su.drop_duplicates(["ticker", "disclosure_date"], keep="last")
+        su = su[["ticker", "disclosure_date", "sue_pead"]]
+        panel = _merge_asof_signal(
+            panel, su,
+            left_date="date", right_date="disclosure_date",
+            on="ticker", cols=["sue_pead"],
+            availability_lag_days=availability_lag_days,
+        )
+    else:
+        panel["sue_pead"] = np.nan
+        logger.debug("No sue_pead.parquet — C17 will be NaN")
+
     # Drop rows with no target
     panel = panel.dropna(subset=["fwd_return_21d"])
     panel = panel.sort_values(["date", "ticker"]).reset_index(drop=True)

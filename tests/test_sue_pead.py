@@ -286,3 +286,49 @@ def test_pit_later_filing_changes_nothing_before_it():
 
     old = pert[pert["period_end"].isin(base["period_end"])].reset_index(drop=True)
     pd.testing.assert_frame_equal(old, base)
+
+
+# --------------------------------------------------------------------------- #
+# Panel merge (build_feature_panel C17 block)
+# --------------------------------------------------------------------------- #
+
+def _write_market(tmp_path, cal, tickers=("AAA",)):
+    rows = [{"ticker": t, "date": d, "close": 100.0 + i, "volume": 1e6,
+             "ret_21d": 0.01}
+            for t in tickers for i, d in enumerate(cal)]
+    pd.DataFrame(rows).to_parquet(tmp_path / "market_data.parquet", index=False)
+
+
+def test_panel_merge_sue_pead_filing_date_lag_semantics(tmp_path, monkeypatch):
+    import alpha_graph.signals.ml_combiner as ml
+    monkeypatch.setattr(ml, "CACHE_DIR", tmp_path)
+    cal = pd.bdate_range("2020-01-06", periods=8)     # Mon..Wed, no weekend gap
+    _write_market(tmp_path, cal)
+    pd.DataFrame([
+        # two quarters disclosed the same day: the LATEST period_end must win
+        {"ticker": "AAA", "disclosure_date": cal[2],
+         "period_end": pd.Timestamp("2020-03-31"), "sue": 2.5,
+         "eps_q": 1.0, "eps_q4_ago": 0.9, "derived_q4": False, "via_8k02": True},
+        {"ticker": "AAA", "disclosure_date": cal[2],
+         "period_end": pd.Timestamp("2020-06-30"), "sue": 3.5,
+         "eps_q": 1.1, "eps_q4_ago": 1.0, "derived_q4": False, "via_8k02": True},
+        # NaN-sue quarter later: ignored, must NOT blank the carry-forward
+        {"ticker": "AAA", "disclosure_date": cal[5],
+         "period_end": pd.Timestamp("2020-09-30"), "sue": np.nan,
+         "eps_q": 1.2, "eps_q4_ago": 1.1, "derived_q4": False, "via_8k02": False},
+    ]).to_parquet(tmp_path / "sue_pead.parquet", index=False)
+
+    panel = ml.build_feature_panel(pit_universe=False, availability_lag_days=1)
+    got = panel[panel["ticker"] == "AAA"].set_index("date")["sue_pead"]
+    assert got[cal[:3]].isna().all()          # v0 t+1: unusable at the disclosure close
+    assert (got[cal[3:]] == 3.5).all()        # attaches next close, carried forward
+
+
+def test_panel_merge_sue_pead_missing_cache_is_nan(tmp_path, monkeypatch):
+    import alpha_graph.signals.ml_combiner as ml
+    monkeypatch.setattr(ml, "CACHE_DIR", tmp_path)
+    cal = pd.bdate_range("2020-01-06", periods=5)
+    _write_market(tmp_path, cal)
+    panel = ml.build_feature_panel(pit_universe=False, availability_lag_days=1)
+    assert "sue_pead" in panel.columns
+    assert panel["sue_pead"].isna().all()
