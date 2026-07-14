@@ -32,7 +32,7 @@ trading-day return).
 | C17 | `sue_pead` | XBRL+8-K | candidate | **Standardized unexpected earnings / PEAD**: SUE = (EPS_q − EPS_{q−4}) / std(last 8 seasonal diffs, min 6). EPS = diluted, as-filed, first-filed per (cik, period) from `xbrl_facts.parquet` (never revised values); Q4 derived as annual − sum(3 as-filed quarters) where no standalone Q4 exists (~25% of filers, more post-2021). Availability = earliest public disclosure: the Item-2.02 8-K acceptance date within (period_end, statement filed], else the 10-Q/10-K filed date; v0 t+1 at the merge. **Registered 2026-07-13 with the evaluation pinned**: (1) primary look — standard v0 judge, sn incremental over BASELINE (21d target, one look); (2) four pre-registered decay looks at 10/21/42/63d horizons via `ic_decay`. Five looks total, all ledgered. Dual purpose: if it carries signal it is also the missing earnings CONTROL for every future candidate. **v0 evaluation 2026-07-13 (the five registered looks)**: primary sn incr t=+2.09 (IC +0.0090, ICIR +0.16; raw t=+1.08), 168m, xs 370, cov 90.4%, orthogonal to the controls (spanned R² 0.077, largest corr mom_252_21 +0.22); decay (raw IC / HAC t): 10d +0.0050/+0.55 · 21d +0.0086/+1.30 · 42d +0.0042/+0.41 · 63d +0.0002/+0.01 — drift concentrated at ~1 month, gone by a quarter. Clears the pre-registered 1.5 bar → candidate; below the full-ledger ceiling (~2.57), so unconfirmed. Build facts: 489/497 tickers, 28,808 quarter rows, 11.2% derived Q4, 93.8% via 8-K 2.02; std-window pinned pre-evaluation as excluding the current diff (ledgered). |
 | C18 | `nt_filing_veto` | 12b-25 | registered | **Late-filing risk veto** (NT 10-K/NT 10-Q, Form 12b-25): first or rare late-filing notification → exclusion flag, NOT a standalone short (rare events, borrow cost). Data gap at registration: NT forms are not in the corpus; fetch via the submissions API pass (same pipeline as `filing_acceptance.parquet`). **Registered 2026-07-13, definition pinned; evaluation protocol (long-book exclusion delta on a baseline portfolio) to be pinned BEFORE computation.** |
 
-## Baseline (price/volume controls — not tested for promotion)
+## Baseline (controls — not tested for promotion)
 
 | ID | name | source | definition |
 |----|------|--------|------------|
@@ -41,7 +41,14 @@ trading-day return).
 | B3 | `volatility_21d` | price | 21-day rolling std of daily returns × √252 (annualized realized vol). |
 | B4 | `volume_zscore` | volume | `(volume − 63d mean) / 63d std`. |
 | B5 | `momentum_252_21` | price | Classic 12-1 momentum: `close(t-21)/close(t-252) − 1` (skip most recent month). The June audit found the cosine signal resembles this, so it belongs in the controls. |
-| B6 | `log_dollar_volume` | price+volume | Size/**liquidity proxy**: log of 63d median dollar volume. NOT true market cap (no PIT shares outstanding); catches text factors that secretly rank by company size. |
+| B6 | `log_dollar_volume` | price+volume | Size/**liquidity proxy**: log of 63d median dollar volume. NOT true market cap — B7 now carries that (PIT shares exist since 2026-07-13); B6 stays: liquidity and size are different controls. Catches text factors that secretly rank by company size. |
+| B7 | `log_mktcap_pit` | price+XBRL | **PIT market cap**: log(shares_asof(ticker, t) × close(t)) — the latest share count FILED on or before t (`shares_outstanding_pit.parquet`, `data/shares_pit.py`) × same-day close. BRK-B excluded (its only series is a Class-A-equivalent weighted average — wrong units for the B price); GOOG/GOOGL both kept (duplicate company-total series; duplication is fine for a control); NaN where no count filed yet. Adjusted closes: caps before a ticker's LATER splits are understated by the split factor. Computed inline in `build_feature_panel`. |
+| B8 | `book_to_market_pit` | XBRL | Latest **as-filed** `StockholdersEquity` (first-filed per (cik, ddate, qtrs); fallback `StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest` when the parent tag is absent for a filer-period; qtrs=0 instant rows), availability = its accession's filed date (v0 t+1 at the merge), divided by market cap at t (B7). Negative book values kept (real). Builder `signals/fundamentals_pit.py` from `xbrl_facts.parquet`. |
+| B9 | `earnings_yield_pit` | XBRL | Trailing 4 **as-filed** quarterly `NetIncomeLoss` (qtrs=1, first-filed; Q4 = annual(qtrs=4) − 3 quarters where a filer lacks standalone Q4 — sue_pead's derivation reused; the 4 quarters must span ≤320d) divided by market cap at t (B7). Availability = the latest constituent filing's filed date (v0 t+1 at the merge). Same builder. |
+
+The judge's default and its `--accepted BASELINE` shorthand remain B1–B6
+(every prior ledger look stays comparable); B7–B9 join via
+`--accepted EXTENDED` in `scripts/factor_orthogonality.py`.
 
 Sector controls: `build_feature_panel` attaches a `sector` column (current GICS
 snapshot, `sector_map.parquet` — mildly non-PIT). `factor_orthogonality.py
@@ -84,7 +91,7 @@ mode, not a factor.
   (`scripts/factor_orthogonality.py`), confirmed out-of-sample.
 - Rejected factors keep their C-ID and a one-line reason (tombstone) — they
   count toward N; do not delete the row.
-- Next free IDs: **C19** / **B7** (C16–C18 registered 2026-07-13, pre-computation).
+- Next free IDs: **C19** / **B10** (C16–C18 registered 2026-07-13, pre-computation; B7–B9 added 2026-07-13 as controls, no evaluation looks).
 - Grid note (2026-07-13): C10 gained a daily as-of cache
   (`graph_customer_momentum_daily.parquet`) with the construction unchanged —
   grid is a convention axis, so the ID stays C10; a builder-level test pins
