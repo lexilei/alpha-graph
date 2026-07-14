@@ -92,7 +92,7 @@ mode, not a factor.
   (`scripts/factor_orthogonality.py`), confirmed out-of-sample.
 - Rejected factors keep their C-ID and a one-line reason (tombstone) — they
   count toward N; do not delete the row.
-- Next free IDs: **C19** / **B10** (C16–C18 registered 2026-07-13, pre-computation; B7–B9 added 2026-07-13 as controls, no evaluation looks).
+- Next free IDs: **C20** / **B10** (C16–C19 registered 2026-07-13, pre-computation; B7–B9 added 2026-07-13 as controls, no evaluation looks).
 - Grid note (2026-07-13): C10 gained a daily as-of cache
   (`graph_customer_momentum_daily.parquet`) with the construction unchanged —
   grid is a convention axis, so the ID stays C10; a builder-level test pins
