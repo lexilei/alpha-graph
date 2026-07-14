@@ -8,11 +8,14 @@ std-exclusion pin):
   - the seasonal match is 365±45 days (a two-year gap is NOT bridged);
   - SUE = diff / std(trailing 8 diffs EXCLUDING the current one, min 6,
     ddof=1), std==0 -> NaN;
-  - availability = the LAST Item-2.02 8-K date in (period_end, filed]
-    (corrected 2026-07-14: guidance 8-Ks carry Item 2.02 without the final
-    EPS, so first-2.02 could date SUE before its EPS existed; last errs
-    stale, never early), else the statement filed date; acceptance at/after
-    16:00 ET shifts it +1 day;
+  - availability = the LAST Item-2.02 8-K date in (period_end,
+    min(filed, period_end + 95 calendar days)] (corrected 2026-07-14:
+    guidance 8-Ks carry Item 2.02 without the final EPS, so first-2.02 could
+    date SUE before its EPS existed; last errs stale, never early. Window-cap
+    guard 2026-07-14: the +95d cap keeps LAST-in-window from grabbing the
+    NEXT quarter's release when the statement is filed 1-4 quarters late),
+    else the statement filed date; acceptance at/after 16:00 ET shifts it
+    +1 day;
   - PIT: appending later filings changes nothing dated before them.
 """
 
@@ -295,6 +298,61 @@ def test_acceptance_before_1600_no_shift():
     r = compute(facts=pd.DataFrame(_one_quarter()), eightk=eightk,
                 acceptance=acc).iloc[0]
     assert r["disclosure_date"] == pd.Timestamp("2020-04-20")
+
+
+# --------------------------------------------------------------------------- #
+# Window-cap guard (2026-07-14): the 2.02 search window is capped at
+# (period_end, min(stmt_filed, period_end + 95 calendar days)] so a statement
+# filed 1-4 quarters late cannot let LAST-in-window date SUE at the WRONG
+# quarter's release (the reviewer-verified F1 class; LDOS FY2015-Q4 +371d).
+# --------------------------------------------------------------------------- #
+
+def test_window_cap_excludes_late_wrong_quarter_202():
+    # Delinquent quarter: stmt_filed = period_end + 300d. Two 2.02 8-Ks — the
+    # own-quarter release at +30d (inside the 95d cap) and the NEXT year's
+    # release at +290d (inside the uncapped window, outside the cap). The cap
+    # must exclude +290d, so LAST-in-window selects +30d.
+    pe = pd.Timestamp("2020-03-31")
+    facts = pd.DataFrame([_fact(ddate="2020-03-31", value=1.0,
+                                filed=pe + pd.Timedelta(days=300), adsh="q1")])
+    eightk = pd.DataFrame([
+        _e8k("AAA", pe + pd.Timedelta(days=30), "e_own", True),
+        _e8k("AAA", pe + pd.Timedelta(days=290), "e_wrong", True),
+    ])
+    acc = pd.DataFrame([_acc("e_own", pe + pd.Timedelta(days=30, hours=8)),
+                        _acc("e_wrong", pe + pd.Timedelta(days=290, hours=8))])
+    r = compute(facts=facts, eightk=eightk, acceptance=acc).iloc[0]
+    assert r["disclosure_date"] == pe + pd.Timedelta(days=30)
+    assert bool(r["via_8k02"])
+
+
+def test_window_cap_inert_for_normal_quarter():
+    # Normal latency: stmt_filed = period_end + 50d (< 95d), so the cap =
+    # min(stmt_filed, +95d) = stmt_filed and the window is identical to the
+    # pre-guard one — a 2.02 release at +45d is still selected.
+    pe = pd.Timestamp("2020-03-31")
+    facts = pd.DataFrame([_fact(ddate="2020-03-31", value=1.0,
+                                filed=pe + pd.Timedelta(days=50), adsh="q1")])
+    eightk = pd.DataFrame([_e8k("AAA", pe + pd.Timedelta(days=45), "e1", True)])
+    acc = pd.DataFrame([_acc("e1", pe + pd.Timedelta(days=45, hours=8))])
+    r = compute(facts=facts, eightk=eightk, acceptance=acc).iloc[0]
+    assert r["disclosure_date"] == pe + pd.Timedelta(days=45)
+    assert bool(r["via_8k02"])
+
+
+def test_window_cap_no_202_in_capped_window_falls_back_to_filed():
+    # Delinquent quarter with its ONLY 2.02 at +290d (outside the 95d cap):
+    # no qualifying 8-K in (period_end, period_end + 95d], so availability
+    # falls back to the statement filed date, unshifted, via_8k02 False.
+    pe = pd.Timestamp("2020-03-31")
+    filed = pe + pd.Timedelta(days=300)
+    facts = pd.DataFrame([_fact(ddate="2020-03-31", value=1.0,
+                                filed=filed, adsh="q1")])
+    eightk = pd.DataFrame([_e8k("AAA", pe + pd.Timedelta(days=290), "e_wrong", True)])
+    acc = pd.DataFrame([_acc("e_wrong", pe + pd.Timedelta(days=290, hours=8))])
+    r = compute(facts=facts, eightk=eightk, acceptance=acc).iloc[0]
+    assert r["disclosure_date"] == filed
+    assert not bool(r["via_8k02"])
 
 
 # --------------------------------------------------------------------------- #

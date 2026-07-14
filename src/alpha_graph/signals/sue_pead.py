@@ -29,13 +29,19 @@ as registered:
   the current diff — non-overlapping null, consistent with C15's design;
   ledgered as a build-time pin.)
 - Availability (`disclosure_date`) = the LAST Item-2.02 8-K date in
-  (period_end, statement filed]. Corrected 2026-07-14 (data review; the
-  registration said "earliest"): guidance/preliminary 8-Ks legitimately
-  carry Item 2.02 without the final EPS — the first-2.02 rule dated 132
-  SUE rows a median 23 days before their EPS was computable (e.g. AAPL's
-  2018-12-31 quarter got the 2019-01-03 guidance-cut letter instead of the
-  2019-01-29 earnings release). The last 2.02 in the window errs stale,
-  never early. Item labels are not in the filing JSONs' section keys (all
+  (period_end, min(statement filed, period_end + 95 calendar days)].
+  Corrected 2026-07-14 (data review; the registration said "earliest"):
+  guidance/preliminary 8-Ks legitimately carry Item 2.02 without the final
+  EPS — the first-2.02 rule dated 132 SUE rows a median 23 days before their
+  EPS was computable (e.g. AAPL's 2018-12-31 quarter got the 2019-01-03
+  guidance-cut letter instead of the 2019-01-29 earnings release). The last
+  2.02 in the window errs stale, never early. Window-cap guard (2026-07-14,
+  the reviewer-verified F1 class): capping the upper bound at period_end +
+  95 days keeps LAST-in-window from mis-dating the ~1.6% of rows whose
+  statement is filed 1–4 quarters late at the WRONG quarter's release (LDOS
+  FY2015-Q4 was dated +371d at the FY2016 release); 95d stays inside the
+  own-quarter announcement season (the next quarter's release lands ≈day
+  118+). Item labels are not in the filing JSONs' section keys (all
   `full_text`); they are recovered from the text's "Item 2.02" headers —
   the same extraction the C12-C14 event factors used. If that 8-K was
   ACCEPTED at/after 16:00 ET, the availability moves to the next calendar
@@ -75,6 +81,9 @@ STD_MIN_OBS = 6              # minimum diffs before SUE is defined
 FY_QTR_MIN_DAYS = 45         # window (days before FY end) holding Q1-Q3 ends
 FY_QTR_MAX_DAYS = 330        # (prior FY end at ~364-371d stays outside)
 ACCEPT_CUTOFF_HOUR = 16      # ET; accepted at/after this -> next-day availability
+WINDOW_CAP_DAYS = 95         # 2.02 search window capped at period_end + this many
+                             # calendar days (own-quarter season; next quarter's
+                             # release lands ~day 118+)
 ITEM_202_RE = re.compile(r"item\s+2\.02", re.IGNORECASE)
 
 CACHE_NAME = "sue_pead.parquet"
@@ -231,14 +240,21 @@ def add_availability(qeps: pd.DataFrame, eightk: pd.DataFrame,
     """Add disclosure_date and via_8k02.
 
     disclosure_date = the LAST Item-2.02 8-K date in (period_end,
-    stmt_filed], pushed one calendar day when that 8-K was accepted at/after
-    16:00 ET (join on digits-only accession); else stmt_filed (no shift).
+    min(stmt_filed, period_end + WINDOW_CAP_DAYS)], pushed one calendar day
+    when that 8-K was accepted at/after 16:00 ET (join on digits-only
+    accession); else stmt_filed (no shift).
 
     Last, not first (corrected 2026-07-14): guidance/preliminary 8-Ks carry
     Item 2.02 without the final EPS, so the first 2.02 in the window can
     predate the number's existence; the last one errs stale, never early.
+    Window-cap guard (2026-07-14, the reviewer-verified F1 class): a
+    statement filed 1–4 quarters late would otherwise let LAST-in-window
+    grab the NEXT quarter's release (LDOS FY2015-Q4 dated +371d at the
+    FY2016 release); capping the upper bound at period_end + 95 days keeps
+    selection inside the own-quarter season (next release ≈day 118+).
     Same-date ties resolve to the latest acceptance_ts (NaT last). The
-    statement-filed fallback stays the terminal backstop.
+    statement-filed fallback (no 2.02 in the capped window) stays the
+    terminal backstop.
     """
     e = eightk.loc[eightk["has_202"].astype(bool)].merge(
         acceptance[["accession", "acceptance_ts"]].drop_duplicates("accession"),
@@ -257,6 +273,11 @@ def add_availability(qeps: pd.DataFrame, eightk: pd.DataFrame,
     tickers = out["ticker"].to_numpy()
     pends = out["ddate"].to_numpy().astype("datetime64[ns]")
     fileds = out["stmt_filed"].to_numpy().astype("datetime64[ns]")
+    # window-cap guard (2026-07-14): upper bound = min(stmt_filed,
+    # period_end + 95d), so a statement filed 1-4 quarters late cannot let
+    # the LAST 2.02 land on the WRONG quarter's release. stmt_filed stays the
+    # fallback when no 2.02 sits in the capped window.
+    uppers = np.minimum(fileds, pends + np.timedelta64(WINDOW_CAP_DAYS, "D"))
     day = np.timedelta64(1, "D")
     for i in range(len(out)):
         got = by_t.get(tickers[i])
@@ -264,9 +285,9 @@ def add_availability(qeps: pd.DataFrame, eightk: pd.DataFrame,
             continue
         dates, ts = got
         lo = np.searchsorted(dates, pends[i], side="right")   # first > period_end
-        hi = np.searchsorted(dates, fileds[i], side="right")  # first > stmt_filed
+        hi = np.searchsorted(dates, uppers[i], side="right")  # first > min(filed, +95d)
         if hi > lo:
-            k = hi - 1                         # LAST 2.02 in (period_end, filed]
+            k = hi - 1              # LAST 2.02 in (period_end, min(filed, +95d)]
             d = dates[k]
             t = pd.Timestamp(ts[k])
             if not pd.isna(t) and t.hour >= ACCEPT_CUTOFF_HOUR:
