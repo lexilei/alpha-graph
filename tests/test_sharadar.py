@@ -1463,6 +1463,81 @@ def test_audit_aborts_without_report_when_inputs_change_mid_run(tmp_path, monkey
     assert not (kwargs["output_dir"] / "report.md").exists()
 
 
+def test_audit_aborts_before_writes_when_staged_tables_change_mid_run(
+    tmp_path, monkeypatch
+):
+    # TOCTOU guard: mutate a staged table AFTER every read and start-of-run
+    # hash (hook: _git_commit, called post-computation) but BEFORE the write
+    # block. The pre-write recompute must abort with nothing written at all.
+    import alpha_graph.data.sharadar_qa as sharadar_qa
+
+    kwargs = _synthetic_audit_kwargs(tmp_path)
+    original = sharadar_qa._git_commit
+
+    def mutate_sep_then_run():
+        target = sorted(
+            (kwargs["staged_root"] / kwargs["snapshot"] / "SEP").glob("*.parquet")
+        )[0]
+        frame = pd.read_parquet(target)
+        frame["close"] = 999.0
+        frame.to_parquet(target, index=False)
+        return original()
+
+    monkeypatch.setattr(sharadar_qa, "_git_commit", mutate_sep_then_run)
+    with pytest.raises(SharadarError,
+                       match="staged tables changed during the audit"):
+        audit_snapshot(**kwargs)
+    assert not kwargs["output_dir"].exists()   # no run.json, no partial artifacts
+
+
+def test_run_json_binds_artifacts_and_is_written_last(tmp_path, monkeypatch):
+    import alpha_graph.data.sharadar_qa as sharadar_qa
+
+    kwargs = _synthetic_audit_kwargs(tmp_path)
+    events = []
+    orig_parquet = sharadar_qa._write_parquet_atomic
+    orig_report = sharadar_qa._write_report
+    orig_run_json = sharadar_qa._write_run_json
+
+    def spy_parquet(frame, path):
+        events.append(path.name)
+        return orig_parquet(frame, path)
+
+    def spy_report(path, run, issues):
+        events.append(path.name)
+        return orig_report(path, run, issues)
+
+    def spy_run_json(run, path):
+        events.append(path.name)
+        return orig_run_json(run, path)
+
+    monkeypatch.setattr(sharadar_qa, "_write_parquet_atomic", spy_parquet)
+    monkeypatch.setattr(sharadar_qa, "_write_report", spy_report)
+    monkeypatch.setattr(sharadar_qa, "_write_run_json", spy_run_json)
+
+    run = audit_snapshot(**kwargs)
+    output = kwargs["output_dir"]
+    assert run["gate_status"] == "PASS"
+    # run.json is the terminal write, after every parquet artifact
+    assert events[-1] == "run.json"
+    parquets_written = [name for name in events if name.endswith(".parquet")]
+    assert parquets_written
+    assert all(events.index(name) < events.index("run.json")
+               for name in parquets_written)
+    # and it carries a content hash for every sibling parquet artifact
+    saved = json.loads((output / "run.json").read_text())
+    artifact_map = saved["artifact_sha256"]
+    assert sorted(artifact_map) == sorted(
+        path.name for path in output.glob("*.parquet")
+    )
+    for name, digest in artifact_map.items():
+        assert digest == sharadar_qa.sha256_file(output / name)
+    assert run["artifact_sha256"] == artifact_map
+    assert saved["staged_table_sha256"].keys() == {
+        "TICKERS", "SEP", "SP500", "ACTIONS",
+    }
+
+
 def test_policy_hash_is_stable_and_recorded(tmp_path):
     first = _synthetic_audit_kwargs(tmp_path / "one")
     second = _synthetic_audit_kwargs(tmp_path / "two")

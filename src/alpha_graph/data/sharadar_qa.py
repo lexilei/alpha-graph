@@ -1494,6 +1494,12 @@ def _write_parquet_atomic(frame: pd.DataFrame, path: Path) -> None:
     tmp.replace(path)
 
 
+def _write_run_json(run: dict, path: Path) -> None:
+    tmp = path.with_suffix(path.suffix + ".part")
+    tmp.write_text(json.dumps(run, indent=2, sort_keys=True) + "\n")
+    tmp.replace(path)
+
+
 def _path_has_symlink_component(path: Path) -> bool:
     absolute = path.absolute()
     return any(candidate.is_symlink() for candidate in (absolute, *absolute.parents))
@@ -1562,8 +1568,16 @@ def _audit_snapshot_unlocked(
     end_ts = min(pd.Timestamp(end), reference_end) if end else reference_end
     intervals = membership_intervals(reference_snapshots, start=start_ts, end=end_ts)
 
+    # Hash every staged table this run reads BEFORE the first read; the same
+    # hashes are recomputed just before any artifact is written (TOCTOU
+    # guard: a mid-run mutation must abort the run before a PASS run.json
+    # exists, not after).
+    staged_tables_sha256 = {
+        table: staged_table_sha256(snapshot_dir, table)
+        for table in ("TICKERS", "SEP", "SP500", "ACTIONS")
+    }
     tickers = prepare_vendor_tickers(read_staged_table(snapshot_dir, "TICKERS"))
-    tickers_sha = staged_table_sha256(snapshot_dir, "TICKERS")
+    tickers_sha = staged_tables_sha256["TICKERS"]
     membership_binding = json.dumps({
         "source_sha256": sha256_file(membership_csv),
         "start": str(start_ts.date()),
@@ -1982,6 +1996,7 @@ def _audit_snapshot_unlocked(
         "policy_id": "vendor_qa_v1-full-window-license-enforced",
         "policy_hash": policy_hash,
         "input_sha256": input_sha256,
+        "staged_table_sha256": staged_tables_sha256,
         "snapshot": snapshot,
         "git_commit": git_commit,
         "dirty": worktree["dirty"],
@@ -2074,6 +2089,26 @@ def _audit_snapshot_unlocked(
         raise SharadarError(
             f"QA inputs changed during the audit: {changed}; no report written"
         )
+    recomputed_staged = {
+        table: staged_table_sha256(snapshot_dir, table)
+        for table in staged_tables_sha256
+    }
+    if recomputed_staged != staged_tables_sha256:
+        changed = sorted(
+            table for table in staged_tables_sha256
+            if recomputed_staged[table] != staged_tables_sha256[table]
+        )
+        raise SharadarError(
+            f"staged tables changed during the audit: {changed}; no report written"
+        )
+    # The closing manifest re-verification also runs BEFORE any artifact
+    # write (it used to run last, after run.json already existed on disk).
+    verify_snapshot_manifest(
+        manifest_path,
+        raw_snapshot=raw_root / snapshot,
+        staged_snapshot=snapshot_dir,
+        enforce_license=enforce_license,
+    )
 
     canonical_output = Path(manifest["storage_roots"]["qa"]) / snapshot
     output = output_dir or canonical_output
@@ -2094,10 +2129,11 @@ def _audit_snapshot_unlocked(
     if output.exists() and any(path.is_symlink() for path in output.rglob("*")):
         raise SharadarError("QA output directory contains symlinked entries")
     output.mkdir(parents=True, exist_ok=True)
-    _write_parquet_atomic(crosswalk.merge(interval_coverage, on=[
-        "interval_id", "reference_ticker", "vendor_ticker", "vendor_id", "match_status"
-    ], how="left", validate="one_to_one"), output / "identity_crosswalk.parquet")
-    for frame, name in (
+    artifacts = [
+        (crosswalk.merge(interval_coverage, on=[
+            "interval_id", "reference_ticker", "vendor_ticker", "vendor_id",
+            "match_status",
+        ], how="left", validate="one_to_one"), "identity_crosswalk.parquet"),
         (departed_rows, "departed_target.parquet"),
         (sep_quarantine, "sep_quarantine.parquet"),
         (panel_identities, "panel_identity_crosswalk.parquet"),
@@ -2111,19 +2147,18 @@ def _audit_snapshot_unlocked(
         (membership_differences, "membership_differences.parquet"),
         (known, "known_cases.parquet"),
         (issues, "issues.parquet"),
-    ):
+    ]
+    for frame, name in artifacts:
         _write_parquet_atomic(frame, output / name)
-    run_path = output / "run.json"
-    run_tmp = run_path.with_suffix(".json.part")
-    run_tmp.write_text(json.dumps(run, indent=2, sort_keys=True) + "\n")
-    run_tmp.replace(run_path)
+    # run.json binds every sibling parquet by content hash and is written
+    # LAST: a run that crashes mid-write leaves either no run.json or a
+    # stale one whose hashes do not match the newer partial artifacts — a
+    # detectable mixture instead of a silently plausible directory.
+    run["artifact_sha256"] = {
+        name: sha256_file(output / name) for _, name in artifacts
+    }
     _write_report(output / "report.md", run, issues)
-    verify_snapshot_manifest(
-        manifest_path,
-        raw_snapshot=raw_root / snapshot,
-        staged_snapshot=snapshot_dir,
-        enforce_license=enforce_license,
-    )
+    _write_run_json(run, output / "run.json")
     return run
 
 
