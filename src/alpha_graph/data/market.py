@@ -27,7 +27,9 @@ def download_prices(
     """Download daily OHLCV data for a list of tickers.
 
     Returns a DataFrame with columns: ticker, date, open, high, low, close,
-    adj_close, volume.
+    adj_close, volume. Tickers that returned no data are logged at WARNING
+    (per ticker + a summary list) and exposed as
+    ``result.attrs["failed_tickers"]``.
     """
     years_back = years_back or cfg.filing_years_back
     end = pd.Timestamp(end_date) if end_date else pd.Timestamp.now()
@@ -52,8 +54,11 @@ def download_prices(
     if len(tickers) == 1:
         raw.columns = pd.MultiIndex.from_product([raw.columns, tickers])
 
-    # Reshape to long format
+    # Reshape to long format. Per-ticker failures (batch gaps, all-NaN
+    # columns, extraction errors) are WARNINGs and collected — a silent DEBUG
+    # here once cost the panel 4 tickers (INTU ZBH ZBRA ZTS, audit 2026-07-14).
     records = []
+    failed: list[str] = []
     for ticker in tickers:
         try:
             df_t = raw.xs(ticker, axis=1, level=1) if len(tickers) > 1 else raw[[(c, ticker) for c in raw.columns.get_level_values(0).unique()]]
@@ -61,20 +66,30 @@ def download_prices(
                 df_t.columns = df_t.columns.get_level_values(0)
             df_t = df_t.dropna(subset=["Close"])
             if df_t.empty:
+                failed.append(ticker)
+                logger.warning(f"[{ticker}] No price rows in the batch response")
                 continue
             df_t = df_t.reset_index()
             df_t.columns = [c.lower().replace(" ", "_") for c in df_t.columns]
             df_t["ticker"] = ticker
             records.append(df_t)
         except Exception as e:
-            logger.debug(f"[{ticker}] Price data extraction failed: {e}")
+            failed.append(ticker)
+            logger.warning(f"[{ticker}] Price data extraction failed: {e}")
+
+    if failed:
+        logger.warning(f"{len(failed)}/{len(tickers)} tickers returned no "
+                       f"data: {sorted(failed)}")
 
     if not records:
-        return pd.DataFrame()
+        out = pd.DataFrame()
+        out.attrs["failed_tickers"] = sorted(failed)
+        return out
 
     prices = pd.concat(records, ignore_index=True)
     prices = prices.rename(columns={"date": "date"})
     prices = prices.sort_values(["ticker", "date"]).reset_index(drop=True)
+    prices.attrs["failed_tickers"] = sorted(failed)
 
     return prices
 
