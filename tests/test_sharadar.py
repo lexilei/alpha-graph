@@ -1274,6 +1274,45 @@ def test_audit_gates_unexplained_jump_until_bound_approval(tmp_path):
     assert cleared["price_jumps"]["review_required"] == 0
 
 
+def test_audit_aborts_without_report_when_inputs_change_mid_run(tmp_path, monkeypatch):
+    import alpha_graph.data.sharadar_qa as sharadar_qa
+
+    kwargs = _synthetic_audit_kwargs(tmp_path)
+    original = sharadar_qa.alias_window_audit
+
+    def mutate_cases_then_run(vendor_tickers):
+        kwargs["cases_path"].write_text(
+            json.dumps({"schema_version": 1, "cases": []}, indent=2)
+        )
+        return original(vendor_tickers)
+
+    monkeypatch.setattr(sharadar_qa, "alias_window_audit", mutate_cases_then_run)
+    with pytest.raises(SharadarError, match="changed during the audit"):
+        audit_snapshot(**kwargs)
+    assert not (kwargs["output_dir"] / "run.json").exists()
+    assert not (kwargs["output_dir"] / "report.md").exists()
+
+
+def test_policy_hash_is_stable_and_recorded(tmp_path):
+    first = _synthetic_audit_kwargs(tmp_path / "one")
+    second = _synthetic_audit_kwargs(tmp_path / "two")
+    run_one = audit_snapshot(**first)
+    run_two = audit_snapshot(**second)
+    assert run_one["gate_status"] == "PASS"
+    assert len(run_one["policy_hash"]) == 64
+    assert run_one["policy_hash"] == run_two["policy_hash"]
+    assert isinstance(run_one["dirty"], bool)
+    assert isinstance(run_one["dirty_path_count"], int)
+    # Synthetic paths are never the canonical policy, so no canonical marker.
+    assert run_one["status"] == "NONCANONICAL"
+    assert run_one["canonical_pass"] is None
+    report = (first["output_dir"] / "report.md").read_text()
+    assert run_one["policy_hash"] in report
+    saved = json.loads((first["output_dir"] / "run.json").read_text())
+    assert saved["policy_hash"] == run_one["policy_hash"]
+    assert saved["git_commit"] == run_one["git_commit"]
+
+
 def test_audit_fails_on_calendar_expectation_mismatch(tmp_path):
     count_kwargs = _synthetic_audit_kwargs(
         tmp_path / "count",

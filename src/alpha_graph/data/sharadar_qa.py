@@ -93,6 +93,15 @@ PRICE_NUMERIC_COLUMNS = (
     "volume",
     "dividends",
 )
+POLICY_INPUT_KEYS = (
+    "thresholds",
+    "cases",
+    "overrides",
+    "known_case_approvals",
+    "membership_approvals",
+    "identity_registry",
+    "jump_approvals",
+)
 
 
 def _nonblank(value: object) -> bool:
@@ -233,6 +242,21 @@ def _git_commit() -> str:
         return result.stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
+
+
+def _git_worktree() -> dict:
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=PROJECT_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return {"dirty": None, "dirty_path_count": None}
+    entries = [line for line in result.stdout.splitlines() if line.strip()]
+    return {"dirty": bool(entries), "dirty_path_count": len(entries)}
 
 
 def read_staged_table(
@@ -1418,7 +1442,9 @@ def _write_report(path: Path, run: dict, issues: pd.DataFrame) -> None:
         f"Status: **{run['status']}**",
         "",
         f"Snapshot: `{run['snapshot']}`",
-        f"Git commit: `{run['git_commit']}`",
+        f"Git commit: `{run['git_commit']}` "
+        f"(dirty: {run['dirty']}, {run['dirty_path_count']} paths)",
+        f"Policy hash: `{run['policy_hash']}`",
         "",
         "## Gates",
         "",
@@ -1493,6 +1519,26 @@ def _audit_snapshot_unlocked(
         staged_snapshot=snapshot_dir,
         enforce_license=enforce_license,
     )
+    input_paths = {
+        "membership": membership_csv,
+        "panel": panel_path,
+        "thresholds": thresholds_path,
+        "cases": cases_path,
+        "overrides": overrides_path,
+        "known_case_approvals": approvals_path,
+        "membership_approvals": membership_approvals_path,
+        "identity_registry": identity_registry_path,
+        "jump_approvals": jump_approvals_path,
+    }
+    input_sha256 = {
+        key: (sha256_file(path) if path is not None else None)
+        for key, path in input_paths.items()
+    }
+    policy_hash = hashlib.sha256(json.dumps(
+        {key: input_sha256[key] for key in POLICY_INPUT_KEYS},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
     thresholds = validate_thresholds(_read_json(thresholds_path))
     cases_config = validate_cases_config(_read_json(cases_path))
 
@@ -1915,30 +1961,28 @@ def _audit_snapshot_unlocked(
         if canonical_policy or gate_status != "PASS"
         else "NONCANONICAL"
     )
-    input_paths = {
-        "membership": membership_csv,
-        "panel": panel_path,
-        "thresholds": thresholds_path,
-        "cases": cases_path,
-        "overrides": overrides_path,
-        "known_case_approvals": approvals_path,
-        "membership_approvals": membership_approvals_path,
-        "identity_registry": identity_registry_path,
-        "jump_approvals": jump_approvals_path,
-    }
-    input_sha256 = {
-        key: (sha256_file(path) if path is not None else None)
-        for key, path in input_paths.items()
-    }
+    git_commit = _git_commit()
+    worktree = _git_worktree()
     run = {
         "schema_version": 1,
         "status": status,
         "gate_status": gate_status,
         "canonical_policy": canonical_policy,
         "policy_id": "vendor_qa_v1-full-window-license-enforced",
+        "policy_hash": policy_hash,
         "input_sha256": input_sha256,
         "snapshot": snapshot,
-        "git_commit": _git_commit(),
+        "git_commit": git_commit,
+        "dirty": worktree["dirty"],
+        "dirty_path_count": worktree["dirty_path_count"],
+        "canonical_pass": (
+            {
+                "git_commit": git_commit,
+                "dirty": worktree["dirty"],
+                "policy_hash": policy_hash,
+            }
+            if status == "PASS" else None
+        ),
         "manifest_sha256": sha256_file(manifest_path),
         "license_expires": manifest["license_expires"],
         "reference_window": {"start": str(start_ts.date()), "end": str(end_ts.date())},
@@ -2006,6 +2050,19 @@ def _audit_snapshot_unlocked(
         "primary_keys": primary_keys.to_dict("records"),
         "issue_count": len(issues),
     }
+
+    recomputed_sha256 = {
+        key: (sha256_file(path) if path is not None else None)
+        for key, path in input_paths.items()
+    }
+    if recomputed_sha256 != input_sha256:
+        changed = sorted(
+            key for key in input_paths
+            if recomputed_sha256[key] != input_sha256[key]
+        )
+        raise SharadarError(
+            f"QA inputs changed during the audit: {changed}; no report written"
+        )
 
     canonical_output = Path(manifest["storage_roots"]["qa"]) / snapshot
     output = output_dir or canonical_output
