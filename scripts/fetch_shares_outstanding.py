@@ -28,7 +28,15 @@ period (latest `start`) and never sum across periods.
 SCALE MISTAGS: filers occasionally tag a count at the wrong scale (PKG has
 lone x1000 rows: 8.99e10 where the neighbors say 8.99e7). Rows more than 100x
 away from the ticker's median count (log10 distance > 2) are dropped at build
-time; real splits in this sample move counts at most ~20x peak-to-trough.
+time. CAUTION — real splits are NOT bounded by that band: reverse splits up
+to 1-for-200 exist in this universe (EXE, then Chesapeake, April 2020 — a
+200x level move), and EXE's true post-split rows already sit 67x from its
+median, only ~1.5x inside the drop threshold. A name with a longer
+post-reverse-split history (median pulled further from the old regime) would
+have TRUE rows falsely dropped. As a tripwire, any would-drop row on a
+ticker whose raw series carries a real-split signature (>=50x persistent
+level break with >=4 rows on both sides — has_split_signature) is
+WARNING-logged for operator hand-checking before being dropped anyway.
 
 MULTI-CLASS RESOLUTION: when one filing reports several classes as separate
 facts they surface as duplicate (end, filed) rows that must be SUMMED
@@ -242,11 +250,39 @@ def resolve_multiclass(df: pd.DataFrame) -> pd.DataFrame:
     return resolved.drop(columns=["accn", "n_class"])
 
 
+def has_split_signature(shares, min_ratio: float = 50.0,
+                        min_side: int = 4) -> bool:
+    """True when a time-ordered share-count series contains a >=min_ratio
+    persistent level break with >=min_side rows on both sides — the
+    signature of a real (reverse) split, as opposed to a lone scale mistag.
+
+    At each cut with min_side rows on both sides, compare the MEDIANS of the
+    min_side rows just before vs just after the cut. A lone mistag spike
+    cannot pull a 4-row median to its scale, so PKG-style x1000 rows do not
+    trip; EXE's 1-for-200 reverse split does. Windows are local because a
+    post-split regime can be short (EXE re-issued shares in its 2021
+    bankruptcy reorg after only 4 filings at the post-split count) —
+    whole-side medians would dilute such a break away.
+    """
+    s = np.asarray(shares, dtype=float)
+    s = s[np.isfinite(s) & (s > 0)]
+    for cut in range(min_side, len(s) - min_side + 1):
+        left = np.median(s[cut - min_side:cut])
+        right = np.median(s[cut:cut + min_side])
+        if max(left, right) >= min_ratio * min(left, right):
+            return True
+    return False
+
+
 def drop_scale_outliers(df: pd.DataFrame) -> pd.DataFrame:
     """Drop per-ticker scale mistags (see module docstring): rows whose count
     sits more than 100x from the ticker's median count, plus non-positive
-    counts. Splits are persistent level shifts and stay far inside 100x of
-    the median; mistags are lone x1000 spikes."""
+    counts. Mistags are lone x1000 spikes; splits are persistent level shifts
+    that usually stay inside 100x of the median — but not by construction:
+    EXE's 1-for-200 reverse split leaves its true post-split rows 67x out,
+    only ~1.5x inside the threshold. Would-drop rows on a ticker whose raw
+    series shows a real-split signature (has_split_signature) are therefore
+    WARNING-logged for hand-checking; they are still dropped."""
     ok = df["shares"] > 0
     med = df["shares"].where(ok).groupby(df["ticker"]).transform("median")
     dev = (np.log10(df["shares"].where(ok)) - np.log10(med)).abs()
@@ -255,6 +291,18 @@ def drop_scale_outliers(df: pd.DataFrame) -> pd.DataFrame:
         per = df.loc[bad, "ticker"].value_counts().to_dict()
         logger.warning(f"dropped {int(bad.sum())} scale-outlier rows "
                        f"(>100x off ticker median): {per}")
+        suspects = [
+            t for t in sorted(per)
+            if has_split_signature(
+                df.loc[df["ticker"] == t].sort_values(["end", "filed"])["shares"])
+        ]
+        if suspects:
+            logger.warning(
+                f"would-drop rows on {suspects}, whose raw series shows a "
+                f"real-split signature (>=50x level break, >=4 rows on both "
+                f"sides) — the 100x-median rule may be removing TRUE "
+                f"post-split rows there; hand-check these tickers. "
+                f"Dropping anyway.")
     return df.loc[~bad]
 
 
