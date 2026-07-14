@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -148,6 +150,167 @@ def _load_model():
     return None
 
 
+# --------------------------------------------------------------------------- #
+# Factor-source registry: the declarative merge layer of build_feature_panel
+# --------------------------------------------------------------------------- #
+
+# Merge kinds (availability semantics; the merge loop is their single owner):
+#   "filing"      — filing-date as-of merge; availability_lag_days applies on
+#                   EVERY grid (a filing dated t is usable from t + lag).
+#   "grid"        — grid-stamped series (builders stamp the computation date);
+#                   the lag applies ONLY under daily_signals — on the monthly
+#                   grid a +1d shift on a month-end-stamped series pushes it
+#                   to the NEXT month-end (the already-tested "stale" variant,
+#                   not t+1), so the monthly grid merges unlagged.
+#   "grid_static" — monthly-only rejected/never-lagged factors, merged
+#                   unlagged on every grid per their documented reasons
+#                   (C8/C9 spillover, monthly C11).
+VALID_KINDS = ("filing", "grid", "grid_static")
+
+
+def _load_cos_latest_filing(path: Path) -> pd.DataFrame | None:
+    """C7 cos_latest_filing (factor 15): most recent filing's YoY cosine
+    (10-K ∪ 10-Q, CMN 2020) — the union of C1's 10-K pairs and C2's 10-Q
+    pairs, raw scores pooled; a same-day 10-K + 10-Q keeps the last row.
+    Needs BOTH pair caches (`path` is the 10-K cache; the 10-Q cache sits
+    next to it)."""
+    q_path = path.parent / "lazy_prices_10Q_yoy.parquet"
+    if not (path.exists() and q_path.exists()):
+        return None
+    k = pd.read_parquet(path)[["ticker", "filing_date", "cosine_similarity"]]
+    q = pd.read_parquet(q_path)[["ticker", "filing_date", "cos_10q_yoy"]]
+    comb = pd.concat([
+        k.rename(columns={"cosine_similarity": "cos_latest_filing"}),
+        q.rename(columns={"cos_10q_yoy": "cos_latest_filing"}),
+    ], ignore_index=True)
+    comb["filing_date"] = pd.to_datetime(comb["filing_date"])
+    comb = comb.sort_values(["ticker", "filing_date"]).drop_duplicates(
+        ["ticker", "filing_date"], keep="last"
+    )
+    return comb
+
+
+def _load_sue_pead(path: Path) -> pd.DataFrame | None:
+    """C17 sue_pead: as-filed diluted XBRL EPS SUE (disclosure_date from the
+    builder: last Item-2.02 8-K date else statement filed date, acceptance-
+    time refined; see FACTORS.md C17). Same-day multi-quarter disclosures
+    keep the latest period_end; NaN-SUE rows are dropped so they never blank
+    an earlier value's carry-forward."""
+    if not path.exists():
+        return None
+    su = pd.read_parquet(path)
+    su["disclosure_date"] = pd.to_datetime(su["disclosure_date"])
+    su = su.rename(columns={"sue": "sue_pead"}).dropna(subset=["sue_pead"])
+    # same-day multi-quarter disclosures: keep the latest period_end
+    su = su.sort_values(["ticker", "disclosure_date", "period_end"])
+    su = su.drop_duplicates(["ticker", "disclosure_date"], keep="last")
+    return su[["ticker", "disclosure_date", "sue_pead"]]
+
+
+@dataclass(frozen=True)
+class FactorSource:
+    """One merged signal of build_feature_panel — a declarative registry row.
+
+    Adding a factor to the panel = appending ONE row to FACTOR_SOURCES (and
+    registering the ID in FACTORS.md). Fields:
+
+    label:          registry ID(s) for logs (FACTORS.md key, e.g. "C17").
+    filename:       cache file under CACHE_DIR.
+    cols:           column(s) the merge adds to the panel.
+    date_col:       date column in the cache (as-of key at the merge).
+    kind:           one of VALID_KINDS — availability-lag semantics (above).
+    daily_filename: under daily_signals load THIS cache instead (C10's daily
+                    port: same registry ID, same construction, finer grid).
+    daily_only:     merge only under daily_signals; no monthly counterpart
+                    exists, so the column is ABSENT on the monthly grid (C15).
+    dropna:         drop cache rows NaN in cols before the as-of merge ("any"
+                    or "all") so a NaN row never blanks a carried-forward
+                    value; None keeps all rows.
+    loader:         optional preprocessing hook: takes the resolved cache
+                    path, returns the ready-to-merge frame (columns: ticker,
+                    date_col, *cols) or None for "source unavailable".
+                    Covers non-default constructions (C7's union of two
+                    caches, C17's same-day dedup). When None, the default
+                    load applies: read parquet -> parse date_col -> select
+                    [ticker, date_col, *cols] -> dropna -> sort.
+    missing_msg:    custom debug message when the source is unavailable.
+    """
+
+    label: str
+    filename: str
+    cols: tuple[str, ...]
+    date_col: str
+    kind: str
+    daily_filename: str | None = None
+    daily_only: bool = False
+    dropna: str | None = None
+    loader: Callable[[Path], pd.DataFrame | None] | None = None
+    missing_msg: str | None = None
+
+    def __post_init__(self):
+        if self.kind not in VALID_KINDS:
+            raise ValueError(f"{self.label}: invalid kind {self.kind!r}")
+        if self.dropna not in (None, "any", "all"):
+            raise ValueError(f"{self.label}: invalid dropna {self.dropna!r}")
+
+
+# The panel's merged-signal registry, in merge order. To add a factor: build
+# its cache, append one FactorSource row here, and register the ID in
+# FACTORS.md; evaluation stays the judge's job (scripts/factor_orthogonality.py).
+FACTOR_SOURCES: list[FactorSource] = [
+    # C1: Lazy Prices TF-IDF cosine between consecutive same-type 10-Ks.
+    FactorSource("C1", "lazy_prices_signal_10K.parquet",
+                 ("cosine_similarity",), "filing_date", "filing"),
+    # C2-C6: the remaining text-factor caches (factors 10-14).
+    FactorSource("C2", "lazy_prices_10Q_yoy.parquet",
+                 ("cos_10q_yoy",), "filing_date", "filing"),
+    FactorSource("C3", "embed_sim_10k_fin.parquet",
+                 ("embed_sim_10k_fin",), "filing_date", "filing"),
+    FactorSource("C4", "tone_10k.parquet",
+                 ("tone_shift_10k",), "filing_date", "filing"),
+    FactorSource("C5", "embed_sim_10k_bge.parquet",
+                 ("embed_sim_10k_bge",), "filing_date", "filing"),
+    FactorSource("C6", "change_detect_10k.parquet",
+                 ("new_content_frac",), "filing_date", "filing"),
+    # C7 (factor 15): most recent filing's YoY cosine, 10-K ∪ 10-Q union.
+    FactorSource("C7", "lazy_prices_10K.parquet",
+                 ("cos_latest_filing",), "filing_date", "filing",
+                 loader=_load_cos_latest_filing,
+                 missing_msg="Factor 15 needs both 10-K and 10-Q pair caches — NaN"),
+    # C8/C9 (factors 18-19): graph spillover (computed on the feat/graph-signal
+    # branch, shared via data/cache; month-end grid, as-of carried forward;
+    # NaN = no scored graph neighbors at that date). Rejected factors:
+    # monthly cache only, no daily port, no lag (see the monthly-grid caveat
+    # in the build_feature_panel docstring).
+    FactorSource("C8/C9", "graph_spillover.parquet",
+                 ("spillover_event", "spillover_momentum"), "date",
+                 "grid_static", dropna="all"),
+    # C10: customers-only momentum spillover (C-F asymmetric). daily_signals
+    # selects the daily as-of cache (same construction, finer grid — same
+    # registry ID); only the daily grid can express the t+1 lag.
+    FactorSource("C10", "graph_customer_momentum.parquet",
+                 ("spillover_cust_mom",), "date", "grid",
+                 daily_filename="graph_customer_momentum_daily.parquet",
+                 dropna="any"),
+    # C11: abnormal 8-K filing frequency (month-end z-score, as-of). Always
+    # merged unlagged: the headline fresh-month result attaches the month-m z
+    # at month-end m; a +1d shift would turn it into the (already tested,
+    # near-zero) stale variant. Intramonth availability is C15's job.
+    FactorSource("C11", "event_freq_8k.parquet",
+                 ("evt8k_freq_z",), "date", "grid_static"),
+    # C15: daily 8-K abnormal frequency (NEW variant, not a port of C11:
+    # daily grid + trailing-21-trading-day window + lagged non-overlapping
+    # baseline; see FACTORS.md). Daily-only: absent on the monthly grid.
+    FactorSource("C15", "event_freq_8k_daily.parquet",
+                 ("evt8k_freq_z_d",), "date", "grid", daily_only=True),
+    # C17: SUE / PEAD. Filing-date-style as-of merge: the availability lag
+    # applies on every grid, like the other filing merges (v0: t+1).
+    FactorSource("C17", "sue_pead.parquet",
+                 ("sue_pead",), "disclosure_date", "filing",
+                 loader=_load_sue_pead),
+]
+
+
 def build_feature_panel(
     pit_universe: bool = True,
     availability_lag_days: int = 1,
@@ -190,6 +353,13 @@ def build_feature_panel(
     book_to_market_pit / earnings_yield_pit are filing-date as-of merges of
     fundamentals_pit.parquet (avail_date = the filed date completing each
     value) under availability_lag_days, divided by the market cap at t.
+
+    Adding a factor: build its cache, append ONE FactorSource row to
+    FACTOR_SOURCES (cache filename, column(s), cache date column, merge
+    kind — see the dataclass docstring), and register the ID in FACTORS.md.
+    The merge loop owns availability semantics (builders stamp computation
+    dates, never pre-lag); evaluation stays the judge's job
+    (scripts/factor_orthogonality.py) — the panel merely carries the column.
     """
     market_path = CACHE_DIR / "market_data.parquet"
     if not market_path.exists():
@@ -313,174 +483,47 @@ def build_feature_panel(
     else:
         panel["sector"] = "UNKNOWN"
 
-    # --- Merge Lazy Prices signals ---
-    lazy_path = CACHE_DIR / "lazy_prices_signal_10K.parquet"
-    if lazy_path.exists():
-        lazy = pd.read_parquet(lazy_path)
-        lazy["filing_date"] = pd.to_datetime(lazy["filing_date"])
-        # For each ticker/date, carry forward the latest cosine_similarity
-        lazy = lazy[["ticker", "filing_date", "cosine_similarity"]].copy()
-        lazy = lazy.sort_values(["ticker", "filing_date"])
-        # Merge as-of: for each row in panel, get most recent lazy signal
-        panel = _merge_asof_signal(
-            panel, lazy,
-            left_date="date", right_date="filing_date",
-            on="ticker", cols=["cosine_similarity"],
-            availability_lag_days=availability_lag_days,
-        )
-    else:
-        panel["cosine_similarity"] = np.nan
-        logger.debug("No Lazy Prices data — feature will be NaN")
-
-    # --- Merge remaining text-factor caches (factors 10-14) ---
-    for fname, cols in [
-        ("lazy_prices_10Q_yoy.parquet", ["cos_10q_yoy"]),
-        ("embed_sim_10k_fin.parquet", ["embed_sim_10k_fin"]),
-        ("tone_10k.parquet", ["tone_shift_10k"]),
-        ("embed_sim_10k_bge.parquet", ["embed_sim_10k_bge"]),
-        ("change_detect_10k.parquet", ["new_content_frac"]),
-    ]:
+    # --- Merge every registered factor source (FACTOR_SOURCES, in order) ---
+    # Missing cache -> NaN column(s) + a debug log. kind picks the lag:
+    # "filing" lags on every grid, "grid" lags only under daily_signals,
+    # "grid_static" never lags — rationales live on the registry rows.
+    for src in FACTOR_SOURCES:
+        if src.daily_only and not daily_signals:
+            continue  # e.g. C15: no monthly counterpart, column stays absent
+        fname = (src.daily_filename if daily_signals and src.daily_filename
+                 else src.filename)
         path = CACHE_DIR / fname
-        if not path.exists():
-            for c in cols:
+        if src.loader is not None:
+            sig = src.loader(path)
+        elif path.exists():
+            sig = pd.read_parquet(path)
+            sig[src.date_col] = pd.to_datetime(sig[src.date_col])
+            sig = sig[["ticker", src.date_col] + list(src.cols)]
+            if src.dropna:
+                sig = sig.dropna(subset=list(src.cols), how=src.dropna)
+            sig = sig.sort_values(["ticker", src.date_col])
+        else:
+            sig = None
+
+        if sig is None:
+            for c in src.cols:
                 panel[c] = np.nan
-            logger.debug(f"No {fname} — {cols} will be NaN")
+            logger.debug(src.missing_msg
+                         or f"No {fname} — {src.label} {list(src.cols)} will be NaN")
             continue
-        sig = pd.read_parquet(path)
-        sig["filing_date"] = pd.to_datetime(sig["filing_date"])
-        sig = sig[["ticker", "filing_date"] + cols].sort_values(["ticker", "filing_date"])
+
+        if src.kind == "filing":
+            lag = availability_lag_days
+        elif src.kind == "grid":
+            lag = availability_lag_days if daily_signals else 0
+        else:  # "grid_static"
+            lag = 0
         panel = _merge_asof_signal(
             panel, sig,
-            left_date="date", right_date="filing_date",
-            on="ticker", cols=cols,
-            availability_lag_days=availability_lag_days,
+            left_date="date", right_date=src.date_col,
+            on="ticker", cols=list(src.cols),
+            availability_lag_days=lag,
         )
-
-    # --- Factor 15: most recent filing's YoY cosine (10-K ∪ 10-Q, CMN 2020) ---
-    k_path = CACHE_DIR / "lazy_prices_10K.parquet"
-    q_path = CACHE_DIR / "lazy_prices_10Q_yoy.parquet"
-    if k_path.exists() and q_path.exists():
-        k = pd.read_parquet(k_path)[["ticker", "filing_date", "cosine_similarity"]]
-        q = pd.read_parquet(q_path)[["ticker", "filing_date", "cos_10q_yoy"]]
-        comb = pd.concat([
-            k.rename(columns={"cosine_similarity": "cos_latest_filing"}),
-            q.rename(columns={"cos_10q_yoy": "cos_latest_filing"}),
-        ], ignore_index=True)
-        comb["filing_date"] = pd.to_datetime(comb["filing_date"])
-        comb = comb.sort_values(["ticker", "filing_date"]).drop_duplicates(
-            ["ticker", "filing_date"], keep="last"
-        )
-        panel = _merge_asof_signal(
-            panel, comb,
-            left_date="date", right_date="filing_date",
-            on="ticker", cols=["cos_latest_filing"],
-            availability_lag_days=availability_lag_days,
-        )
-    else:
-        panel["cos_latest_filing"] = np.nan
-        logger.debug("Factor 15 needs both 10-K and 10-Q pair caches — NaN")
-
-    # --- Factors 18-19: graph spillover (computed on the feat/graph-signal
-    # branch, shared via data/cache; month-end grid, as-of carried forward).
-    # NaN = no scored graph neighbors at that date.
-    spill_path = CACHE_DIR / "graph_spillover.parquet"
-    if spill_path.exists():
-        sp = pd.read_parquet(spill_path)
-        sp["date"] = pd.to_datetime(sp["date"])
-        sp = sp[["ticker", "date", "spillover_event", "spillover_momentum"]]
-        sp = sp.dropna(subset=["spillover_event", "spillover_momentum"], how="all")
-        sp = sp.sort_values(["ticker", "date"])
-        # Rejected factors (C8/C9): monthly cache only, no daily port, no lag
-        # (see the monthly-grid caveat in the docstring).
-        panel = _merge_asof_signal(
-            panel, sp,
-            left_date="date", right_date="date",
-            on="ticker", cols=["spillover_event", "spillover_momentum"],
-        )
-    else:
-        panel["spillover_event"] = np.nan
-        panel["spillover_momentum"] = np.nan
-        logger.debug("No graph_spillover.parquet — factors 18-19 will be NaN")
-
-    # --- C10: customers-only momentum spillover (C-F asymmetric) ---
-    # daily_signals selects the daily as-of cache (same construction, finer
-    # grid — same registry ID); only the daily grid can express the t+1 lag.
-    cm_name = ("graph_customer_momentum_daily.parquet" if daily_signals
-               else "graph_customer_momentum.parquet")
-    cm_path = CACHE_DIR / cm_name
-    if cm_path.exists():
-        cm = pd.read_parquet(cm_path)
-        cm["date"] = pd.to_datetime(cm["date"])
-        cm = cm.dropna(subset=["spillover_cust_mom"]).sort_values(["ticker", "date"])
-        panel = _merge_asof_signal(
-            panel, cm,
-            left_date="date", right_date="date",
-            on="ticker", cols=["spillover_cust_mom"],
-            availability_lag_days=availability_lag_days if daily_signals else 0,
-        )
-    else:
-        panel["spillover_cust_mom"] = np.nan
-        logger.debug(f"No {cm_name} — C10 will be NaN")
-
-    # --- C11: abnormal 8-K filing frequency (month-end z-score, as-of) ---
-    # Always merged unlagged: the headline fresh-month result attaches the
-    # month-m z at month-end m; a +1d shift would turn it into the (already
-    # tested, near-zero) stale variant. Intramonth availability is C15's job.
-    freq_path = CACHE_DIR / "event_freq_8k.parquet"
-    if freq_path.exists():
-        fz = pd.read_parquet(freq_path)
-        fz["date"] = pd.to_datetime(fz["date"])
-        fz = fz[["ticker", "date", "evt8k_freq_z"]].sort_values(["ticker", "date"])
-        panel = _merge_asof_signal(
-            panel, fz,
-            left_date="date", right_date="date",
-            on="ticker", cols=["evt8k_freq_z"],
-        )
-    else:
-        panel["evt8k_freq_z"] = np.nan
-        logger.debug("No event_freq_8k.parquet — C11 will be NaN")
-
-    # --- C15: daily 8-K abnormal frequency (NEW variant, not a port of C11:
-    # daily grid + trailing-21-trading-day window + lagged non-overlapping
-    # baseline; see FACTORS.md) ---
-    if daily_signals:
-        freq_d_path = CACHE_DIR / "event_freq_8k_daily.parquet"
-        if freq_d_path.exists():
-            fzd = pd.read_parquet(freq_d_path)
-            fzd["date"] = pd.to_datetime(fzd["date"])
-            fzd = fzd[["ticker", "date", "evt8k_freq_z_d"]].sort_values(["ticker", "date"])
-            panel = _merge_asof_signal(
-                panel, fzd,
-                left_date="date", right_date="date",
-                on="ticker", cols=["evt8k_freq_z_d"],
-                availability_lag_days=availability_lag_days,
-            )
-        else:
-            panel["evt8k_freq_z_d"] = np.nan
-            logger.debug("No event_freq_8k_daily.parquet — C15 will be NaN")
-
-    # --- C17: SUE / PEAD (as-filed diluted XBRL EPS; availability = earliest
-    # Item-2.02 8-K date else statement filed date, already acceptance-time
-    # refined by the builder). Filing-date-style as-of merge: the availability
-    # lag applies on every grid, like the other filing merges (v0: t+1). ---
-    sue_path = CACHE_DIR / "sue_pead.parquet"
-    if sue_path.exists():
-        su = pd.read_parquet(sue_path)
-        su["disclosure_date"] = pd.to_datetime(su["disclosure_date"])
-        su = su.rename(columns={"sue": "sue_pead"}).dropna(subset=["sue_pead"])
-        # same-day multi-quarter disclosures: keep the latest period_end
-        su = su.sort_values(["ticker", "disclosure_date", "period_end"])
-        su = su.drop_duplicates(["ticker", "disclosure_date"], keep="last")
-        su = su[["ticker", "disclosure_date", "sue_pead"]]
-        panel = _merge_asof_signal(
-            panel, su,
-            left_date="date", right_date="disclosure_date",
-            on="ticker", cols=["sue_pead"],
-            availability_lag_days=availability_lag_days,
-        )
-    else:
-        panel["sue_pead"] = np.nan
-        logger.debug("No sue_pead.parquet — C17 will be NaN")
 
     # --- B8/B9 PIT fundamentals controls: as-filed book equity and trailing
     # 4-quarter net income (fundamentals_pit.parquet), each attached as-of its
