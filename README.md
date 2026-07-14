@@ -118,6 +118,24 @@ sentiment) carried nothing even pre-PIT (sector-neutral |t| ≤ 1.0).
 Both variants sit below the full-ledger ceiling of ≈ 2.6. Status: strongest
 current candidates, unconfirmed; no significance claim is made.
 
+### C15 tradeable backtest (gate-2): failed, live path closed
+
+A pre-registered decile long-short on C15 — long the lowest-z decile, short
+the highest, rebalanced monthly at the month-end close on that day's
+available signal (v0 panel), at 2 bp half-spread + 1 bp commission per side
+and 50 bp p.a. borrow — was run once, 2011-12 → 2026-04, against the frozen
+promotion gate (`reports/promotion_gate_c11.md`; full results in
+`reports/gate2_c15_tradeable.md`). The gross spread is ≈ +1.74%/yr, but the
+signal's within-month decay forces ~86% monthly book turnover (20.7x/yr
+one-way), and base-case costs consume the gross almost exactly: net Sharpe
+**−0.00**. With every cost component doubled the strategy is clearly
+negative (−1.75%/yr, Sharpe −0.27), and the break-even cost of 4.21 bp/side
+is 1.40x the actual 3 bp/side estimate, below the gate's required 2x margin.
+Gate criteria 2, 4, and 5 fail, so the pre-committed termination rule
+applies: the live path is closed, with no re-tuning of windows, baselines,
+quantiles, or holding periods. The research finding is unchanged — a real
+but untradeably small predictive effect.
+
 ### LightGBM combiner (scope)
 
 The walk-forward combiner (`ml_combiner.py`) predicts 21-day returns from C1
@@ -151,9 +169,11 @@ each statistic's sample size.
   2025), which attenuates measured ICs.
 - **8-K economics.** The quintile-spread magnitudes on record (+0.41%/month
   on the 179-name subset, +0.11%/month at full coverage, for C11) are
-  pre-PIT; v0 portfolio-level economics have not been measured. The rank
-  signal decays within a month — implementation latency is the binding
-  constraint, which is what C15's daily grid addresses.
+  pre-PIT. v0 portfolio-level economics were measured by the gate-2
+  tradeable backtest (2026-07-13, see the C15 section): the daily grid
+  recovers ≈ +1.74%/yr gross on a decile L/S, but the same within-month
+  decay that motivated it makes turnover cost the binding constraint — net
+  ≈ zero at base costs.
 - **Graph edges** are LLM-extracted (mild forward-knowledge exposure) with
   both endpoints in the S&P 500 — the regime where the cross-firm momentum
   effect is documented to be weakest. The SEC-disclosed-customer replication
