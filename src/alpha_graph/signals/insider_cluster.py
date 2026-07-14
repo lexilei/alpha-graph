@@ -198,11 +198,14 @@ def add_adv_diagnostic(events: pd.DataFrame, market: pd.DataFrame,
         return events.assign(adv_20d=pd.Series(dtype=float),
                              dollar_over_adv=pd.Series(dtype=float))
     dv = market.sort_values(["ticker", "date"]).copy()
+    dv["date"] = dv["date"].astype("datetime64[ns]")
     dv["adv_20d"] = (
         (dv["close"] * dv["volume"])
         .groupby(dv["ticker"])
         .transform(lambda s: s.rolling(adv_window, min_periods=adv_window).mean())
     )
+    events = events.copy()
+    events["event_date"] = events["event_date"].astype("datetime64[ns]")
     out = pd.merge_asof(
         events.sort_values("event_date").reset_index(drop=True),
         dv[["ticker", "date", "adv_20d"]].sort_values("date"),
