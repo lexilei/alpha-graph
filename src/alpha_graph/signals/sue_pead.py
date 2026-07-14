@@ -78,20 +78,31 @@ CACHE_NAME = "sue_pead.parquet"
 # EPS extraction
 # --------------------------------------------------------------------------- #
 
-def first_filed_eps(facts: pd.DataFrame) -> pd.DataFrame:
-    """Diluted-EPS facts, one row per (cik, ddate, qtrs): the first-filed value.
+def first_filed(facts: pd.DataFrame, tag: str,
+                uom: str = PER_SHARE_UOM) -> pd.DataFrame:
+    """Facts of one tag/uom, one row per (cik, ddate, qtrs): the first-filed
+    value.
 
     Sort by (filed, accepted, adsh) and keep the first row per key, so a
     later accession restating the same period (amendment or next year's
-    comparative) never replaces the original.
+    comparative) never replaces the original. The as-filed discipline shared
+    by C17 (diluted EPS) and the B8/B9 fundamentals controls
+    (signals/fundamentals_pit.py: equity, net income).
     """
-    dil = facts[facts["tag"] == EPS_TAG]
-    eps = dil[dil["uom"] == PER_SHARE_UOM].copy()
-    if len(dil) - len(eps):
-        logger.info(f"dropped {len(dil) - len(eps)} diluted-EPS rows with "
-                    f"non-per-share uom (filer tagging errors)")
-    eps = eps.sort_values(["filed", "accepted", "adsh"], kind="mergesort")
-    return eps.drop_duplicates(subset=["cik", "ddate", "qtrs"], keep="first")
+    sel = facts[facts["tag"] == tag]
+    keep = sel[sel["uom"] == uom].copy()
+    if len(sel) - len(keep):
+        logger.info(f"dropped {len(sel) - len(keep)} {tag} rows with "
+                    f"uom != {uom} (filer tagging errors)")
+    keep = keep.sort_values(["filed", "accepted", "adsh"], kind="mergesort")
+    return keep.drop_duplicates(subset=["cik", "ddate", "qtrs"], keep="first")
+
+
+def first_filed_eps(facts: pd.DataFrame) -> pd.DataFrame:
+    """Diluted-EPS facts, one row per (cik, ddate, qtrs): the first-filed
+    value (FSDS stores per-share values with uom "USD"; other uoms are filer
+    tagging errors, dropped and logged)."""
+    return first_filed(facts, EPS_TAG, PER_SHARE_UOM)
 
 
 def quarterly_eps(first: pd.DataFrame) -> pd.DataFrame:
@@ -100,6 +111,9 @@ def quarterly_eps(first: pd.DataFrame) -> pd.DataFrame:
     Returns one row per (cik, quarter): cik, ticker, ddate, eps, derived_q4,
     stmt_adsh, stmt_filed (the statement that made the value computable —
     for derived Q4 that is the ANNUAL filing).
+
+    Value-agnostic despite the `eps` column name: fundamentals_pit.py feeds
+    first-filed NetIncomeLoss through it for the B9 TTM control.
     """
     q = first.loc[first["qtrs"] == 1,
                   ["cik", "ticker", "ddate", "value", "adsh", "filed"]].rename(
