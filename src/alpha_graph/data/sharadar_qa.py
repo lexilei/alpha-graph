@@ -203,8 +203,17 @@ def load_reference_snapshots_raw(
     csv_path: Path,
     *,
     xs_band: tuple[int, int] = (490, 515),
+    band_from: pd.Timestamp | None = None,
 ) -> list[tuple[pd.Timestamp, frozenset[str]]]:
-    """Load source-space membership without applying the panel rename map."""
+    """Load source-space membership without applying the panel rename map.
+
+    Pre-window snapshots MUST still load (they accumulate the membership
+    state at the audit window's start) but the cross-section band is a
+    claim about the audited era only: the real CSV has 1996 rows with 487
+    members, which would otherwise fail a canonical run before any gate
+    executes. `band_from` restricts the band check to snapshots dated on
+    or after it; structural checks (duplicates, ordering) apply everywhere.
+    """
     frame = pd.read_csv(csv_path, usecols=["date", "tickers"])
     frame["date"] = pd.to_datetime(frame["date"], errors="raise")
     if frame.empty:
@@ -221,7 +230,8 @@ def load_reference_snapshots_raw(
             raise SharadarError(
                 f"reference snapshot {row.date.date()} contains duplicate symbols"
             )
-        if not (xs_band[0] <= len(symbols) <= xs_band[1]):
+        in_banded_era = band_from is None or pd.Timestamp(row.date) >= band_from
+        if in_banded_era and not (xs_band[0] <= len(symbols) <= xs_band[1]):
             raise SharadarError(
                 f"reference snapshot {row.date.date()} cross-section {len(symbols)} "
                 f"outside [{xs_band[0]}, {xs_band[1]}]"
@@ -1542,13 +1552,14 @@ def _audit_snapshot_unlocked(
     thresholds = validate_thresholds(_read_json(thresholds_path))
     cases_config = validate_cases_config(_read_json(cases_path))
 
+    start_ts = pd.Timestamp(start)
     reference_snapshots = load_reference_snapshots_raw(
         membership_csv,
         xs_band=(thresholds["cross_section_min"], thresholds["cross_section_max"]),
+        band_from=start_ts,
     )
     reference_end = reference_snapshots[-1][0]
     end_ts = min(pd.Timestamp(end), reference_end) if end else reference_end
-    start_ts = pd.Timestamp(start)
     intervals = membership_intervals(reference_snapshots, start=start_ts, end=end_ts)
 
     tickers = prepare_vendor_tickers(read_staged_table(snapshot_dir, "TICKERS"))

@@ -748,6 +748,35 @@ def test_raw_membership_preserves_parallel_share_classes(tmp_path):
     assert snapshots[0][1] == frozenset({"DISCA", "DISCK", "GOOG", "GOOGL"})
 
 
+def test_raw_membership_band_applies_only_from_band_from(tmp_path):
+    # The real CSV has pre-window (1996) rows below the modern band; they must
+    # still LOAD (they accumulate the state at the audit start) while the band
+    # check applies only inside the audited era.
+    path = tmp_path / "membership.csv"
+    pd.DataFrame({
+        "date": ["1996-01-02", "2020-01-01"],
+        "tickers": ["A,B", "A,B,C,D"],
+    }).to_csv(path, index=False)
+    snapshots = load_reference_snapshots_raw(
+        path, xs_band=(4, 4), band_from=pd.Timestamp("2011-04-06"),
+    )
+    assert len(snapshots) == 2                       # pre-window row loaded
+    assert snapshots[0][1] == frozenset({"A", "B"})  # and usable for state
+    # an IN-window violation still fails closed
+    bad = tmp_path / "bad.csv"
+    pd.DataFrame({
+        "date": ["1996-01-02", "2020-01-01"],
+        "tickers": ["A,B", "A,B,C"],
+    }).to_csv(bad, index=False)
+    with pytest.raises(SharadarError, match="outside"):
+        load_reference_snapshots_raw(
+            bad, xs_band=(4, 4), band_from=pd.Timestamp("2011-04-06"),
+        )
+    # and without band_from the old strict-everywhere behavior is unchanged
+    with pytest.raises(SharadarError, match="outside"):
+        load_reference_snapshots_raw(path, xs_band=(4, 4))
+
+
 def test_identity_resolution_uses_dated_ticker_reuse():
     snapshots = [
         (pd.Timestamp("2019-01-01"), frozenset({"IR"})),
