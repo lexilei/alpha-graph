@@ -42,8 +42,21 @@ Refer to factors by their permanent IDs (see `FACTORS.md`).
   bets among the factors) describes redundancy only and is never the
   denominator.
 
-As of this date no factor clears the bar (strongest: C15 at v0 −2.29 vs
-ceiling ≈2.57).
+**Update (2026-07-13, end of day).** 15 further looks landed after the count
+above: the 3 gate-2 tradeable cells, C17's 5, C16's 3 + 3 (original and
+corrected timing both count — the correction re-ran the selection), C18's 1.
+**N = 71, ceiling emax_null(142) = 2.65** (68 → 2.64 / 74 → 2.67 under the
+same judgment-call variations). Status against the bar: **C16 corrected
+full-sample alpha HAC t = +3.33 is the first result to clear the
+full-ledger ceiling** — with its stated caveats (event portfolio, no cost
+model yet, residual joint-filing entity contamination, beta ≈ 1 long-only);
+C17 +2.09, C15 −2.29, C11 −2.00 remain below it. Registry still shows 0
+accepted: clearing the ceiling is necessary, not sufficient — promotion
+additionally requires the economics gates (cost-doubling, break-even,
+forward period) that killed C15.
+
+As of the morning count no factor cleared the bar; as of end of day C16
+(corrected) clears the statistical bar and awaits the economics gates.
 
 ## Economic hypothesis (one, not many)
 
