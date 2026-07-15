@@ -12,6 +12,16 @@ Pinned semantics under test (registration 2026-07-15, commit `28b84c6`):
     else the next trading day; signal = close(a-1)->close(a+1); availability =
     a+1; same-day multi-8-K keeps the FIRST 2.02 of the day per ticker;
   - all three merge through build_feature_panel with v0 t+1 lag semantics.
+
+C28/C29 (registration 2026-07-15, commit `528404c`):
+  - C28 accruals_sloan = (NI_ttm - CFO_ttm) / avg total Assets; CFO reported
+    cumulative-YTD, so quarterly CFO is qtrs=1 directly (Q1) and YTD-differenced
+    (qtrs=k - qtrs=(k-1)) elsewhere; NI_ttm reuses the sue_pead Q4-derivation;
+    Assets averaged over the TTM window's start/end; availability = max
+    constituent filed date;
+  - C29 gross_profitability = GP_ttm / Assets; quarterly GP by priority
+    GrossProfit -> Revenues-CostOfRevenue -> Revenues-COGS; first-filed
+    throughout.
 """
 
 import numpy as np
@@ -19,10 +29,22 @@ import pandas as pd
 import pytest
 
 from alpha_graph.signals.fundamentals_candidates import (
+    ASSETS_TAG,
+    CFO_TAG,
+    COGS_TAG,
+    COR_TAG,
+    GP_TAG,
+    REV_TAG,
+    assets_instant,
+    compute_accruals,
     compute_ann_ret_2d,
     compute_asset_growth,
+    compute_gross_profitability,
     compute_net_issuance,
+    quarterly_cfo,
+    quarterly_gross_profit,
 )
+from alpha_graph.signals.sue_pead import first_filed
 
 
 # --------------------------------------------------------------------------- #
@@ -289,3 +311,187 @@ def test_panel_merge_missing_caches_are_nan(tmp_path, monkeypatch):
     for col in ["net_issuance_12m", "asset_growth_yoy", "ann_ret_2d"]:
         assert col in panel.columns
         assert panel[col].isna().all()
+
+
+# --------------------------------------------------------------------------- #
+# C28 accruals_sloan / C29 gross_profitability (XBRL fundamentals facts)
+# --------------------------------------------------------------------------- #
+
+def _xfact(cik, ticker, tag, ddate, value, filed, qtrs, form="10-Q",
+           period=None, adsh=None):
+    """One xbrl_facts row (period defaults to ddate; annual rows pass a 10-K
+    form so sue_pead.quarterly_eps derives Q4)."""
+    ddate = pd.Timestamp(ddate)
+    filed = pd.Timestamp(filed)
+    return dict(cik=cik, ticker=ticker, tag=tag, uom="USD", qtrs=qtrs,
+                ddate=ddate, period=pd.Timestamp(period) if period else ddate,
+                filed=filed, accepted=filed,
+                adsh=adsh or f"{cik}-{tag}-{qtrs}-{ddate.date()}",
+                value=float(value), form=form, is_amendment=False,
+                version="us-gaap/2023")
+
+
+def _accruals_firm(assets_fy_filed="2020-02-15"):
+    """One clean fiscal year (2019): NI qtrs=1 Q1-Q3 + a 10-K annual (no
+    standalone Q4 -> derived), cumulative-YTD CFO, qtrs=0 Assets including the
+    prior-FY-end start. NI_ttm=50, CFO_ttm=45, avg_assets=(240+200)/2=220."""
+    return pd.DataFrame([
+        _xfact("1", "AAA", "NetIncomeLoss", "2019-03-31", 10, "2019-05-01", 1),
+        _xfact("1", "AAA", "NetIncomeLoss", "2019-06-30", 12, "2019-08-01", 1),
+        _xfact("1", "AAA", "NetIncomeLoss", "2019-09-30", 14, "2019-11-01", 1),
+        _xfact("1", "AAA", "NetIncomeLoss", "2019-12-31", 50, "2020-02-15", 4,
+               form="10-K"),
+        _xfact("1", "AAA", CFO_TAG, "2019-03-31", 8, "2019-05-01", 1),
+        _xfact("1", "AAA", CFO_TAG, "2019-06-30", 20, "2019-08-01", 2),
+        _xfact("1", "AAA", CFO_TAG, "2019-09-30", 30, "2019-11-01", 3),
+        _xfact("1", "AAA", CFO_TAG, "2019-12-31", 45, "2020-02-15", 4,
+               form="10-K"),
+        _xfact("1", "AAA", ASSETS_TAG, "2018-12-31", 200, "2019-02-15", 0),
+        _xfact("1", "AAA", ASSETS_TAG, "2019-03-31", 210, "2019-05-01", 0),
+        _xfact("1", "AAA", ASSETS_TAG, "2019-06-30", 220, "2019-08-01", 0),
+        _xfact("1", "AAA", ASSETS_TAG, "2019-09-30", 230, "2019-11-01", 0),
+        _xfact("1", "AAA", ASSETS_TAG, "2019-12-31", 240, assets_fy_filed, 0),
+    ])
+
+
+def test_c28_cfo_ytd_differencing_exact():
+    # cumulative YTD 8/20/30/45 -> quarterly 8, 12, 10, 15; Q1 direct, rest diff
+    facts = pd.DataFrame([
+        _xfact("1", "AAA", CFO_TAG, "2019-03-31", 8, "2019-05-01", 1),
+        _xfact("1", "AAA", CFO_TAG, "2019-06-30", 20, "2019-08-01", 2),
+        _xfact("1", "AAA", CFO_TAG, "2019-09-30", 30, "2019-11-01", 3),
+        _xfact("1", "AAA", CFO_TAG, "2019-12-31", 45, "2020-02-15", 4,
+               form="10-K"),
+    ])
+    q = quarterly_cfo(first_filed(facts, CFO_TAG, "USD")).set_index("ddate")
+    assert q.loc["2019-03-31", "cfo_q"] == pytest.approx(8)
+    assert q.loc["2019-06-30", "cfo_q"] == pytest.approx(12)   # 20 - 8
+    assert q.loc["2019-09-30", "cfo_q"] == pytest.approx(10)   # 30 - 20
+    assert q.loc["2019-12-31", "cfo_q"] == pytest.approx(15)   # 45 - 30
+    assert q.loc["2019-03-31", "source"] == "q1"
+    assert (q.loc[["2019-06-30", "2019-09-30", "2019-12-31"], "source"]
+            == "diff").all()
+    # a differenced quarter's availability = the later constituent filing
+    assert q.loc["2019-06-30", "avail"] == pd.Timestamp("2019-08-01")
+
+
+def test_c28_cfo_seasonal_gap_not_differenced_across_missing_quarter():
+    # H1 present but Q1 missing: qtrs=2 finds no ~1-quarter-earlier qtrs=1
+    # (the only qtrs=1 is two quarters away) -> that quarter is dropped.
+    facts = pd.DataFrame([
+        _xfact("1", "AAA", CFO_TAG, "2018-12-31", 5, "2019-02-15", 1),
+        _xfact("1", "AAA", CFO_TAG, "2019-06-30", 20, "2019-08-01", 2),
+    ])
+    q = quarterly_cfo(first_filed(facts, CFO_TAG, "USD")).set_index("ddate")
+    assert pd.Timestamp("2019-06-30") not in q.index      # ~182d gap, no match
+    assert q.loc["2018-12-31", "cfo_q"] == pytest.approx(5)
+
+
+def test_c28_cfo_prefers_qtrs1_over_differenced():
+    # a filer tags BOTH standalone Q2 (qtrs=1=13) and H1 (qtrs=2=20): the
+    # quarterly value is the qtrs=1 direct 13, NOT the differenced 20-8=12.
+    facts = pd.DataFrame([
+        _xfact("1", "AAA", CFO_TAG, "2019-03-31", 8, "2019-05-01", 1),
+        _xfact("1", "AAA", CFO_TAG, "2019-06-30", 13, "2019-08-01", 1),
+        _xfact("1", "AAA", CFO_TAG, "2019-06-30", 20, "2019-08-01", 2),
+    ])
+    q = quarterly_cfo(first_filed(facts, CFO_TAG, "USD")).set_index("ddate")
+    assert q.loc["2019-06-30", "cfo_q"] == pytest.approx(13)
+    assert q.loc["2019-06-30", "source"] == "q1"
+
+
+def test_c28_accruals_end_to_end_uses_derived_q4():
+    # NI has no standalone Q4 -> NI_ttm=50 requires the sue_pead derived Q4.
+    out = compute_accruals(_accruals_firm())
+    assert len(out) == 1
+    r = out.iloc[0]
+    assert r["ticker"] == "AAA"
+    assert r["accruals_sloan"] == pytest.approx((50 - 45) / 220, abs=1e-12)
+    assert r["avail_date"] == pd.Timestamp("2020-02-15")
+
+
+def test_c28_availability_is_max_constituent_filed():
+    # push the FY Assets filing latest -> the C28 availability follows it.
+    out = compute_accruals(_accruals_firm(assets_fy_filed="2020-03-10"))
+    assert out.iloc[0]["avail_date"] == pd.Timestamp("2020-03-10")
+
+
+def test_c28_assets_first_filed_beats_restatement():
+    facts = pd.DataFrame([
+        _xfact("1", "AAA", ASSETS_TAG, "2019-12-31", 240, "2020-02-15", 0,
+               adsh="orig"),
+        _xfact("1", "AAA", ASSETS_TAG, "2019-12-31", 999, "2021-02-15", 0,
+               adsh="restate"),
+    ])
+    ai = assets_instant(facts).set_index("period_end")
+    assert ai.loc["2019-12-31", "assets"] == pytest.approx(240)
+
+
+def test_c29_gp_fallback_priority():
+    facts = pd.DataFrame([
+        # Q1: GrossProfit present -> wins (35, not Revenues-CostOfRevenue=30)
+        _xfact("1", "AAA", GP_TAG, "2019-03-31", 35, "2019-05-01", 1),
+        _xfact("1", "AAA", REV_TAG, "2019-03-31", 100, "2019-05-01", 1),
+        _xfact("1", "AAA", COR_TAG, "2019-03-31", 70, "2019-05-01", 1),
+        # Q2: no GrossProfit; Revenues-CostOfRevenue beats Revenues-COGS (40)
+        _xfact("1", "AAA", REV_TAG, "2019-06-30", 100, "2019-08-01", 1),
+        _xfact("1", "AAA", COR_TAG, "2019-06-30", 60, "2019-08-01", 1),
+        _xfact("1", "AAA", COGS_TAG, "2019-06-30", 55, "2019-08-01", 1),
+        # Q3: only Revenues + COGS -> Revenues-COGS (55)
+        _xfact("1", "AAA", REV_TAG, "2019-09-30", 100, "2019-11-01", 1),
+        _xfact("1", "AAA", COGS_TAG, "2019-09-30", 45, "2019-11-01", 1),
+    ])
+    q = quarterly_gross_profit(facts).set_index("ddate")
+    assert q.loc["2019-03-31", "gross_profit"] == pytest.approx(35)
+    assert q.loc["2019-03-31", "gp_source"] == "GrossProfit"
+    assert q.loc["2019-06-30", "gross_profit"] == pytest.approx(40)
+    assert q.loc["2019-06-30", "gp_source"] == "Revenues-CostOfRevenue"
+    assert q.loc["2019-09-30", "gross_profit"] == pytest.approx(55)
+    assert q.loc["2019-09-30", "gp_source"] == "Revenues-COGS"
+
+
+def test_c29_first_filed_beats_restatement():
+    facts = pd.DataFrame([
+        _xfact("1", "AAA", GP_TAG, "2019-03-31", 35, "2019-05-01", 1,
+               adsh="orig"),
+        _xfact("1", "AAA", GP_TAG, "2019-03-31", 999, "2020-05-01", 1,
+               adsh="restate"),
+    ])
+    q = quarterly_gross_profit(facts).set_index("ddate")
+    assert q.loc["2019-03-31", "gross_profit"] == pytest.approx(35)
+
+
+def test_c29_gross_profitability_end_to_end_and_availability():
+    facts = pd.DataFrame([
+        _xfact("1", "AAA", GP_TAG, "2019-03-31", 20, "2019-05-01", 1),
+        _xfact("1", "AAA", GP_TAG, "2019-06-30", 22, "2019-08-01", 1),
+        _xfact("1", "AAA", GP_TAG, "2019-09-30", 24, "2019-11-01", 1),
+        _xfact("1", "AAA", GP_TAG, "2019-12-31", 100, "2020-02-15", 4,
+               form="10-K"),                              # derived Q4 = 34
+        _xfact("1", "AAA", ASSETS_TAG, "2019-12-31", 500, "2020-02-15", 0),
+    ])
+    out = compute_gross_profitability(facts)
+    assert len(out) == 1
+    r = out.iloc[0]
+    # GP_ttm = 20+22+24+34 = 100; / Assets 500 = 0.2
+    assert r["gross_profitability"] == pytest.approx(100 / 500, abs=1e-12)
+    assert r["avail_date"] == pd.Timestamp("2020-02-15")
+
+
+def test_panel_merge_c28_c29_v0_lag(tmp_path, monkeypatch):
+    import alpha_graph.signals.ml_combiner as ml
+    monkeypatch.setattr(ml, "CACHE_DIR", tmp_path)
+    cal = pd.bdate_range("2020-01-06", periods=6)
+    _write_market(tmp_path, cal)
+    pd.DataFrame([{"ticker": "AAA", "avail_date": cal[2],
+                   "accruals_sloan": 0.05}]
+                 ).to_parquet(tmp_path / "accruals_sloan.parquet", index=False)
+    pd.DataFrame([{"ticker": "AAA", "avail_date": cal[2],
+                   "gross_profitability": 0.3}]
+                 ).to_parquet(tmp_path / "gross_profitability.parquet",
+                              index=False)
+    panel = ml.build_feature_panel(pit_universe=False, availability_lag_days=1)
+    for col, val in [("accruals_sloan", 0.05), ("gross_profitability", 0.3)]:
+        got = panel[panel["ticker"] == "AAA"].set_index("date")[col]
+        assert got[cal[:3]].isna().all()     # v0 t+1: unusable through avail close
+        assert (got[cal[3:]] == val).all()   # attaches next close, carried fwd

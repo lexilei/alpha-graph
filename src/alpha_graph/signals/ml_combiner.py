@@ -371,6 +371,19 @@ FACTOR_SOURCES: list[FactorSource] = [
                  ("asset_growth_yoy",), "avail_date", "filing", dropna="any"),
     FactorSource("C27", "ann_ret_2d.parquet",
                  ("ann_ret_2d",), "avail_date", "filing", dropna="any"),
+    # C28/C29: the fundamentals family's last two shots on the extended XBRL
+    # table (signals/fundamentals_candidates.py). C28 accruals_sloan =
+    # (NI_ttm - CFO_ttm) / avg total Assets (CFO YTD-differenced to quarterly);
+    # C29 gross_profitability = GP_ttm / Assets (GrossProfit else
+    # Revenues-Cost). Each stamps avail_date = max constituent filed date and
+    # is collapsed to as-of states (fundamentals_pit.as_of_states), then merges
+    # as a plain filing-date source lagged on every grid (v0: t+1); dropna=
+    # "any" drops rows the builder left NaN. Registered 2026-07-15 (commit
+    # `528404c`).
+    FactorSource("C28", "accruals_sloan.parquet",
+                 ("accruals_sloan",), "avail_date", "filing", dropna="any"),
+    FactorSource("C29", "gross_profitability.parquet",
+                 ("gross_profitability",), "avail_date", "filing", dropna="any"),
 ]
 
 
