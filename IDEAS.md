@@ -36,6 +36,7 @@ FACTORS.md 管"测一个想法",这里管"选择测什么"。想法先登记、�
 |----|------|--------|--------|---|------|------|------|----|----------|
 | I1 | `iv_skew_xs` | options-xs | backlog | 4 | 3 | 2 | 1.2 | 7.2 | **机制**:知情交易者先在期权市场表达负面信息(OTM put 需求 → smirk 变陡),股票市场消化滞后数周;对手盘 = 只看股票的投资者。**数据**:61 单名 EOD NBBO 在手(`data/raw_singles/`),vol_smile 的 IV/SVI 管道可移植。**文献**:Xing-Zhang-Zhao 2010 JFQA — smirk 陡度预测未来低收益,风险调整 ~10%/yr、持续数月(待核);OSAP 存活性待核。**拥挤**:期权数据门槛保护,中等。**边**:数据护城河 + 现成期权管道。**成本**:管道移植,~2。61 名截面窄 — 先作 family 先验验证,过了再决定扩数据。 |
 | I2 | `cp_iv_spread` | options-xs | backlog | 4 | 3 | 2 | 1.2 | 7.2 | **机制**:put-call parity 偏离 = 期权市场的方向性私有信息,股价滞后跟随;对手盘同 I1。**数据**:同 I1,在手。**文献**:Cremers-Weinbaum 2010 JFQA — call−put IV spread(同 strike/expiry)预测未来一周~一月收益,~50bp/周量级(待核);An-Ang-Bali-Cakici 2014 JF — ΔIV_call 正向、ΔIV_put 负向预测(待核)。**拥挤**:知名但有数据门槛。**边/成本**:同 I1。与 I1 同 family,预算合并钉。 |
+| I9 | `liquidity_volume_xs` | liquidity-volume | backlog | 2 | 4 | 1 | 0.8 | 6.4 | **机制**:两条不同的机制并存 — (a) 流动性溢价:持有难交易股票的补偿,对手盘 = 需要即时流动性的投资者(Amihud ILLIQ、turnover);(b) 可见性/注意力:异常放量把股票拉进投资者视野 → 短期需求(Gervais-Kaniel-Mingelgrin 2001 JF 高量溢价)。**数据**:全部在手(价量面板),成本 = 1,全队列最便宜。**文献**:Amihud 2002(ILLIQ,经典);Datar-Naik-Radcliffe 1998(低 turnover → 高收益);GKM 2001(待核 OSAP 存活性)。**反证**:Ben-Rephael-Kadan-Wohl — 流动性溢价 2000 年后大幅衰减;且效应集中在小/微盘,S&P 500 是全市场最液段,先验被栖息地压到 2(U1 之后上调)。**拥挤**:极高 — 价量数据人人都有。**正交 0.8(关键风险)**:B4 volume_zscore 和 B6 log_dollar_volume 已经是 controls,这个 family 一半已被自家基线张成;任何构造必须在增量上打赢它们,构造上要刻意差异化(ILLIQ 分子带 \|ret\|,GKM 用极端量事件定义,而非水平/z-score)。**N 税警告**:美元成本 ≈ 0 但每个 look 照常计 N、抬高全账本 ceiling — family 预算钉紧(建议 ≤3 looks:ILLIQ、turnover、GKM 各一)。Pastor-Stambaugh 流动性 beta 出名地脆,不登记。 |
 | I3 | `iv_rv_spread_xs` | options-xs | backlog | 3 | 3 | 2 | 1.2 | 5.4 | **机制**:单名 VRP 截面差异 = 对冲需求/彩票偏好定价差;比 I1/I2 更偏风险溢价而非信息。**数据**:在手(RV 管道 vol_smile 已有,`signals/rv`)。**文献**:Bali-Hovakimian 2009 — implied−realized spread 预测截面收益(待核)。**拥挤**:中等。**注意**:与 vol_smile 的时序 VRP 负结果不冲突(那是市场级、卖方策略;这是截面相对定价)。 |
 | I6 | `short_interest_xs` | ownership-flow | backlog | 3 | 3 | 2 | 1.2 | 5.4 | **机制**:卖空约束下负面信息进价慢;高 SI = 知情空头聚集 → 低收益;对手盘 = 借券成本盲的多头。**文献**:Boehmer-Jones-Zhang 等,发表后在难借券段存活(待核 OSAP)。**数据**:FINRA 双周 SI 免费;Sharadar 含 SI 字段(待核)。**拥挤**:高,但残余集中在小盘难借段。**注意**:S&P 500 大盘易借,先验偏低 — 此条在 universe 扩展(见基建 U1)之后先验显著上调,当前分按现 universe 打。 |
 | I5 | `breadth_13f` | ownership-flow | backlog | 3 | 4 | 3 | 1.1 | 4.4 | **机制**:Miller 分歧+卖空约束 — 机构持有广度下降 = 悲观者被挤出价格 → 高估 → 低收益。**数据**:EDGAR 13F 免费,45 天滞后是天然 PIT 可用性(比文本家族干净)。**文献**:Chen-Hong-Stein 2002 JFE — breadth 变化预测截面收益(待核发表后衰减)。**拥挤**:13F 被大量使用,该构造中等。**边**:EDGAR 管道现成。**成本**:3 — 13F 解析出名地脏(CUSIP↔ticker 映射、份额单位错报),QA 量大。与已关的文本家族不同源:这是 ownership 数据不是文本。 |
@@ -59,6 +60,7 @@ FACTORS.md 管"测一个想法",这里管"选择测什么"。想法先登记、�
 | 12b-25 / SC 13D | 一次性测毕 | C18、C23 rejected |
 | XBRL 基本面 | **OPEN,在测** | C17 +2.01 candidate;C25–C27 已注册(2026-07-15) |
 | options-xs | 未开,队列头部 | I1–I3;数据在手 |
+| liquidity-volume | 未开 | I9;数据在手但半数被 B4/B6 controls 张成,S&P 500 栖息地先验低,U1 后上调 |
 | ownership-flow | 未开 | I5、I6;I6 先验依赖 U1 |
 | alt-activity | 未开,先验中低 | I7、I8 |
 
