@@ -37,6 +37,8 @@ report/*.out
 
 # Docs
 docs/
+program.md
+
 
 # OS
 .DS_Store
