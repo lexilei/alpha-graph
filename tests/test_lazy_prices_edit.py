@@ -31,6 +31,59 @@ def test_tokenizer_case_folds_to_same_token():
 
 
 # --------------------------------------------------------------------------- #
+# Digit-free (alpha) tokenizer mode — C21 sensitivity (registration fa7fe4d)
+# --------------------------------------------------------------------------- #
+
+def test_alpha_tokenizer_drops_pure_digit_tokens():
+    # alpha mode keeps only pure-alpha tokens: the standalone digit runs
+    # ("10", "3", "5", "2") vanish; "10-K" leaves just "k".
+    assert lpe.tokenize("Rev up 10-K by 3.5% (item_2)", mode="alpha") == [
+        "rev", "up", "k", "by", "item"
+    ]
+    # regression guard: the default (alnum) mode is unchanged — digits kept.
+    assert lpe.tokenize("Rev up 10-K by 3.5% (item_2)") == [
+        "rev", "up", "10", "k", "by", "3", "5", "item", "2"
+    ]
+
+
+def test_digit_only_difference_scores_one_under_alpha_below_under_alnum():
+    # two sentences identical except the numbers (amount + year): the digit-free
+    # tokenizer sees identical token streams -> sim 1.0; the original tokenizer
+    # keeps the differing digits -> sim < 1.0. This is the whole sensitivity.
+    old = "net revenue rose to 100 million in fiscal 2019"
+    new = "net revenue rose to 250 million in fiscal 2021"
+    m_alpha, _, _ = lpe.pair_similarity(
+        lpe.tokenize(old, "alpha"), lpe.tokenize(new, "alpha"))
+    assert m_alpha == pytest.approx(1.0)
+    m_alnum, _, _ = lpe.pair_similarity(
+        lpe.tokenize(old), lpe.tokenize(new))
+    assert m_alnum < 1.0
+
+
+def test_compute_for_ticker_alpha_mode_plumbing(monkeypatch):
+    # filings identical except the year/amount digits, one <=460d pair.
+    filings = [
+        {"filing_date": "2019-02-20", "text": "revenue was 100 in 2018"},
+        {"filing_date": "2020-02-19", "text": "revenue was 250 in 2019"},  # 364d
+    ]
+    monkeypatch.setattr(lpe, "_load_filing_texts", lambda t, form: filings)
+
+    rows = lpe.compute_for_ticker("XYZ", mode="alpha")
+    assert len(rows) == 1
+    r = rows[0]
+    # alpha mode emits sim_minedit_alpha_10k ONLY (no C21 alnum / C22 columns)
+    assert "sim_minedit_alpha_10k" in r
+    assert "sim_minedit_10k" not in r and "sim_simple_10k" not in r
+    # digit-only difference -> identical alpha token streams -> sim 1.0
+    assert r["sim_minedit_alpha_10k"] == pytest.approx(1.0)
+
+    # the default (alnum) mode on the same filings keeps digits -> sim < 1.0
+    rows_alnum = lpe.compute_for_ticker("XYZ")
+    assert rows_alnum[0]["sim_minedit_10k"] < 1.0
+    assert "sim_simple_10k" in rows_alnum[0]
+
+
+# --------------------------------------------------------------------------- #
 # Identity cases
 # --------------------------------------------------------------------------- #
 

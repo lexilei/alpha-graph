@@ -315,6 +315,13 @@ FACTOR_SOURCES: list[FactorSource] = [
     # (v0: t+1). Both columns merge from the one cache.
     FactorSource("C21/C22", "lazy_prices_edit.parquet",
                  ("sim_minedit_10k", "sim_simple_10k"), "filing_date", "filing"),
+    # C21 digit-free sensitivity: the same builder in `alpha` mode (tokenizer
+    # `[a-z]+`, pure-digit tokens dropped) → sim_minedit_alpha_10k only, its own
+    # cache. Same 10-K pair set, filing-date availability, and merge semantics
+    # as C21/C22 (v0: t+1). One pinned look; registered 2026-07-14 (commit
+    # `fa7fe4d`).
+    FactorSource("C21-alpha", "lazy_prices_edit_alpha.parquet",
+                 ("sim_minedit_alpha_10k",), "filing_date", "filing"),
 ]
 
 
