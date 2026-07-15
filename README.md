@@ -275,23 +275,34 @@ python -m alpha_graph.monitor            # build reports/dashboard.html + open
 python -m alpha_graph.monitor --serve    # localhost:8765, rebuilt on each refresh
 ```
 
-It shows the standings against the selection bars, the accounting history (N
-and the ceiling at each refresh), the candidate registry filtered by status,
-and the cache inventory (row counts, date spans, write times) read from parquet
-footers. `--serve` re-reads everything per request, so it can stay open while a
-build runs.
+It shows both halves of the loop: the standings against the selection bars, the
+accounting history (N and the ceiling at each refresh), the candidate registry
+filtered by status, and — from `IDEAS.md` — the ideation queue ranked by score
+with the head marked (rule 2: take from the head, not the latest inspiration),
+the family coverage map, and the cache inventory (row counts, date spans, write
+times) read from parquet footers. `--serve` re-reads everything per request, so
+it can stay open while a build runs.
 
 The headline accounting is read from the LATEST `Accounting refresh` row of
 `reports/factor_preregistration.md` — the ledger's own rule for where the
 authoritative count lives. The monitor deliberately does not recount looks: N
 excludes registrations, infrastructure notes, and `role=null` controls by hand,
-so a naive row count disagrees with it by construction. It computes nothing
-except one cross-check — that each refresh row's stated ceiling still
-reproduces from `ic_tools.emax_null` on its stated trial count, which
-`tests/test_monitor.py` also asserts over every historical row. Adjudications
-travel with their statistic: C16's +3.33 exceeds the 2.89 ceiling and is
-labelled, everywhere it appears, with the ledger's "NOT treated as clearing —
-composition".
+so a naive row count disagrees with it by construction. Nor does it scrape
+statistics out of the registry's prose, where superseded and attribution-era
+numbers sit beside the headline.
+
+It computes only two cross-checks, both of which `tests/test_monitor.py` also
+asserts over the live files:
+
+- every accounting row's stated ceiling still reproduces from
+  `ic_tools.emax_null` on its stated trial count;
+- every queue score still reproduces from `分 = P × 容量 ÷ 成本 × 正交`
+  (rule 5 lets scores go stale as family evidence lands).
+
+Adjudications travel with their statistic: C16's +3.33 exceeds the 2.89 ceiling
+and is labelled, everywhere it appears, with the ledger's "NOT treated as
+clearing — composition". Family status is shown verbatim for the same reason —
+the 8-K row's "研究上有真效应,live 关闭" is not a flat "closed".
 
 ## Tests
 
