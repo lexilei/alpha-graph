@@ -19,6 +19,7 @@ from alpha_graph.monitor.dashboard import (
     render,
 )
 from alpha_graph.monitor.health import inspect_parquet, scan_cache
+from alpha_graph.monitor.ideas import load_ideas, parse_ideas_md
 from alpha_graph.monitor.ledger import load_ledger, parse_ledger
 from alpha_graph.monitor.registry import load_registry, parse_factors_md
 
@@ -63,6 +64,45 @@ LEDGER_MD = """# Factor Research Log
 headline), C16 +3.33 (candidate, NOT treated as clearing — composition), \
 C15 −2.34, C11 −2.02; C20, C21/C22 rejected. 0 accepted. | recorded |
 """
+
+
+IDEAS_MD = """# Ideas Ledger
+
+## 规则
+
+1. 任何想法先进这里。
+
+## 队列(按分降序;status: backlog → promoted(C-ID) → closed)
+
+| ID | name | family | status | P | 容量 | 成本 | 正交 | 分 | 登记内容 |
+|----|------|--------|--------|---|------|------|------|----|----------|
+| I5 | `breadth_13f` | ownership-flow | backlog | 3 | 4 | 3 | 1.1 | 4.4 | **机制**: Miller. |
+| I1 | `iv_skew_xs` | options-xs | backlog | 4 | 3 | 2 | 1.2 | 7.2 | **机制**: smirk. |
+| I8 | `employer_reviews` / activity-nowcast 泛化 | alt-activity | backlog | 3 | 3 | 4 | 1.1 | 2.5 | **机制**: nowcast. |
+| I4 | `old_idea` | text | promoted(C21) | 2 | 2 | 2 | 1.0 | 2.0 | Promoted already. |
+
+## 基建(不按因子公式排序)
+
+| ID | name | status | 内容 |
+|----|------|--------|------|
+| U1 | `universe_sharadar` | backlog | Sharadar PIT universe. |
+
+## Family 覆盖图
+
+| family | 状态 | 证据 |
+|--------|------|------|
+| 8-K 事件 | 研究上有真效应,live 关闭 | C11 −2.0 candidate |
+| options-xs | 未开,队列头部 | I1–I3 |
+
+## Inbox(原始想法,一行一条,不排序)
+
+- (空)
+"""
+
+
+@pytest.fixture
+def ideas():
+    return parse_ideas_md(IDEAS_MD)
 
 
 @pytest.fixture
@@ -170,6 +210,96 @@ def test_ledger_rows_and_recency(led):
 def test_ledger_without_any_refresh():
     led = parse_ledger("| When | What | Result |\n| 2026-01-01 | a look | t=1 |\n")
     assert led.latest is None and len(led.rows) == 1
+
+
+# --------------------------------------------------------------------------- #
+# Ideas
+# --------------------------------------------------------------------------- #
+
+def test_ideas_queue_is_score_sorted(ideas):
+    assert [i.id for i in ideas.queue] == ["I1", "I5", "I8", "I4"]
+
+
+def test_ideas_head_is_the_top_backlog_item(ideas):
+    """Rule 2: take from the head. A promoted row must never be the head even
+    if it outscored the backlog."""
+    assert ideas.head.id == "I1"
+
+
+def test_ideas_head_skips_non_backlog():
+    md = IDEAS_MD.replace("| options-xs | backlog | 4 | 3 | 2 | 1.2 | 7.2 |",
+                          "| options-xs | closed | 4 | 3 | 2 | 1.2 | 7.2 |")
+    assert parse_ideas_md(md).head.id == "I5"
+
+
+def test_ideas_score_cross_check(ideas):
+    """分 = P × 容量 ÷ 成本 × 正交 — I8 rounds 2.475 to 2.5 and must pass."""
+    assert ideas.mis_scored() == []
+    i8 = next(i for i in ideas.queue if i.id == "I8")
+    assert i8.score_computed == pytest.approx(2.475)
+    assert i8.score_ok
+
+
+def test_ideas_detects_a_stale_score():
+    md = IDEAS_MD.replace("| 1.2 | 7.2 |", "| 1.2 | 9.9 |")
+    bad = parse_ideas_md(md).mis_scored()
+    assert [i.id for i in bad] == ["I1"]
+
+
+def test_ideas_strips_inner_code_ticks(ideas):
+    """I8's cell is "`employer_reviews` / activity-nowcast 泛化" — a trailing
+    strip would leave the inner tick."""
+    i8 = next(i for i in ideas.queue if i.id == "I8")
+    assert "`" not in i8.name
+    assert i8.name.startswith("employer_reviews /")
+
+
+def test_ideas_promoted_id(ideas):
+    ids = {i.id: i.promoted_to for i in ideas.queue}
+    assert ids["I4"] == "C21" and ids["I1"] is None
+
+
+def test_ideas_header_guard():
+    """Columns are read positionally; a reordered header must be caught, not
+    silently map cost into capacity."""
+    assert parse_ideas_md(IDEAS_MD).header_ok
+    swapped = IDEAS_MD.replace("| P | 容量 | 成本 |", "| P | 成本 | 容量 |")
+    assert not parse_ideas_md(swapped).header_ok
+
+
+def test_ideas_infra_and_family_map(ideas):
+    assert [u.id for u in ideas.infra] == ["U1"]
+    assert ideas.infra[0].name == "universe_sharadar"
+    assert [f.family for f in ideas.families] == ["8-K 事件", "options-xs"]
+    # status is carried verbatim: "live 关闭" must not collapse to a flat closed
+    assert ideas.families[0].status == "研究上有真效应,live 关闭"
+
+
+def test_ideas_ignores_inbox_and_rules(ideas):
+    assert all(i.id.startswith("I") for i in ideas.queue)
+    assert len(ideas.queue) == 4
+
+
+def test_ideas_missing_file_is_empty(tmp_path):
+    got = load_ideas(tmp_path / "nope.md")
+    assert got.queue == [] and got.head is None
+
+
+def test_live_ideas_scores_reproduce():
+    """Guards IDEAS.md itself: every stated 分 must equal P × 容量 ÷ 成本 × 正交."""
+    got = load_ideas()
+    if not got.queue:
+        pytest.skip("IDEAS.md not present")
+    assert got.header_ok
+    assert got.mis_scored() == [], [(i.id, i.score, i.score_computed)
+                                   for i in got.mis_scored()]
+
+
+def test_live_ideas_promotions_exist_in_the_registry():
+    got, reg = load_ideas(), load_registry()
+    for i in got.queue:
+        if i.promoted_to:
+            assert reg.by_id(i.promoted_to) is not None, i.promoted_to
 
 
 # --------------------------------------------------------------------------- #

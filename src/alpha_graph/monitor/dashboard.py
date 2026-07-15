@@ -31,6 +31,7 @@ from pathlib import Path
 
 from alpha_graph.config import PROJECT_ROOT
 from alpha_graph.monitor.health import CacheReport, scan_cache
+from alpha_graph.monitor.ideas import Ideas, load_ideas
 from alpha_graph.monitor.ledger import Ledger, Refresh, load_ledger
 from alpha_graph.monitor.registry import Registry, load_registry
 
@@ -141,6 +142,8 @@ def _standings_chart(refresh: Refresh, reg: Registry) -> str:
 
     # x grid + axis (solid hairlines, recessive)
     for t in _nice_ticks(0, xmax, 4):
+        if t > xmax:      # a round step can overshoot the domain
+            continue
         x = sx(t)
         p.append(f'<line x1="{x:.1f}" y1="{MT}" x2="{x:.1f}" y2="{MT + BAND * len(rows)}" '
                  f'class="grid"/>')
@@ -248,6 +251,101 @@ def _line_chart(refreshes: list[Refresh], value, title: str, fmt: str,
 # Tables
 # --------------------------------------------------------------------------- #
 
+# --------------------------------------------------------------------------- #
+# Chart: the ideation queue
+# --------------------------------------------------------------------------- #
+
+def _queue_chart(ideas: Ideas) -> str:
+    """Score-ranked backlog. The head carries a label, not a colour of its own:
+    IDEAS.md rule 2 is 'take from the head', so the head is the one mark worth
+    direct emphasis — and emphasis by annotation survives colourblindness."""
+    rows = [i for i in ideas.queue if i.status == "backlog"]
+    if not rows:
+        return '<p class="empty">No backlog items in IDEAS.md.</p>'
+
+    W, BAND, BAR = 780, 44, 18
+    ML, MR, MT, MB = 168, 116, 20, 32
+    H = MT + BAND * len(rows) + MB
+    plot_w = W - ML - MR
+    xmax = max(i.score for i in rows) * 1.06
+
+    def sx(v: float) -> float:
+        return ML + (v / xmax) * plot_w
+
+    p = [f'<svg viewBox="0 0 {W} {H}" class="chart" role="img" '
+         f'aria-label="Ideation backlog ranked by score = P(true) x capacity / '
+         f'cost x orthogonality.">']
+    for t in _nice_ticks(0, xmax, 4):
+        if t > xmax:      # a round step can overshoot the domain (0..7.63 -> 8)
+            continue
+        x = sx(t)
+        p.append(f'<line x1="{x:.1f}" y1="{MT}" x2="{x:.1f}" '
+                 f'y2="{MT + BAND * len(rows)}" class="grid"/>')
+        p.append(f'<text x="{x:.1f}" y="{MT + BAND * len(rows) + 19}" '
+                 f'class="tick mid">{t:g}</text>')
+    p.append(f'<line x1="{ML}" y1="{MT}" x2="{ML}" y2="{MT + BAND * len(rows)}" '
+             f'class="baseline"/>')
+
+    for i, idea in enumerate(rows):
+        y = MT + i * BAND + (BAND - BAR) / 2
+        w = sx(idea.score) - ML
+        flag = "" if idea.score_ok else " · SCORE MISMATCH"
+        tip = (f"{idea.id} {idea.name} · {idea.family} · score {idea.score:g} "
+               f"= P {idea.p_true:g} x capacity {idea.capacity:g} / cost "
+               f"{idea.cost:g} x ortho {idea.ortho:g}{flag}")
+        p.append(f'<g class="bar-g" tabindex="0" data-tip="{_esc(tip)}">')
+        p.append(f'<rect x="{ML}" y="{MT + i * BAND}" width="{plot_w + MR - 8}" '
+                 f'height="{BAND}" class="hit"/>')
+        p.append(f'<path d="{_bar_path(ML, y, w, BAR)}" class="bar"/>')
+        short = idea.name if len(idea.name) <= 22 else idea.name[:21] + "…"
+        p.append(f'<text x="{ML - 12}" y="{y + BAR / 2 + 4}" class="cat-q end">'
+                 f'{_esc(idea.id)} <tspan class="cat-sub">{_esc(short)}</tspan></text>')
+        label = f"{idea.score:g}" + ("  ← next up" if i == 0 else "")
+        p.append(f'<text x="{sx(idea.score) + 10:.1f}" y="{y + BAR / 2 + 4}" '
+                 f'class="val">{_esc(label)}</text>')
+        p.append('</g>')
+    p.append('</svg>')
+    return "".join(p)
+
+
+def _queue_table(ideas: Ideas) -> str:
+    p = ['<table class="tbl"><thead><tr><th>ID</th><th>Name</th><th>Family</th>'
+         '<th>Status</th><th class="num">P</th><th class="num">Capacity</th>'
+         '<th class="num">Cost</th><th class="num">Ortho</th>'
+         '<th class="num">Score</th><th>Registered content</th>'
+         '</tr></thead><tbody>']
+    for i in ideas.queue:
+        promoted = (f'<span class="ref-tag">{_esc(i.promoted_to)}</span>'
+                    if i.promoted_to else "")
+        warn = ("" if i.score_ok else
+                f'<div class="cell-note err">formula gives '
+                f'{i.score_computed:.2f}</div>')
+        p.append(
+            f'<tr><td class="mono">{_esc(i.id)}</td>'
+            f'<td class="mono">{_esc(i.name)}</td><td>{_esc(i.family)}</td>'
+            f'<td>{_esc(i.status)}{promoted}</td>'
+            f'<td class="num mono">{i.p_true:g}</td>'
+            f'<td class="num mono">{i.capacity:g}</td>'
+            f'<td class="num mono">{i.cost:g}</td>'
+            f'<td class="num mono">{i.ortho:g}</td>'
+            f'<td class="num mono">{i.score:g}{warn}</td>'
+            f'<td class="def"><details><summary>{_esc(i.body[:88])}…</summary>'
+            f'<div class="def-full">{_esc(i.body)}</div></details></td></tr>')
+    p.append('</tbody></table>')
+    return "".join(p)
+
+
+def _family_table(ideas: Ideas) -> str:
+    p = ['<table class="tbl"><thead><tr><th>Family</th><th>Status</th>'
+         '<th>Evidence</th></tr></thead><tbody>']
+    for f in ideas.families:
+        p.append(f'<tr><td class="mono">{_esc(f.family)}</td>'
+                 f'<td>{_esc(f.status)}</td>'
+                 f'<td class="fam-ev">{_esc(f.evidence)}</td></tr>')
+    p.append('</tbody></table>')
+    return "".join(p)
+
+
 def _status_chip(status: str | None) -> str:
     if not status:
         return '<span class="chip chip-none">control</span>'
@@ -338,18 +436,19 @@ class Context:
     registry: Registry
     ledger: Ledger
     cache: CacheReport
+    ideas: Ideas
     built_at: datetime
     commit: str
 
 
 def gather(deep: bool = False) -> Context:
     return Context(registry=load_registry(), ledger=load_ledger(),
-                   cache=scan_cache(deep=deep), built_at=datetime.now(),
-                   commit=_git_describe())
+                   cache=scan_cache(deep=deep), ideas=load_ideas(),
+                   built_at=datetime.now(), commit=_git_describe())
 
 
 def render(ctx: Context) -> str:
-    reg, led, cache = ctx.registry, ctx.ledger, ctx.cache
+    reg, led, cache, ideas = ctx.registry, ctx.ledger, ctx.cache, ctx.ideas
     latest = led.latest
     counts = reg.status_counts()
     standings = {s.factor_id: s for s in (latest.standings if latest else [])}
@@ -387,6 +486,42 @@ def render(ctx: Context) -> str:
         f'<button class="f-btn" data-f="{_esc(s)}">{_esc(s)} '
         f'<span class="f-n">{n}</span></button>'
         for s, n in sorted(counts.items(), key=lambda kv: -kv[1]))
+
+    # The ideation queue. IDEAS.md may not exist (it postdates the registry),
+    # so the whole section is conditional rather than rendering an empty shell.
+    queue_section = ""
+    if ideas.queue:
+        head = ideas.head
+        head_line = (f'Rule 2 — take from the head: <strong>{_esc(head.id)} '
+                     f'{_esc(head.name)}</strong> ({_esc(head.family)}, score '
+                     f'{head.score:g})' if head else
+                     'No backlog item is available to take.')
+        bad = ideas.mis_scored()
+        warn = ("" if not bad else
+                f'<p class="check bad">{len(bad)} score(s) disagree with '
+                f'分 = P × 容量 ÷ 成本 × 正交: '
+                f'{_esc(", ".join(i.id for i in bad))}</p>')
+        hdr = ("" if ideas.header_ok else
+               '<p class="check bad">IDEAS.md queue columns no longer match the '
+               'expected header — values may be mis-mapped.</p>')
+        infra = ("" if not ideas.infra else
+                 '<p class="check">Infrastructure: ' + " · ".join(
+                     f"<strong>{_esc(u.id)} {_esc(u.name)}</strong> [{_esc(u.status)}]"
+                     for u in ideas.infra) + '</p>')
+        queue_section = f"""<section>
+  <h2>Ideation queue</h2>
+  <div class="card">{_queue_chart(ideas)}</div>
+  <p class="check">{head_line}</p>
+  {hdr}{warn}{infra}
+  <details class="drawer"><summary>Queue detail — {len(ideas.queue)} ideas, six fields each</summary>
+    <div class="card scroll">{_queue_table(ideas)}</div>
+  </details>
+</section>
+
+<section>
+  <h2>Family coverage</h2>
+  <div class="card scroll">{_family_table(ideas)}</div>
+</section>"""
 
     mini = ""
     if len(led.refreshes) > 1:
@@ -478,6 +613,9 @@ h2 {{ font-size:13px; text-transform:uppercase; letter-spacing:.07em;
 .tick {{ fill:var(--muted); font-size:10.5px; font-variant-numeric:tabular-nums; }}
 .cat {{ fill:var(--ink); font-size:12px; font-weight:600; }}
 .cat-sub {{ fill:var(--muted); font-size:9.5px; font-family:ui-monospace,Menlo,monospace; }}
+.cat-q {{ fill:var(--ink); font-size:11.5px; font-weight:600;
+  font-family:ui-monospace,Menlo,monospace; }}
+.fam-ev {{ color:var(--ink2); font-size:12px; max-width:520px; }}
 /* A tip label can land on a threshold rule (C16's +3.33 sits between the
    2.89 and 3.59 rules). The surface-colored halo is the surface-ring spec
    applied to text: the label stays readable without a box or a nudge that
@@ -587,6 +725,8 @@ h2 {{ font-size:13px; text-transform:uppercase; letter-spacing:.07em;
 </section>
 
 {f'<section><h2>Accounting history</h2><div class="card"><div class="minis">{mini}</div></div></section>' if mini else ''}
+
+{queue_section}
 
 <section>
   <h2>Candidate registry</h2>
