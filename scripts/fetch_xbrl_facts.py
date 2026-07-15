@@ -35,7 +35,8 @@ Output columns:
     period        fiscal period end date of the submission (datetime)
     filed         official filing date (datetime)
     accepted      EDGAR acceptance datetime as given by the dataset (ET)
-    tag           XBRL tag (16-tag whitelist, EPS/revenue/income/BS/shares)
+    tag           XBRL tag (27-tag whitelist: EPS/revenue/income/BS/cash-flow/
+                  current-items/gross-profit/shares)
     version       taxonomy version, e.g. us-gaap/2025
     ddate         period end date the VALUE refers to (datetime; a filing
                   also carries prior-period comparatives, kept as filed)
@@ -94,6 +95,23 @@ WHITELIST = {
     "CommonStockSharesOutstanding",
     "WeightedAverageNumberOfSharesOutstandingBasic",
     "WeightedAverageNumberOfDilutedSharesOutstanding",
+    # --- 2026-07-15 extension: cash flow, current items, gross-profit inputs ---
+    # Operating cash flow; the ...ContinuingOperations variant is the fallback
+    # for filers that tag only that form.
+    "NetCashProvidedByUsedInOperatingActivities",
+    "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
+    # Current balance-sheet items (working-capital / accrual inputs).
+    "AssetsCurrent",
+    "LiabilitiesCurrent",
+    "InventoryNet",
+    "ReceivablesNetCurrent",
+    "AccountsReceivableNetCurrent",  # fallback for ReceivablesNetCurrent
+    "PropertyPlantAndEquipmentNet",
+    # Gross profit and its inputs; CostOfGoodsAndServicesSold is the fallback
+    # for CostOfRevenue.
+    "GrossProfit",
+    "CostOfRevenue",
+    "CostOfGoodsAndServicesSold",
 }
 DEFAULT_START = "2010q3"
 REQUEST_INTERVAL = 1.0  # polite sequential fetching, ~1 request/second
