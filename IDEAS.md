@@ -14,8 +14,16 @@ FACTORS.md 管"测一个想法",这里管"选择测什么"。想法先登记、�
 4. 文献先验里的数字登记时可标 **(待核)**;promotion 前必须核对原文或
    OSAP(openassetpricing.com),核不上的数字降 P 重排。
 5. 分数是先验:family 证据出来后更新分数并注明日期,不删旧分。
-6. Promotion 时同步给 family 钉 look 预算 + stop rule(进预注册账本,
-   镜像 2026-07-14 的 family/role 修订)。
+6. **Family 预算与退出规则(= 账本 binding rule 6,2026-07-15 起)**:
+   family 在第一个成员领 C-ID 注册时,同一条 ledger 行里钉四样 —
+   look 预算(全体成员 primary + pinned diagnostics 合计)、日历截止
+   (默认开族起 6 周)、stop rule(默认:预算用尽或到期时最好 primary
+   sn incr \|t\| < 1.5 → family 永久关闭)、reopening bar(默认 2.0,
+   仅对未试过的新构造开放 — C24 先例)。过 1.5 的成员走 member 级
+   candidate 流程,confirmation 不占 family 预算。预算修订仅限该
+   family 下一次计算之前,且进账本留痕。U1 换 universe 后,因栖息地
+   关闭的 family 重新钉预算即可重开(2.0 bar 不跨 universe)。
+   账本里的版本是 binding,这里是镜像。
 
 ## 排序
 
@@ -61,8 +69,8 @@ FACTORS.md 管"测一个想法",这里管"选择测什么"。想法先登记、�
 | 8-K 事件 | 研究上有真效应,live 关闭 | C11 −2.0(candidate,月度);C15 gate-2 成本 ≈ gross;item/tone 轴死(C12–C14) |
 | Form 4 insider | 关闭待新构造 | C16 = 成分+慢 regime,无可变现 timing;C20 rejected(episodic 读法未测,需另注册) |
 | 12b-25 / SC 13D | 一次性测毕 | C18、C23 rejected |
-| XBRL 基本面 | OPEN | C17 +2.01 candidate;C25–C27 evaluated → 全部 rejected 2026-07-15(sn incr −1.22/+0.36/+0.47 < 1.5)— 大盘栖息地对经典基本面因子同样不友好,U1 的又一条证据 |
-| options-xs | 未开,队列头部 | I1–I3;数据在手 |
+| XBRL 基本面 | **对新成员关闭**(现 universe) | C17 +2.01 candidate = 唯一存活成员(走自己的 pinned path);C25–C29 五连拒 2026-07-15(−1.22/+0.36/+0.47/−0.92/+0.29,全 < 1.5)— C28/C29 注册时即框定为最后两枪,预算如期执行;大盘栖息地对经典基本面因子不友好,U1 的最强一条证据;U1 后重钉预算重开 |
+| options-xs | 未开,队列头部,**预算已钉**(2026-07-15) | I1–I3;数据在手;预算:每成员 1 primary + ≤2 pinned diagnostics,家族合计 ≤9 looks / 开族起 6 周;stop:三个 primary 全 \|t\| < 1.5 → 关闭,reopen 2.0;xs≈61 → MDE@80% ≈ IC 0.03,每成员注册时重推 power line;IV 面板建设是数据工程不算 look,member 1 注册前先过单名 IV 覆盖 QA gate |
 | liquidity-volume | 未开 | I9;数据在手但半数被 B4/B6 controls 张成,S&P 500 栖息地先验低,U1 后上调 |
 | ownership-flow | 未开 | I5、I6;I6 先验依赖 U1 |
 | alt-activity | 未开,先验中低 | I7、I8 |
