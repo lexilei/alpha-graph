@@ -1,10 +1,15 @@
 """Synthetic unit tests for C24 — the 10-Q YoY Lazy Prices min-edit measure and
-the freshest-filing combined stream (signals/lazy_prices_edit_10q.py).
+the freshest-filing combined stream (signals/lazy_prices_edit_10q.py), plus the
+judge's additive freshness filter (scripts/factor_orthogonality.py).
 
 Covers: C2's YoY pair enumeration reused verbatim (same-fiscal-quarter ~365d,
-NOT adjacent quarters), the pinned digit-free ``[a-z]+`` tokenizer, and the
-combined-stream same-day dedup keep-last.
+NOT adjacent quarters), the pinned digit-free ``[a-z]+`` tokenizer, the
+combined-stream same-day dedup keep-last, the ml_combiner loader's
+missing-either-cache -> None contract, and the trading-day staleness filter.
 """
+
+import importlib.util
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -139,3 +144,127 @@ def test_combine_fresh_stream_pools_both_forms():
     c = m.combine_fresh_stream(k, q)
     assert len(c) == 3                          # no same-day collision -> all kept
     assert set(c["sim_minedit_fresh"]) == {0.7, 0.8, 0.85}
+
+
+# --------------------------------------------------------------------------- #
+# ml_combiner loader: missing-either-cache -> None (mirrors C7); date carried
+# as a value through the as-of merge
+# --------------------------------------------------------------------------- #
+
+def _write_min_caches(d: Path):
+    pd.DataFrame({"ticker": ["A"], "filing_date": ["2020-12-20"],
+                  "sim_minedit_alpha_10k": [0.7]}).to_parquet(
+        d / "lazy_prices_edit_alpha.parquet", index=False)
+    pd.DataFrame({"ticker": ["A"], "filing_date": ["2021-03-05"],
+                  "prev_filing_date": ["2020-03-06"],
+                  "sim_minedit_10q": [0.9]}).to_parquet(
+        d / "lazy_prices_edit_10q.parquet", index=False)
+
+
+def test_loader_missing_either_cache_returns_none(tmp_path):
+    from alpha_graph.signals.ml_combiner import _load_sim_minedit_fresh
+    kpath = tmp_path / "lazy_prices_edit_alpha.parquet"
+    # neither cache -> None
+    assert _load_sim_minedit_fresh(kpath) is None
+    # only the 10-K cache -> None (10-Q sibling missing)
+    pd.DataFrame({"ticker": ["A"], "filing_date": ["2020-12-20"],
+                  "sim_minedit_alpha_10k": [0.7]}).to_parquet(kpath, index=False)
+    assert _load_sim_minedit_fresh(kpath) is None
+    # only the 10-Q cache -> None (10-K `path` missing)
+    kpath.unlink()
+    pd.DataFrame({"ticker": ["A"], "filing_date": ["2021-03-05"],
+                  "prev_filing_date": ["2020-03-06"],
+                  "sim_minedit_10q": [0.9]}).to_parquet(
+        tmp_path / "lazy_prices_edit_10q.parquet", index=False)
+    assert _load_sim_minedit_fresh(kpath) is None
+
+
+def test_loader_both_caches_returns_fresh_with_date_value(tmp_path):
+    from alpha_graph.signals.ml_combiner import _load_sim_minedit_fresh
+    _write_min_caches(tmp_path)
+    out = _load_sim_minedit_fresh(tmp_path / "lazy_prices_edit_alpha.parquet")
+    assert list(out.columns) == [
+        "ticker", "filing_date", "sim_minedit_fresh", "sim_minedit_fresh_date"]
+    # the helper date column equals the filing_date, as a value (not the key)
+    assert (out["sim_minedit_fresh_date"] == out["filing_date"]).all()
+    assert set(out["sim_minedit_fresh"]) == {0.7, 0.9}
+
+
+def test_c24_fresh_date_carried_as_value_through_asof(tmp_path, monkeypatch):
+    # end-to-end: sim_minedit_fresh attaches at t+1 (filing merge), while
+    # sim_minedit_fresh_date carries the TRUE (unlagged) filing_date as a value.
+    import alpha_graph.signals.ml_combiner as ml
+    monkeypatch.setattr(ml, "CACHE_DIR", tmp_path)
+    cal = pd.bdate_range("2020-01-06", periods=8)
+    pd.DataFrame([{"ticker": "AAA", "date": d, "close": 100.0 + i,
+                   "volume": 1e6, "ret_21d": 0.01}
+                  for i, d in enumerate(cal)]).to_parquet(
+        tmp_path / "market_data.parquet", index=False)
+    pd.DataFrame({"ticker": ["AAA"], "filing_date": [cal[2]],
+                  "sim_minedit_alpha_10k": [0.7]}).to_parquet(
+        tmp_path / "lazy_prices_edit_alpha.parquet", index=False)
+    pd.DataFrame({"ticker": ["AAA"], "filing_date": [cal[5]],
+                  "prev_filing_date": [cal[1]],
+                  "sim_minedit_10q": [0.9]}).to_parquet(
+        tmp_path / "lazy_prices_edit_10q.parquet", index=False)
+
+    panel = ml.build_feature_panel(pit_universe=False, availability_lag_days=1,
+                                   daily_signals=True)
+    g = panel.set_index("date")
+    assert g["sim_minedit_fresh"][cal[:3]].isna().all()       # 10-K unusable t..t
+    assert (g["sim_minedit_fresh"][cal[3:5]] == 0.7).all()    # 10-K from t+1
+    assert (g["sim_minedit_fresh"][cal[6:]] == 0.9).all()     # 10-Q from t+1
+    # the disclosure-date value is the true filing_date (unlagged), carried through
+    assert (g["sim_minedit_fresh_date"][cal[3:5]] == cal[2]).all()
+    assert (g["sim_minedit_fresh_date"][cal[6:]] == cal[5]).all()
+
+
+# --------------------------------------------------------------------------- #
+# Judge freshness filter (scripts/factor_orthogonality.py) — additive
+# --------------------------------------------------------------------------- #
+
+def _load_judge():
+    spec = importlib.util.spec_from_file_location(
+        "fo_c24",
+        Path(__file__).resolve().parents[1] / "scripts" / "factor_orthogonality.py")
+    fo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fo)
+    return fo
+
+
+def test_trading_day_staleness_counts_sessions():
+    fo = _load_judge()
+    cal = pd.bdate_range("2020-01-06", periods=10).values  # d0..d9
+    rows = pd.Series([cal[9], cal[9], cal[9]])
+    disc = pd.Series([cal[4], cal[9], pd.NaT])
+    stale = fo._trading_day_staleness(rows, disc, cal)
+    assert stale[0] == 5.0        # sessions in (d4, d9]: d5,d6,d7,d8,d9
+    assert stale[1] == 0.0        # same session
+    assert stale[2] == -1.0       # NaT sentinel
+
+
+def test_apply_freshness_filter_fresh_and_stale_complement():
+    fo = _load_judge()
+    cal = pd.bdate_range("2020-01-06", periods=10).values
+    pm = pd.DataFrame({
+        "ticker": ["A", "B", "C", "D"],
+        "month": pd.PeriodIndex(["2020-01"] * 4, freq="M"),
+        "date": [cal[9]] * 4,
+        "cand": [1.0, 2.0, 3.0, 4.0],
+        "disc": [cal[4], cal[0], pd.NaT, cal[8]],   # stale 5, 9, NaT, 1
+    })
+    fresh = fo.apply_freshness_filter(pm, "disc", cal, max_days=5)
+    assert set(fresh["ticker"]) == {"A", "D"}       # <=5 td old; C (NaT) dropped
+    stale = fo.apply_freshness_filter(pm, "disc", cal, min_days=6)
+    assert set(stale["ticker"]) == {"B"}            # >=6 td old
+    both = fo.apply_freshness_filter(pm, "disc", cal, max_days=5, min_days=1)
+    assert set(both["ticker"]) == {"A", "D"}
+
+
+def test_apply_freshness_filter_missing_col_raises():
+    fo = _load_judge()
+    cal = pd.bdate_range("2020-01-06", periods=5).values
+    pm = pd.DataFrame({"date": [cal[4]], "month": pd.PeriodIndex(["2020-01"],
+                                                                 freq="M")})
+    with pytest.raises(ValueError):
+        fo.apply_freshness_filter(pm, "nope", cal, max_days=5)

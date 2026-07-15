@@ -190,6 +190,29 @@ def _load_cos_latest_filing(path: Path) -> pd.DataFrame | None:
     return comb
 
 
+def _load_sim_minedit_fresh(path: Path) -> pd.DataFrame | None:
+    """C24 sim_minedit_fresh: the freshest-filing combined stream (10-K digit-
+    free min-edit ∪ 10-Q YoY min-edit, CMN 2020). Mirrors C7's
+    ``_load_cos_latest_filing``: the union of the digit-free 10-K min-edit pairs
+    (``path``, sim_minedit_alpha_10k) and the 10-Q YoY min-edit pairs (the
+    sibling cache), raw scores pooled, a same-day 10-K + 10-Q keeping the last
+    row (``combine_fresh_stream``).
+
+    Also carries ``sim_minedit_fresh_date`` = each row's filing_date AS A VALUE
+    (not a merge key), so after the filing-date as-of merge the judge's
+    ``--fresh-max-days`` can measure each panel row's disclosure staleness. Needs
+    BOTH pair caches (``path`` is the 10-K cache; the 10-Q cache sits next to
+    it)."""
+    q_path = path.parent / "lazy_prices_edit_10q.parquet"
+    if not (path.exists() and q_path.exists()):
+        return None
+    from alpha_graph.signals.lazy_prices_edit_10q import combine_fresh_stream
+    comb = combine_fresh_stream(pd.read_parquet(path), pd.read_parquet(q_path))
+    comb["sim_minedit_fresh_date"] = comb["filing_date"]
+    return comb[["ticker", "filing_date", "sim_minedit_fresh",
+                 "sim_minedit_fresh_date"]]
+
+
 def _load_sue_pead(path: Path) -> pd.DataFrame | None:
     """C17 sue_pead: as-filed diluted XBRL EPS SUE (disclosure_date from the
     builder: last Item-2.02 8-K date else statement filed date, acceptance-
@@ -322,6 +345,19 @@ FACTOR_SOURCES: list[FactorSource] = [
     # `fa7fe4d`).
     FactorSource("C21-alpha", "lazy_prices_edit_alpha.parquet",
                  ("sim_minedit_alpha_10k",), "filing_date", "filing"),
+    # C24: the freshness-corrected Lazy Prices stream — the digit-free 10-K
+    # min-edit ∪ 10-Q YoY min-edit combined stream (C7's construction on the
+    # paper's edit measure; signals/lazy_prices_edit_10q.py). One filing-date
+    # as-of merge, lagged on every grid like C1/C7 (v0: t+1). The loader unions
+    # the two min-edit caches (returns None if EITHER is missing) and carries
+    # sim_minedit_fresh_date = the filing_date AS A VALUE so the judge's
+    # --fresh-max-days can measure disclosure staleness. Registered 2026-07-15
+    # (commit b6bd1f9).
+    FactorSource("C24", "lazy_prices_edit_alpha.parquet",
+                 ("sim_minedit_fresh", "sim_minedit_fresh_date"),
+                 "filing_date", "filing", loader=_load_sim_minedit_fresh,
+                 missing_msg="C24 needs both the 10-K digit-free and 10-Q "
+                             "min-edit caches — sim_minedit_fresh NaN"),
 ]
 
 

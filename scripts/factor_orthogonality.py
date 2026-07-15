@@ -51,6 +51,52 @@ def to_monthly(panel: pd.DataFrame) -> pd.DataFrame:
     return panel
 
 
+def _trading_day_staleness(row_dates: pd.Series, disclosure_dates: pd.Series,
+                           calendar: np.ndarray) -> np.ndarray:
+    """Trading days in (disclosure_date, row_date] per row, using `calendar`
+    (sorted unique trading days). NaT disclosure -> -1 sentinel. A filing not on
+    a trading day counts from the next trading day it precedes (searchsorted
+    'right' on both ends), so the difference is the number of market sessions
+    that elapsed after the disclosure through the row's date."""
+    cal = np.sort(np.asarray(calendar, dtype="datetime64[ns]"))
+    rd = pd.to_datetime(row_dates).values.astype("datetime64[ns]")
+    dd = pd.to_datetime(disclosure_dates)
+    have = dd.notna().values
+    out = np.full(len(row_dates), -1.0)
+    r_pos = np.searchsorted(cal, rd[have], side="right")
+    d_pos = np.searchsorted(cal, dd[have].values.astype("datetime64[ns]"),
+                            side="right")
+    out[have] = (r_pos - d_pos).astype(float)
+    return out
+
+
+def apply_freshness_filter(panel_m: pd.DataFrame, date_col: str,
+                           calendar: np.ndarray, max_days: int | None = None,
+                           min_days: int | None = None) -> pd.DataFrame:
+    """Restrict monthly rows by the trading-day staleness of the candidate's
+    underlying disclosure date (`date_col`, carried in the panel as a value).
+
+    max_days: keep rows whose disclosure is <= max_days trading days old
+              (the fresh cross-section — a rolling event window).
+    min_days: keep rows whose disclosure is >= min_days trading days old
+              (the stale complement — role=null control).
+
+    Rows with no disclosure date (NaT) are dropped either way; they carry a NaN
+    candidate and would be dropped by the per-month evaluate() anyway. Additive:
+    unused when neither bound is passed."""
+    if date_col not in panel_m.columns:
+        raise ValueError(
+            f"--fresh-date-col {date_col!r} not in panel columns "
+            f"(have {sorted(panel_m.columns)[:12]}...)")
+    stale = _trading_day_staleness(panel_m["date"], panel_m[date_col], calendar)
+    keep = stale >= 0                       # drop NaT-disclosure (sentinel -1)
+    if max_days is not None:
+        keep &= stale <= max_days
+    if min_days is not None:
+        keep &= stale >= min_days
+    return panel_m[keep].copy()
+
+
 # --------------------------------------------------------------------------- #
 # Cross-sectional residualization + IC
 # --------------------------------------------------------------------------- #
@@ -263,6 +309,19 @@ def main():
     p.add_argument("--lag-controls", action="store_true",
                    help="shift the 6 in-panel price/volume controls by one "
                         "trading day (factorial sensitivity cell)")
+    p.add_argument("--fresh-max-days", type=int, default=None,
+                   help="freshness filter: keep only monthly rows whose "
+                        "candidate disclosure date (--fresh-date-col) is <= N "
+                        "TRADING days before the month-end (fresh-only "
+                        "cross-section). Additive; defaults unchanged.")
+    p.add_argument("--stale-min-days", type=int, default=None,
+                   help="staleness filter: keep only monthly rows whose "
+                        "candidate disclosure date is >= N TRADING days before "
+                        "the month-end (the stale complement / null control)")
+    p.add_argument("--fresh-date-col", default=None,
+                   help="disclosure-date column carried in the panel, used by "
+                        "--fresh-max-days / --stale-min-days to compute "
+                        "trading-day staleness")
     args = p.parse_args()
     if args.accepted == ["BASELINE"]:
         args.accepted = list(BASELINE)
@@ -271,11 +330,25 @@ def main():
 
     panel = load_panel(args.panel, pit=args.pit, lag=args.lag, daily=args.daily,
                        lag_controls=args.lag_controls)
+    # Full trading calendar for the freshness filter, captured BEFORE any
+    # start/end clip so staleness is measured against real market sessions.
+    calendar = np.sort(panel["date"].dropna().unique())
     if args.start:
         panel = panel[panel["date"] >= pd.Timestamp(args.start)]
     if args.end:
         panel = panel[panel["date"] <= pd.Timestamp(args.end)]
     panel_m = to_monthly(panel)
+    if args.fresh_max_days is not None or args.stale_min_days is not None:
+        if not args.fresh_date_col:
+            p.error("--fresh-max-days / --stale-min-days require --fresh-date-col")
+        n0 = len(panel_m)
+        panel_m = apply_freshness_filter(
+            panel_m, args.fresh_date_col, calendar,
+            max_days=args.fresh_max_days, min_days=args.stale_min_days)
+        logger.info(
+            f"Freshness filter [{args.fresh_date_col}, "
+            f"max_days={args.fresh_max_days}, min_days={args.stale_min_days}]: "
+            f"{n0} -> {len(panel_m)} monthly rows kept")
     logger.info(f"Monthly panel: {panel_m['month'].nunique()} months, "
                 f"{panel_m['ticker'].nunique()} tickers")
 
