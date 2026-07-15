@@ -29,8 +29,24 @@ FACTORS.md 管"测一个想法",这里管"选择测什么"。想法先登记、�
 
 **分 = P(真) × 容量 ÷ 成本 × 正交**
 
-- **P(真)** 1–5:5 = 发表后复现存活且机制清楚;3 = 有文献但衰减明显或
-  栖息地与我的 universe 不符;1 = 纯 anecdote、无同行评审证据。
+- **P(真)** 1–5 — 2026-07-15 起按衰减文献核定的规则打(出处与原始文件:
+  `data/reference/{hxz,osap,decay_literature}/`;OSAP 发表后 t 一律从
+  `PredictorLSretWide.csv` 本地重算复核;MP 精确系数来自 82 特征草稿版
+  PDF,发表版定性一致、精确数字待机构访问):
+  - 地板:同行评审异象 P≥3 — 纯数据挖掘偏差只占 in-sample 收益 ~12.3%
+    (SE 1.7pp,Chen-Zimmermann RAPS 2020);往下压靠罚则,不靠发表怀疑论。
+  - 发表后 OOS 证据仍在 → P=4;仍在 + 机制扎实 + 栖息地匹配 → 才给 5
+    (平均发表后衰减 ~50-58%,McLean-Pontiff JF 2016)。
+  - 只有 in-sample → 封顶 3(MP:纯统计偏差 ≈ 26%)。
+  - 发表后证据已死(t≈0 或反号)→ P≤2;HXZ NYSE-VW(最接近本面板的
+    已发表设计)直接 FAIL → P=1(U1 条件)。
+  - **栖息地罚 −1**:效应集中于小盘/低流动/高特质波动(MP Table 8:
+    idio +4.05 p<.001、size −1.49 p=.013、$vol −1.67 p<.01 — 本面板恰在
+    拟合残留 ≈0 的角落;Jacobs-Müller 2020:US 是唯一有可靠发表后衰减
+    的市场)。U1 恢复这 1 分。
+  - **本面板校准**:HXZ-VW passer 已在本面板测过 5 例(C25/C26/C28/
+    C29/C17),仅 C17 边缘存活 → "HXZ-VW pass 且未测"默认 P=2。
+  - 1 = 纯 anecdote、无同行评审证据。
 - **容量** 1–5:5 = 宽截面、日频可交易;3 = 窄截面或月频;1 = 每年个位数
   事件(参考 C16 的 MIN_XS 教训:事件因子标准 judge 打不了分)。
 - **成本** 1–5:1 = 数据在手、一周内出 primary look;3 = 需要新抓取/解析
@@ -42,20 +58,26 @@ FACTORS.md 管"测一个想法",这里管"选择测什么"。想法先登记、�
 
 | ID | name | family | status | P | 容量 | 成本 | 正交 | 分 | 登记内容 |
 |----|------|--------|--------|---|------|------|------|----|----------|
-| I1 | `iv_skew_xs` | options-xs | backlog | 4 | 3 | 2 | 1.2 | 7.2 | **机制**:知情交易者先在期权市场表达负面信息(OTM put 需求 → smirk 变陡),股票市场消化滞后数周;对手盘 = 只看股票的投资者。**数据**:61 单名 EOD NBBO 在手(`data/raw_singles/`),vol_smile 的 IV/SVI 管道可移植。**文献**:Xing-Zhang-Zhao 2010 JFQA — smirk 陡度预测未来低收益,风险调整 ~10%/yr、持续数月(待核);OSAP 存活性待核。**拥挤**:期权数据门槛保护,中等。**边**:数据护城河 + 现成期权管道。**成本**:管道移植,~2。61 名截面窄 — 先作 family 先验验证,过了再决定扩数据。 |
-| I2 | `cp_iv_spread` | options-xs | backlog | 4 | 3 | 2 | 1.2 | 7.2 | **机制**:put-call parity 偏离 = 期权市场的方向性私有信息,股价滞后跟随;对手盘同 I1。**数据**:同 I1,在手。**文献**:Cremers-Weinbaum 2010 JFQA — call−put IV spread(同 strike/expiry)预测未来一周~一月收益,~50bp/周量级(待核);An-Ang-Bali-Cakici 2014 JF — ΔIV_call 正向、ΔIV_put 负向预测(待核)。**拥挤**:知名但有数据门槛。**边/成本**:同 I1。与 I1 同 family,预算合并钉。 |
-| I9 | `amihud_illiq` | liquidity-volume | backlog | 2 | 4 | 1 | 0.8 | 6.4 | **机制**:流动性溢价 — 12m 均值 \|ret\|/$vol 高 = 持有难交易股票的补偿;对手盘 = 需要即时流动性的投资者。**数据**:价量面板在手,成本 1。**文献**:Amihud 2002(经典;OSAP 存活待核)。**反证**:Ben-Rephael-Kadan-Wohl — 溢价 2000 年后大幅衰减、小/微盘集中,S&P 500 是最液段(U1 后 P 上调)。**拥挤**:极高。**正交 0.8(关键风险)**:与 B6 log_dollar_volume 高相关,分子带 \|ret\| 是与 controls 的唯一构造差异,增量必须恰好来自它。**家族预算(开族时钉)**:I9/I13/I14 合计 ≤3 primaries,一人一枪、无 diagnostics;stop 按 rule 6 默认;N 税警告 — 美元成本 ≈ 0 但每 look 照常抬全账本 ceiling。Pastor-Stambaugh 流动性 beta 出名地脆,不登记。 |
-| I13 | `turnover_dnr` | liquidity-volume | backlog | 2 | 4 | 1 | 0.8 | 6.4 | **机制**:低换手 = 流动性差 + 关注度低 → 要求更高回报(Datar-Naik-Radcliffe 1998,待核)。**数据**:turnover = volume / shares,B7 的 PIT shares 已在手 — 可全 PIT 构造,成本 1。**正交 0.8**:与 B4/B6 相关但口径不同(share 计量 vs dollar 计量);增量来源是"换手率水平"独有的部分。**反证/拥挤**:同 I9 — 溢价衰减、大盘最弱、人人有数据。占 I9 行钉的 3-primary 家族预算之一。 |
-| I14 | `gkm_high_volume` | liquidity-volume | backlog | 2 | 4 | 1 | 0.8 | 6.4 | **机制**:可见性假说 — 极端放量事件把股票拉进投资者视野 → 买压(个人投资者只买引起注意的票)→ 数周正漂移(Gervais-Kaniel-Mingelgrin 2001 JF,待核 OSAP 存活)。**构造(差异化关键)**:事件式 — 当日/当周成交量落在其自身 trailing 窗口的极端分位(GKM 原文 top decile),**不是**水平 z-score;B4 volume_zscore 就是异常量水平,不差异化就是重测自家 control,正交 0.8 是这么来的。**数据**:在手,成本 1。**反证**:发表后衰减;可见性机制对本就人人盯着的 S&P 500 大盘先验弱(U1 后上调)。占 I9 行钉的 3-primary 家族预算之一。 |
-| I3 | `iv_rv_spread_xs` | options-xs | backlog | 3 | 3 | 2 | 1.2 | 5.4 | **机制**:单名 VRP 截面差异 = 对冲需求/彩票偏好定价差;比 I1/I2 更偏风险溢价而非信息。**数据**:在手(RV 管道 vol_smile 已有,`signals/rv`)。**文献**:Bali-Hovakimian 2009 — implied−realized spread 预测截面收益(待核)。**拥挤**:中等。**注意**:与 vol_smile 的时序 VRP 负结果不冲突(那是市场级、卖方策略;这是截面相对定价)。 |
-| I6 | `short_interest_xs` | ownership-flow | backlog | 3 | 3 | 2 | 1.2 | 5.4 | **机制**:卖空约束下负面信息进价慢;高 SI = 知情空头聚集 → 低收益;对手盘 = 借券成本盲的多头。**文献**:Boehmer-Jones-Zhang 等,发表后在难借券段存活(待核 OSAP)。**数据**:FINRA 双周 SI 免费;Sharadar 含 SI 字段(待核)。**拥挤**:高,但残余集中在小盘难借段。**注意**:S&P 500 大盘易借,先验偏低 — 此条在 universe 扩展(见基建 U1)之后先验显著上调,当前分按现 universe 打。 |
-| I17 | `os_volume_ratio` | options-xs | bench | 3 | 3 | 2 | 1.2 | 5.4 | **预算外替补**:options-xs 已按 I1–I3 钉 ≤9 looks,I17 测前须 rule-6 修订(家族首次计算前修订合法)。**机制**:知情者偏好期权(杠杆 + 做空约束)→ 期权/股票成交量比(O/S)高 = 私有信息浓度高 → 负向预测未来收益(Johnson-So 2012 JFE,待核 OSAP)。**数据(条件)**:需单名期权日成交量 — raw_singles 的 ThetaData EOD 是否含 volume/OI 字段**待核**;字段在则成本 2,要补下载则 4(分数按 2 打,核完重打)。**拥挤**:中,数据门槛保护。**正交 1.2**:量比信息与 IV 形状类(I1–I3)不同源。 |
-| I5 | `breadth_13f` | ownership-flow | backlog | 3 | 4 | 3 | 1.1 | 4.4 | **机制**:Miller 分歧+卖空约束 — 机构持有广度下降 = 悲观者被挤出价格 → 高估 → 低收益。**数据**:EDGAR 13F 免费,45 天滞后是天然 PIT 可用性(比文本家族干净)。**文献**:Chen-Hong-Stein 2002 JFE — breadth 变化预测截面收益(待核发表后衰减)。**拥挤**:13F 被大量使用,该构造中等。**边**:EDGAR 管道现成。**成本**:3 — 13F 解析出名地脏(CUSIP↔ticker 映射、份额单位错报),QA 量大。与已关的文本家族不同源:这是 ownership 数据不是文本。 |
-| I18 | `rn_skew_bkm` | options-xs | bench | 3 | 3 | 3 | 1.2 | 3.6 | **预算外替补**(同 I17,测前须 rule-6 修订)。**机制**:风险中性偏度 = 崩盘保险需求 / 彩票需求的截面定价差异(Conrad-Dittmar-Ghysels 2013、Bali-Murray;**方向在文献内有分歧,登记时必须预注册符号**,待核)。**数据**:BKM 无模型矩要求整条 smile — vol_smile 的 SVI 拟合管道可复用,成本 3。**正交 1.2**:三阶矩信息,与 I1 的 skew 斜率相关但不同构造(斜率 vs 积分矩),若 I1 先行且活,I18 增量另算。 |
+| I2 | `cp_iv_spread` | options-xs | backlog | 4 | 3 | 2 | 1.2 | 7.2 | **机制**:put-call parity 偏离 = 期权市场的方向性私有信息,股价滞后跟随;对手盘 = 只看股票的投资者。**数据**:61 单名 EOD NBBO 在手(`data/raw_singles/`),vol_smile 的 IV/SVI 管道可移植。**文献**:Cremers-Weinbaum 2010 JFQA — call−put IV spread(同 strike/expiry)预测未来一周~一月收益(量级待核原文);An-Ang-Bali-Cakici 2014 JF — ΔIV 方向性预测。**OSAP 已核(2026-07-15,`PredictorLSretWide.csv` 重算复核)**:CW 本身不在 OSAP;最近类比 CPVolSpread(Bali-Hovakimian 2009,call−put IV)**发表后 t=3.25、2011+ 3.13 — 存活**,P=4 维持,**现为队头**。**拥挤**:知名但有数据门槛。**成本**:管道移植 ~2。61 名截面窄 — 先作 family 先验验证,过了再决定扩数据。 |
+| I19 | `industry_momentum` | industry-momentum | backlog | 2 | 4 | 1 | 0.8 | 6.4 | **来源:HXZ 复现扫描(2026-07-15)。机制**:行业级信息反应不足 → 行业收益延续(Moskowitz-Grinblatt 1999);对手盘 = 只看个股的选股者。**HXZ NYSE-VW:0.68%/月 \|t\|=2.86,6m/12m 3.01/3.57 — 全 horizon PASS,大盘下最稳的动量变体之一**。**数据**:价格面板 + sector map 在手,成本 1。**设计冲突(开测前必须解决)**:这是纯跨行业信号,而 v0 primary judge 是 sector-neutral — **sn 会按构造消灭它**(旁证:C9 的 spillover 动量被 sn 砍半,说明行业动量在面板里真实存在)。开测前须预注册非 sn 的评价设计(raw incremental + 显式接受行业敞口),或者承认平台不做行业赌注、按 rule 2 写理由跳过。正交 0.8(与 B1/B5 相关 + 设计冲突)。P=2 按本面板校准。 |
+| I14 | `gkm_high_volume` | liquidity-volume | backlog | 2 | 4 | 1 | 0.8 | 6.4 | **机制**:可见性假说 — 极端放量事件把股票拉进投资者视野 → 买压(个人投资者只买引起注意的票)→ 数周正漂移(Gervais-Kaniel-Mingelgrin 2001 JF,待核 OSAP 存活)。**构造(差异化关键)**:事件式 — 当日/当周成交量落在其自身 trailing 窗口的极端分位(GKM 原文 top decile),**不是**水平 z-score;B4 volume_zscore 就是异常量水平,不差异化就是重测自家 control,正交 0.8 是这么来的。**数据**:在手,成本 1。**反证**:发表后衰减;可见性机制对本就人人盯着的 S&P 500 大盘先验弱(U1 后上调)。占 I9 行钉的 3-primary 家族预算之一。**双源无判决(2026-07-15)**:GKM 不在 HXZ 452,也不在 OSAP 212 — 无任何独立复现追踪;按规则 in-sample-only 封顶 3、栖息地 −1 → P=2 维持。 |
+| I21 | `volume_trend` | liquidity-volume | backlog | 2 | 4 | 1 | 0.8 | 6.4 | **来源:OSAP 扫描(2026-07-15)。机制**:成交量趋势(短窗均量 vs 长窗均量)先于价格调整(Haugen-Baker 1996;机制论述薄,更接近实证规律 — 这本身是个先验扣分项)。**OSAP 证据(重算复核)**:发表后 t=5.08、2011+ 仍 3.84(mean 0.49%/mo)— **trading 类唯一的现代存活者**,与 Amihud/turnover 的发表后全灭形成对照。**大警告**:EW 全 universe 证据,微盘可能承担全部;HXZ 452 无此变量,大盘判决缺失 → 按校准 P=2 不给 3。**数据**:在手,成本 1。**正交 0.8**:与 B4 volume_zscore 同源风险高(B4 是量的异常水平),构造必须用趋势/斜率差异化。开族时与 I14 竞争家族预算名额(I9/I13 已降 P=1)。 |
+| I1 | `iv_skew_xs` | options-xs | backlog | 3 | 3 | 2 | 1.2 | 5.4 | **P 4→3(2026-07-15,OSAP 重算复核)**:skew1(XZZ 2010)in-sample t=2.19,**发表后 t=1.20、2011+ 同 1.20** — 衰减但同号,按规则"发表后衰减仍正"= P=3,让出队头给 I2。**机制**:知情交易者先在期权市场表达负面信息(OTM put 需求 → smirk 变陡),股票市场消化滞后数周;对手盘 = 只看股票的投资者。**数据**:61 单名 EOD NBBO 在手,vol_smile 的 IV/SVI 管道可移植,成本 2。**拥挤**:期权数据门槛保护,中等。与 I2 同族,预算已钉(≤9 looks)。 |
+| I3 | `iv_rv_spread_xs` | options-xs | backlog | 3 | 3 | 2 | 1.2 | 5.4 | **机制**:单名 VRP 截面差异 = 对冲需求/彩票偏好定价差;比 I1/I2 更偏风险溢价而非信息。**数据**:在手(RV 管道 vol_smile 已有,`signals/rv`)。**文献**:Bali-Hovakimian 2009 — implied−realized spread 预测截面收益;**旁证(2026-07-15)**:同论文的 call−put 构造(OSAP CPVolSpread)发表后 3.25 存活,IV−RV 构造本身 OSAP 无独立追踪 → in-sample-only 封顶 P=3 维持。**拥挤**:中等。**注意**:与 vol_smile 的时序 VRP 负结果不冲突(那是市场级、卖方策略;这是截面相对定价)。 |
+| I6 | `short_interest_xs` | ownership-flow | backlog | 3 | 3 | 2 | 1.2 | 5.4 | **机制**:卖空约束下负面信息进价慢;高 SI = 知情空头聚集 → 低收益;对手盘 = 借券成本盲的多头。**文献**:Boehmer-Jones-Zhang 等,发表后在难借券段存活(待核 OSAP)。**数据**:FINRA 双周 SI 免费;Sharadar 含 SI 字段(待核)。**拥挤**:高,但残余集中在小盘难借段。**注意**:S&P 500 大盘易借,先验偏低 — 此条在 universe 扩展(见基建 U1)之后先验显著上调,当前分按现 universe 打。**OSAP 已核(2026-07-15,重算复核)**:ShortInterest(Dechow 等 2001)**发表后 t=3.98、2011+ 3.10 — 发表后增强**(全 universe EW)→ 基线 P=4 − 栖息地罚 1 = **P=3 维持,但从"偏低的 3"变成"有引用的 3"**;警告:IO_ShortInterest 变体 2011+ mean 7.18%/mo 是微盘极端组合 artifact,勿采用该构造。 |
+| I22 | `div_seasonality` | dividend-seasonality | backlog | 3 | 3 | 2 | 1.1 | 5.0 | **来源:OSAP 扫描(2026-07-15)。机制**:分红月价格压力 — 预计本月除息/派息的股票获得可预期需求(Hartzmark-Salomon 2013 DivSeason;Litzenberger-Ramaswamy 1979 DivYieldST)。**OSAP 证据(重算复核)**:DivYieldST 发表后 t=9.61、2011+ 2.24(mean 0.25%/mo);DivSeason 发表后 2.11、2011+ 2.87(mean 仅 0.10%/mo)。**栖息地罕见地对口**:分红股 = 大盘,本面板不吃 −1 罚 → P=3。**主威胁是 gate-2**:月度轮动 + 小 mean,C15 的"gross ≈ cost"高概率重演 — 注册时必须先算 break-even 换手,过不了就别开族。**数据**:分红历史(调整/未调整价差 + XBRL 股息),成本 2;序列 2010 起 → 2011-14 面板对长回看略短。两构造一族,开族预算合并钉。 |
+| I5 | `breadth_13f` | ownership-flow | backlog | 3 | 4 | 3 | 1.1 | 4.4 | **机制**:Miller 分歧+卖空约束 — 机构持有广度下降 = 悲观者被挤出价格 → 高估 → 低收益。**数据**:EDGAR 13F 免费,45 天滞后是天然 PIT 可用性(比文本家族干净)。**文献**:Chen-Hong-Stein 2002 JFE。**OSAP 已核(2026-07-15,重算复核)**:DelBreadth **发表后 t=1.41、2011+ 1.73 — 弱但同号**,按"衰减仍正"P=3 维持。**拥挤**:13F 被大量使用,该构造中等。**边**:EDGAR 管道现成。**成本**:3 — 13F 解析出名地脏(CUSIP↔ticker 映射、份额单位错报),QA 量大。与已关的文本家族不同源:这是 ownership 数据不是文本。 |
+| I18 | `rn_skew_bkm` | options-xs | bench | 3 | 3 | 3 | 1.2 | 3.6 | **预算外替补**(同 I17,测前须 rule-6 修订)。**机制**:风险中性偏度 = 崩盘保险需求 / 彩票需求的截面定价差异(Conrad-Dittmar-Ghysels 2013、Bali-Murray;**方向在文献内有分歧,登记时必须预注册符号**,待核)。**数据**:BKM 无模型矩要求整条 smile — vol_smile 的 SVI 拟合管道可复用,成本 3。**正交 1.2**:三阶矩信息,与 I1 的 skew 斜率相关但不同构造(斜率 vs 积分矩),若 I1 先行且活,I18 增量另算。**旁证(2026-07-15)**:BKM 构造不在 OSAP;实现矩类比 ReturnSkew 发表后 t=1.28 弱 — in-sample-only 封顶 P=3 维持。 |
+| I17 | `os_volume_ratio` | options-xs | bench | 2 | 3 | 2 | 1.2 | 3.6 | **P 3→2(2026-07-15,OSAP 重算复核)**:OptionVolume1(Johnson-So 2012)**发表后 t=0.40、2011+ 0.90 — 发表后死**;OptionVolume2 反号(−1.40)。按规则"发表后已死"P≤2。**预算外替补**:options-xs 已按 I1–I3 钉 ≤9 looks,I17 测前须 rule-6 修订 — 现在更没有理由动它。**机制**:知情者偏好期权(杠杆 + 做空约束)→ O/S 量比负向预测(原 in-sample t=3.45)。**数据(条件)**:raw_singles 的 ThetaData EOD 是否含 volume/OI 字段仍待核。 |
+| I20 | `mom_seasonality_hs` | seasonality | backlog | 1 | 4 | 1 | 0.9 | 3.6 | **P 2→1(2026-07-15,登记当日即被 OSAP 否决 — 记录在案作为流程的胜利)**:HXZ in-sample NYSE-VW Ra1 3.43 强 pass(RFS 2020 Table 3),但 OSAP MomSeason(Heston-Sadka years-2-5,同族最近追踪)**发表后 t=−0.20、2011+ −0.08 — 发表后死**;按规则 post-pub OOS 压倒 in-sample。构造注:OSAP 追踪的是 years-2-5 平均,与 HXZ 的 year-1 年度滞后不完全同构 — 若日后想救,须先核 OSAP 的 MomSeasonShort(year-1 对应物)再谈。**机制**:年度日历周期(机构再平衡/财报日历)。数据在手成本 1,便宜但排后。 |
+| I23 | `earnings_streak` | earnings-events | backlog | 2 | 4 | 2 | 0.9 | 3.6 | **来源:OSAP 扫描(2026-07-15)。机制**:连续同号盈利意外的"连胜"被低估 — 趋势外推不足(Loh-Warachka 2012)。**OSAP 证据(重算复核)**:发表后 t=4.28、2011+ 4.71(mean 0.63%/mo,EW 全 universe)— 现代存活最强的 earnings 类。姊妹构造 RevenueSurprise(Jegadeesh-Livnat 2006:2.76/3.03)记 Inbox 备选。**数据**:C17 的 XBRL EPS + 8-K 2.02 管道直接复用,成本 2。**正交 0.9**:PEAD 线,必须对 C17 SUE 增量成立。**family 归属待裁定(promotion 时按 rule 6 定)**:自然读法 = earnings-events(C17 线,可开新 pin);若裁定属已关的 XBRL 基本面族则等 U1。**清醒剂**:OSAP 全 universe 的 PEAD 本尊(EarningsSurprise)2011+ 只剩 t=1.03,与 C17 边缘 +2.01 一致 — 现代大盘 PEAD 本来就薄,streak 是否更厚就是这条的全部赌注,P=2。 |
+| I9 | `amihud_illiq` | liquidity-volume | backlog | 1 | 4 | 1 | 0.8 | 3.2 | **P 2→1(2026-07-15,双源判决)**:HXZ NYSE-VW 三 horizon 全 FAIL(0.25%/\|t\|1.20 · 0.34/1.64 · 0.39/1.91,RFS 2020 Table 3),All-EW 1.01/3.49 = 纯微盘;OSAP **发表后 t=0.36、2011+ 反号 −0.83**(重算复核)— 发表后连全 universe EW 都死了。"U1 后上调"降格为:U1 且含小微盘才可能值得,且要先过"发表后已死"这一关。机制/构造/预算同前(\|ret\|/$vol;与 B6 差异仅在分子;I9/I13/I14/I21 家族 ≤3 primaries)。Pastor-Stambaugh beta 不登记(HXZ:EW 下也 FAIL)。 |
+| I13 | `turnover_dnr` | liquidity-volume | backlog | 1 | 4 | 1 | 0.8 | 3.2 | **P 2→1(2026-07-15,双源)**:HXZ NYSE-VW 全 horizon FAIL(−0.15/0.61 · −0.16/0.62 · −0.11/0.46),All-EW 才活(−0.86/3.53);OSAP ShareVol **发表后 t=0.29、2011+ 0.15 — 发表后死**(重算复核)。构造论点不变(volume/shares,B7 PIT shares;share vs dollar 口径)。 |
 | I10 | `news_coverage_neglect` | news | backlog | 3 | 4 | 4 | 0.9 | 2.7 | **news family 的频率轴,成员中先验最高** — 照搬你 8-K 的教训:频率活(C11)、内容死(C12–C14)。**机制**:媒体忽视溢价 — 无覆盖股票跑赢有覆盖(Fang-Peress 2009 JF,待核 OSAP):投资者认知不完备,无覆盖 = 持有者要求信息不完备补偿;对手盘 = 只买上新闻的票的注意力驱动投资者。**数据(瓶颈,family 共用)**:带时间戳可 PIT 的历史新闻语料 — 免费端 GDELT(2015+,实体→ticker 匹配噪声大)、付费端 Tiingo/Polygon(历史深度待核);**开族前置 = GDELT 实体匹配可行性 QA**(抽样精确率报告;数据工程,不算 look)。**与已测重叠**:强制披露子集(8-K)已测完,增量必须来自 filings 外的媒体报道 → 正交 0.9。**拥挤**:高;忽视效应小盘更强(U1 后上调)。 |
 | I8 | `employer_reviews` / activity-nowcast 泛化 | alt-activity | backlog | 3 | 3 | 4 | 1.1 | 2.5 | **I7 的可救部分泛化**:"某处公开活动数据"→"公开活动代理 nowcast 公司基本面"。付费端有确证文献:卫星停车场车流预测零售 earnings surprise(Katona-Painter-Patatoukas-Zeng,数据贵、机构已买断)。免费端可测:Glassdoor 雇主评分变化预测收益(Green-Huang-Wen-Zhou 2019 JFE,t≈3 待核;抓取难+ToS 风险),Google Trends 搜索量(Da-Engelberg-Gao 2011 JF — 注意力效应,历史可回取、PIT 干净),Wikipedia 浏览量、app 排名。**共同瓶颈**:免费源的历史 PIT 可得性参差 — 登记时按"Trends/Wiki 先行(历史可回取)"打成本 4。**拥挤**:Trends 高,Glassdoor 中。 |
 | I16 | `news_drift_chan` | news | backlog | 3 | 3 | 4 | 0.9 | 2.0 | **机制**:对公司新闻反应不足 → 有新闻月的收益漂移;对无信息价格波动过度反应 → 无新闻月的收益反转(Chan 2003 JFE,待核)。构造是**条件化**的:用当月 coverage 有/无把动量一分为二,预测两种相反的后续 — 与 B1/B5 动量 controls 的增量正好来自这个条件。**数据**:同 I10 的语料与前置 QA。**容量 3**:需要事件级新闻识别,比 I10 的计数重。**拥挤**:中高。 |
 | I12 | `congress_trades` | informed-following | backlog | 2 | 2 | 2 | 1.0 | 2.0 | **I11 instinct 的可救部分**:不看重要人物说什么(推特),看他们**被强制披露的交易**。**机制**:议员对政策/拨款有私有信息,STOCK Act 强制 45 天内披露 → 跟单;45 天披露滞后是天然 PIT 可用性(同 13F,比推特时间戳干净得多)。对手盘 = 不读披露的市场。**数据**:`scripts/fetch_congress_trades.py` 已在仓库(有 test,从未评估)— 成本 2。**文献(先验一般)**:Ziobrowski 2004 — 参议员组合 1993–98 超额 ~85bp/月(待核);但 Eggers-Hainmueller 后续样本 ≈ 0;STOCK Act 后的跟单研究多数发现披露滞后之后无 alpha(待核)。媒体热度高(Pelosi tracker 等)= 拥挤度近年陡增。**容量**:2 — 事件稀疏、宽度有限,可能踩 C16 的 MIN_XS 坑,登记时先想好 judge 用事件研究还是 XS-IC。**正交**:与 Form 4 insider family 机制同源(跟知情人)但主体不同,1.0。 |
+| I24 | `wq101_alphas` | price-formulaic | backlog | 1 | 4 | 2 | 0.9 | 1.8 | **用户来源(2026-07-15):WorldQuant 2015 公开的 101 formulaic alphas**(Kakushadze, "101 Formulaic Alphas")。**登记为来源而非单一因子,先验诚实打低**:(a) 无逐条发表 t 值、无发表后追踪(论文只给聚合统计)— 证据等级低于任何 OSAP 条目;(b) 公开十年、全行业实现过 = 拥挤天花板;(c) 多数持仓 0.6–6.4 天,**horizon 错配**:C15 已证明月度平台 20×/yr 换手就吃光 gross,日频轮动在 EOD t+1 平台先天 gate-2 死。**N 税是硬约束**:101 条全测 = +101 selection looks,ceiling 直接爆 — 若测只允许两种预注册形态:101 条合成一个复合信号(单 look),或按预注册标准(低换手 + 月度可持有)先选 ≤3 条。**盘中数据到手后重估**:作为执行层/日内研究素材的价值高于作为月度因子。 |
 | I15 | `news_tone_firm` | news | backlog | 2 | 4 | 4 | 0.9 | 1.8 | **机制**:公司新闻负面词密度预测盈利与收益(Tetlock-Saar-Tsechansky-Macskassy 2008 JF,待核)。**先验折扣到 2 的理由**:内容/情绪轴在你的 8-K family 全灭(C12–C14 tone/item 全 rejected),且新闻情绪是最商品化的量产信号(RavenPack/Bloomberg)= 被套利最狠的轴;放进队列只为完整覆盖 family 的三条轴(频率 I10 / 漂移 I16 / 内容 I15),开族时若预算 <3 primaries,先砍这条。**数据**:同 I10。 |
 | I11 | `public_figure_posts` | public-figure | backlog | 1 | 1 | 2 | 1.0 | 0.5 | **覆盖特朗普推特/Truth Social + Musk 等市场敏感人物的帖子。机制**:点名公司的帖子(关税、订单、批评)引发即时重定价;可能有过度反应→反转或漂移。**数据(不是瓶颈)**:Trump Twitter Archive 完整带时间戳(至 2021 封号),Truth Social 2022+ 有第三方存档,免费;点名→ticker 匹配量小。**文献(是反证)**:事件研究(Ge-Kurov-Wolfe 等,待核)结论一致 — 效应真实但集中在**分钟级**且多数当日回吐,EOD 无漂移;2017 年起就有秒级跟单 bot(Trump2Cash)。**这正是 C15/C16 的教训重演**:信号存在但 EOD t+1 入场时已结束。**样本**:点名公司的帖子每年几十条、政权依赖(只在任期内有效)→ 容量 1。**结论**:队尾。唯一回路 = 若日后为 vol_smile 建了盘中数据(CLAUDE.md 已排队的 intraday NBBO),分钟级事件研究才可测;届时另行注册。可救部分(跟知情公众人物的**交易**而非言论)→ I12。 |
 | I7 | `pentagon_pizza` | alt-activity | backlog | 1 | 1 | 5 | 1.0 | 0.2 | **机制**:地缘军事行动前 Pentagon 加班 → 附近披萨店 Google Maps 实时繁忙度上升 → 先于新闻的 risk-off 信号(目标是市场级 timing:油/防务/VIX,不是横截面)。**数据**:Google Maps popular times 只有实时值,无公开历史档案,ToS 禁爬 — 样本只能前瞻采集数年。**文献**:无同行评审;2025 年起是公开 meme(@PenPizzaReport),事件样本个位数;若有信号,公开后已被分钟级消化。**拥挤**:极高(正因为出名)。**边**:无。**成本**:5。**结论**:队尾;instinct 的可救部分已泛化为 I8 — 机制保留("公开活动数据先于官方信息"),换成有历史、有截面、有文献的数据源。 |
@@ -64,7 +86,7 @@ FACTORS.md 管"测一个想法",这里管"选择测什么"。想法先登记、�
 
 | ID | name | status | 内容 |
 |----|------|--------|------|
-| U1 | `universe_sharadar` | backlog | 扩到 Sharadar 全市场含退市 PIT universe(2000+ 名)。修掉每行 C 因子的 survivorship caveat;把栖息地搬到异象实际存活的小盘/难套利段(McLean-Pontiff 残余所在)。第一个标定测试:C17 SUE/PEAD 全市场重跑(PEAD 小盘集中,兼作 C17 的 out-of-design 确认)。成本:数据订阅 + `sharadar.py`/`sharadar_qa.py` 扩展 + 面板重建,约数天到一周。**这是当前最高杠杆的一项投资,优先级高于队列中任何单因子。** |
+| U1 | `universe_sharadar` | backlog | 扩到 Sharadar 全市场含退市 PIT universe(2000+ 名)。修掉每行 C 因子的 survivorship caveat;把栖息地搬到异象实际存活的小盘/难套利段(McLean-Pontiff 残余所在)。第一个标定测试:C17 SUE/PEAD 全市场重跑(PEAD 小盘集中,兼作 C17 的 out-of-design 确认)。成本:数据订阅 + `sharadar.py`/`sharadar_qa.py` 扩展 + 面板重建,约数天到一周。**这是当前最高杠杆的一项投资,优先级高于队列中任何单因子。** **衰减文献定论(2026-07-15,`data/reference/decay_literature/`)**:U1 把测试从"发表异象拟合残留 ≈ 0 的角落"(最大市值/最高流动/低特质波动,McLean-Pontiff Table 8:idio +4.05 p<.001、size −1.49 p=.013、$vol −1.67 p<.01)搬进残余 alpha 实际存活的栖息地,等价于给队列每个难套利异象恢复 +1 P;且 US 是唯一有可靠发表后衰减的市场(Jacobs-Müller 2020)— 本面板是全球最坏栖息地,U1 是对它唯一的结构性修复。 |
 
 ## Family 覆盖图(kill log 当数据读;测过哪里、结论是什么)
 
@@ -76,8 +98,13 @@ FACTORS.md 管"测一个想法",这里管"选择测什么"。想法先登记、�
 | Form 4 insider | 关闭待新构造 | C16 = 成分+慢 regime,无可变现 timing;C20 rejected(episodic 读法未测,需另注册) |
 | 12b-25 / SC 13D | 一次性测毕 | C18、C23 rejected |
 | XBRL 基本面 | **对新成员关闭**(现 universe) | C17 +2.01 candidate = 唯一存活成员(走自己的 pinned path);C25–C29 五连拒 2026-07-15(−1.22/+0.36/+0.47/−0.92/+0.29,全 < 1.5)— C28/C29 注册时即框定为最后两枪,预算如期执行;大盘栖息地对经典基本面因子不友好,U1 的最强一条证据;U1 后重钉预算重开 |
-| options-xs | 未开,队列头部,**预算已钉**(2026-07-15) | 正选 I1–I3(占 ≤9 looks / 开族起 6 周预算;stop:三 primary 全 \|t\| < 1.5 → 关,reopen 2.0);替补 I17(O/S 量比)、I18(RN 偏度)= 预算外,测前须 rule-6 修订;xs≈61 → MDE@80% ≈ IC 0.03,每成员注册时重推 power line;IV 面板建设是数据工程不算 look,member 1 注册前先过单名 IV 覆盖 QA gate |
-| liquidity-volume | 未开,已展开成员 | I9(ILLIQ)/I13(turnover)/I14(GKM 事件式)三成员;开族建议预算 ≤3 primaries 一人一枪;半数被 B4/B6 张成 — 构造必须刻意差异化;S&P 500 栖息地先验低,U1 后上调 |
+| options-xs | 未开,队列头部,**预算已钉**(2026-07-15) | 正选 I1–I3(占 ≤9 looks / 开族起 6 周预算;stop:三 primary 全 \|t\| < 1.5 → 关,reopen 2.0);**OSAP 核定(07-15)**:I2 类比 CPVolSpread 发表后 3.25 存活 → **I2 队头**;I1 skew1 发表后 1.20 → P=3;I17 量比发表后死 → P=2(bench);I18 无追踪(bench);xs≈61 → MDE@80% ≈ IC 0.03,每成员注册时重推 power line;IV 面板建设不算 look,member 1 注册前先过单名 IV 覆盖 QA gate |
+| liquidity-volume | 未开,**双源判决后重排**(2026-07-15) | I21 volume_trend 成为家族最强(OSAP 发表后 5.08、2011+ 3.84,trading 类唯一现代存活者;EW 全 universe + HXZ 无判决 → P=2);I9 ILLIQ / I13 turnover 双源发表后死 → P=1、U1 条件;I14 GKM 双源均无追踪 → P=2;HXZ trading-frictions 类 NYSE-VW 复现率仅 3.8%(102/106 FAIL);开族预算 ≤3 primaries,I21/I14 优先 |
+| industry-momentum | 未开,设计冲突待决 | I19;HXZ NYSE-VW 全 horizon PASS(2.86/3.01/3.57),但 v0 sn judge 按构造消灭跨行业信号 — 开测前须预注册非 sn 评价设计或写理由跳过;注意 OSAP 无行业动量条目("IntMom" 是 Novy-Marx 中期动量,发表后 1.05 弱,勿混淆勿顺手测) |
+| seasonality | 未开,**OSAP 判决后降级**(2026-07-15) | I20:HXZ in-sample NYSE-VW 3.43 pass 被 OSAP 发表后追踪(MomSeason −0.20)压倒 → P=1;若想救先核 year-1 对应物(MomSeasonShort) |
+| dividend-seasonality | 未开 | I22(DivYieldST + DivSeason 两构造);发表后 9.61/2.11、2011+ 2.24/2.87 但 mean 小(0.10-0.25%/mo)→ gate-2 换手是主威胁,注册前先算 break-even;栖息地对口大盘(分红股),不吃 −1 罚 |
+| earnings-events(PEAD 线) | 未开,family 归属待裁定 | I23 earnings_streak(发表后 4.28、2011+ 4.71)+ Inbox 的 RevenueSurprise;须对 C17 SUE 增量;OSAP 全 universe PEAD 本尊 2011+ 仅 1.03 — 现代 PEAD 薄,与 C17 边缘 +2.01 一致 |
+| price-formulaic | 队尾 | I24 WQ101:无逐条统计、拥挤天花板、horizon 错配;N 税约束 — 只许复合单 look 或预注册选 ≤3;盘中数据到手后作为执行层素材重估 |
 | ownership-flow | 未开 | I5、I6;I6 先验依赖 U1 |
 | alt-activity | 未开,先验中低 | I7、I8 |
 | news | 未开,已展开成员;数据是瓶颈 | 三条轴:I10 频率(忽视溢价,先验最高 — 照搬 8-K 教训:频率活内容死)/ I16 漂移(Chan 条件动量)/ I15 内容(先验最低,预算紧先砍);开族前置 = GDELT 实体匹配可行性 QA(数据工程,不算 look);强制披露子集(8-K)已测完,增量须来自 filings 外的媒体报道 |
@@ -89,4 +116,17 @@ FACTORS.md 管"测一个想法",这里管"选择测什么"。想法先登记、�
 想法随手丢这里(手机上丢 Notion Experiments Inbox 也行,定期搬运)。
 补全六字段后领 I-ID 进队列。
 
-- (空)
+- **post-U1 基本面 re-pin 候选**(现 universe family 已关,U1 重开时按此
+  优先;HXZ = RFS 2020 Table 3 NYSE-VW \|t\|,OSAP = 发表后 t / 2011+ t,
+  重算复核):NetPayoutYield(OSAP 3.78/3.67,mean 1.5%/mo)· XFIN
+  (3.56/3.67)· dNoa(HXZ 4.14)· Cop 现金经营盈利(HXZ 3.57)·
+  ShareIss5Y(OSAP 3.30/3.32)· Pda(HXZ 3.91)· Cei(HXZ 3.32;OSAP
+  2.25)· roaq(OSAP 2.93/2.85)· SP 销售/价格(OSAP 3.20/2.59)· cfp
+  (3.01/2.69)· ChTax(2.75/3.09)· Tax(3.19/2.45)· Rdm(HXZ 2.75)·
+  Ol(HXZ 2.63)· Noa(HXZ 3.25)。
+- **RevenueSurprise**(Jegadeesh-Livnat 2006;OSAP 发表后 2.76、2011+
+  3.03)— I23 的姊妹构造,I23 若过 1.5 再考虑,同 family 预算。
+- **盘中数据待入手(2026-07-15)**:伴侣有 ~5 年盘中数据(粒度未知,
+  分享中)。到手核验粒度/覆盖后重估:I11(分钟级事件研究解锁)、I24
+  (执行层素材)、C15 daily 变体(盘中入场)、执行成本模型;vol_smile
+  的 intraday 队列同受益。**数据未验前不改任何分数。**
