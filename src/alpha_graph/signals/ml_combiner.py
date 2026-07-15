@@ -358,6 +358,19 @@ FACTOR_SOURCES: list[FactorSource] = [
                  "filing_date", "filing", loader=_load_sim_minedit_fresh,
                  missing_msg="C24 needs both the 10-K digit-free and 10-Q "
                              "min-edit caches — sim_minedit_fresh NaN"),
+    # C25/C26/C27: fundamentals-family candidates (signals/fundamentals_
+    # candidates.py). Each stamps its availability date (C25 the later share
+    # count's filed date, C26 the later Assets accession's filed date, C27 the
+    # announcement day a+1) and merges as a plain filing-date as-of source,
+    # lagged on every grid (v0: t+1). dropna="any" drops the builders' NaN
+    # rows (C25 split-NaN'd 12m windows, C26 unmatched YoY) so they never blank
+    # a carried-forward value. Registered 2026-07-15 (commit `28b84c6`).
+    FactorSource("C25", "net_issuance_12m.parquet",
+                 ("net_issuance_12m",), "avail_date", "filing", dropna="any"),
+    FactorSource("C26", "asset_growth_yoy.parquet",
+                 ("asset_growth_yoy",), "avail_date", "filing", dropna="any"),
+    FactorSource("C27", "ann_ret_2d.parquet",
+                 ("ann_ret_2d",), "avail_date", "filing", dropna="any"),
 ]
 
 
