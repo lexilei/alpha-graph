@@ -35,6 +35,9 @@ report/*.aux
 report/*.log
 report/*.out
 
+# Generated monitor dashboard (rebuild: python -m alpha_graph.monitor)
+reports/dashboard.html
+
 # Docs
 docs/
 program.md

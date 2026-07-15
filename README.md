@@ -265,6 +265,34 @@ python scripts/factor_orthogonality.py evaluate --candidate evt8k_freq_z_d --acc
 python scripts/factor_orthogonality.py evaluate --candidate evt8k_freq_z --accepted BASELINE --sector-neutral    # C11
 ```
 
+## Monitor
+
+A read-only dashboard over the repo's own artifacts — the registry, the
+ledger's accounting, and the parquet cache:
+
+```bash
+python -m alpha_graph.monitor            # build reports/dashboard.html + open
+python -m alpha_graph.monitor --serve    # localhost:8765, rebuilt on each refresh
+```
+
+It shows the standings against the selection bars, the accounting history (N
+and the ceiling at each refresh), the candidate registry filtered by status,
+and the cache inventory (row counts, date spans, write times) read from parquet
+footers. `--serve` re-reads everything per request, so it can stay open while a
+build runs.
+
+The headline accounting is read from the LATEST `Accounting refresh` row of
+`reports/factor_preregistration.md` — the ledger's own rule for where the
+authoritative count lives. The monitor deliberately does not recount looks: N
+excludes registrations, infrastructure notes, and `role=null` controls by hand,
+so a naive row count disagrees with it by construction. It computes nothing
+except one cross-check — that each refresh row's stated ceiling still
+reproduces from `ic_tools.emax_null` on its stated trial count, which
+`tests/test_monitor.py` also asserts over every historical row. Adjudications
+travel with their statistic: C16's +3.33 exceeds the 2.89 ceiling and is
+labelled, everywhere it appears, with the ledger's "NOT treated as clearing —
+composition".
+
 ## Tests
 
 ```bash
