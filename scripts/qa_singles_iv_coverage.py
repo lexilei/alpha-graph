@@ -19,9 +19,20 @@ are as-traded, so banding against it zeroes every pre-split year (caught
 2026-07-15: AAPL 0% pre-2020-08 4:1 split, AMZN 0% pre-2022-06 20:1 split);
 spot.parquet is used only for the trading-day calendar.
 
-Output: reports/singles_iv_qa.csv (per name-year day counts + coverage) and
-a stdout summary with the gate verdict inputs (names with >=80% day coverage,
-monthly cross-section curve).
+Output: reports/singles_iv_qa.csv (per name-year day counts + coverage,
+plus per-name first/last option-quote date and expiration-partition count)
+and a stdout summary with the gate inputs: names with >=80% LIFE-ADJUSTED
+coverage — denominator restricted to trading days within [first, last]
+option-quote date present for that name, which is immune to mid-window
+IPOs and to spot.parquet's fixed back-filled calendar (audit F1,
+reports/qa_gate_audit_2026-07-15.md). Full-calendar coverage is also
+reported; the (full, life, first/last, n_partitions) tuple disambiguates
+unfinished downloads from bad data (audit F2).
+
+Known accepted floors (audit F3/F4): the ±10% band can exceed the strike
+grid for sub-$5 price histories (understatement only, quantified at 1 day
+on AMD), and "one near-money pair marks the day usable" measures liveness
+(I2's minimal need), not chain richness.
 """
 from __future__ import annotations
 
@@ -50,6 +61,7 @@ def qa_ticker(tdir: Path) -> pd.DataFrame | None:
     if not parts:
         return None
     days_ok: dict[pd.Timestamp, bool] = {}
+    qdates_present: set[pd.Timestamp] = set()
     for p in parts:
         df = pd.read_parquet(
             p,
@@ -58,6 +70,7 @@ def qa_ticker(tdir: Path) -> pd.DataFrame | None:
         if df.empty:
             continue
         df["quote_date"] = pd.to_datetime(df["quote_date"])
+        qdates_present.update(df["quote_date"].unique())
         df["expiration"] = pd.to_datetime(df["expiration"])
         dte = (df["expiration"] - df["quote_date"]).dt.days
         df = df[(dte >= DTE_MIN) & (dte <= DTE_MAX) & (df["bid"] > 0)]
@@ -91,6 +104,9 @@ def qa_ticker(tdir: Path) -> pd.DataFrame | None:
         for d in near["quote_date"].unique():
             days_ok[d] = True
 
+    if not qdates_present:
+        return None
+    first_q, last_q = min(qdates_present), max(qdates_present)
     trading_days = spot.index
     rows = []
     for year, days in pd.Series(trading_days, index=trading_days).groupby(
@@ -104,6 +120,9 @@ def qa_ticker(tdir: Path) -> pd.DataFrame | None:
                 "trading_days": len(days),
                 "paired_quote_days": ok,
                 "coverage": round(ok / len(days), 4) if len(days) else 0.0,
+                "first_quote": str(first_q.date()),
+                "last_quote": str(last_q.date()),
+                "n_partitions": len(parts),
             }
         )
     return pd.DataFrame(rows)
@@ -119,6 +138,7 @@ def main() -> int:
         d.name for d in RAW.iterdir() if d.is_dir() and not d.name.startswith("_")
     )
     frames = []
+    life_cov: dict[str, float] = {}
     for t in tickers:
         r = qa_ticker(RAW / t)
         if r is None:
@@ -127,7 +147,20 @@ def main() -> int:
         frames.append(r)
         tot = r["paired_quote_days"].sum()
         alldays = r["trading_days"].sum()
-        print(f"{t}: {tot}/{alldays} paired-quote days ({tot/alldays:.1%})")
+        # life-adjusted: denominator restricted to the name's own
+        # [first, last] option-quote window (audit F1)
+        spot = pd.read_parquet(RAW / t / "spot.parquet")[["quote_date"]]
+        cal = pd.to_datetime(spot["quote_date"])
+        f0, l0 = pd.Timestamp(r["first_quote"].iloc[0]), pd.Timestamp(r["last_quote"].iloc[0])
+        life_days = int(((cal >= f0) & (cal <= l0)).sum())
+        life = tot / life_days if life_days else 0.0
+        life_cov[t] = life
+        print(
+            f"{t}: {tot}/{alldays} full-calendar ({tot/alldays:.2%}) | "
+            f"life-adjusted {tot}/{life_days} ({life:.2%}) | "
+            f"quotes {r['first_quote'].iloc[0]}..{r['last_quote'].iloc[0]}, "
+            f"{r['n_partitions'].iloc[0]} partitions"
+        )
     if not frames:
         print("no tickers with data", file=sys.stderr)
         return 1
@@ -135,10 +168,8 @@ def main() -> int:
     OUT.parent.mkdir(exist_ok=True)
     out.to_csv(OUT, index=False)
     print(f"\nwrote {OUT}")
-    per_name = out.groupby("ticker").apply(
-        lambda g: g["paired_quote_days"].sum() / g["trading_days"].sum()
-    )
-    print(f"names >=80% coverage: {(per_name >= 0.8).sum()}/{len(per_name)}")
+    n_pass = sum(1 for v in life_cov.values() if v >= 0.8)
+    print(f"names >=80% life-adjusted coverage: {n_pass}/{len(life_cov)}")
     return 0
 
 
