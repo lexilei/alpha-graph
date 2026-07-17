@@ -7,20 +7,33 @@ Built for the options-xs family (IDEAS.md I1/I2/I3). Two deliberate choices:
    as-traded (the 2026-07-15 QA finding: AAPL pre-2020 / AMZN pre-2022
    zero out under a price-file moneyness test). Per (quote_date,
    expiration): ATM strike = argmin |call_mid − put_mid| over strikes with
-   both legs bid>0; spot ≈ K + C − P. This is exact under parity with
-   zero rate/dividends over the horizon — good to a few tenths of a
-   percent at 20-60 DTE, which is all moneyness banding and ATM selection
-   need. IV inversion then uses the same implied spot, so rate/dividend
-   error shows up symmetrically in both legs and mostly cancels in the
-   call/put-averaged ATM IV.
+   both legs live; spot ≈ K + C − P. What this recovers is the FORWARD
+   F ≈ S·e^{(r−q)T} (~+0.23% above spot at 37 DTE on SPY) — fine for ATM
+   selection and moneyness banding, but it forces the inversion choice
+   below.
 
-2. **Method mirrors vol_smile's audited `build_atm_iv_series.py`** (expiry
-   nearest target DTE within tolerance, strike nearest spot, bisect both
-   legs' mids, average) so the SPY validation is apples-to-apples: the
-   only intended difference on SPY is parity-spot vs spot-file.
+2. **Leg IVs are Black-76, not spot-BS** (2026-07-17 audit, finding 1):
+   feeding the parity FORWARD into spot-BS at rate=0.04 double-counts
+   carry — a −3.2 vol-pt call−put wedge and a vol-level-correlated fake
+   OTM skew (~+0.7 vol pt at 37 DTE) that the registered cp-spread/skew
+   factors would inherit, invisible in the leg-AVERAGED ATM IV where it
+   cancels. Instead each mid is undiscounted to forward value (× e^{rT})
+   and inverted against the forward at rate 0 — exact Black-76 via the
+   verbatim bs.py port, wedge ≈ 0 by construction.
+
+3. **Method otherwise mirrors vol_smile's audited
+   `build_atm_iv_series.py`** (expiry nearest target DTE within
+   tolerance — ties to the LATER expiry, that engine's majority behavior
+   (~3/4 of SPY tie days; its row-order resolution is not deterministic,
+   see atm_iv_for_day) — strike nearest spot, bisect both legs' mids,
+   average; legs outside (0, 3) discarded like its sanity band). Factor
+   constructions that need leg-level IVs (I1 skew, I2 cp spread) must
+   require BOTH legs; a one-legged `.iv` is a coverage fallback, not a
+   spread input.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import pandas as pd
@@ -54,7 +67,12 @@ def paired_mids(day: pd.DataFrame) -> pd.DataFrame:
     live, with call_mid / put_mid columns.
     """
     df = day.copy()
-    df = df[df["bid"] > 0]
+    # bid>0 both legs; crossed/locked quotes (ask <= bid) dropped like
+    # vol_smile's build script — a crossed mid corrupts parity_spot (spot =
+    # K+C−P consumes it directly) and inverts to a junk IV instead of
+    # failing (2026-07-17 audit, finding 4; single names cross far more
+    # often than SPY's 0-selected-strike incidence).
+    df = df[(df["bid"] > 0) & (df["ask"] > df["bid"])]
     if df.empty:
         return pd.DataFrame(columns=["expiration", "strike", "call_mid", "put_mid"])
     df["created"] = pd.to_datetime(df["created"])
@@ -107,10 +125,15 @@ def atm_iv_for_day(
     cand = pairs[(pairs["dte"] - target_dte).abs() <= dte_tolerance]
     if cand.empty:
         return None
-    # Nearest expiry to target; ties break to the LATER expiry — pinned
-    # explicitly (the audited vol_smile series resolves ties by stable-sort
-    # row order, which empirically lands on the later expiry; we match the
-    # behavior with a deterministic rule instead of inheriting row order).
+    # Nearest expiry to target; ties break to the LATER expiry. The audited
+    # vol_smile series resolves ties by stable-sort row order, which is NOT
+    # a deterministic convention: on SPY it lands later on ~3/4 of tie days
+    # and earlier on the rest (2026-07-17: pinning "earlier" per the audit's
+    # finding-3 suggestion DROPPED same-expiry agreement 95.2% -> 85.3% —
+    # the audit had only inspected the later-pin's 120 divergence days,
+    # which are by construction the earlier-landing ties). We pin the
+    # majority behavior; the residual ~120 days fold into the validation
+    # gate's convention bucket.
     per_exp = cand.groupby("expiration")["dte"].first().reset_index()
     per_exp["dist"] = (per_exp["dte"] - target_dte).abs()
     per_exp = per_exp.sort_values(["dist", "dte"], ascending=[True, False])
@@ -125,8 +148,19 @@ def atm_iv_for_day(
     row = chain.loc[(chain["strike"] - spot).abs().idxmin()]
     dte = int(row["dte"])
     t = dte / 365.0
-    iv_c = implied_vol_bisect(float(row["call_mid"]), "C", spot, float(row["strike"]), t, rate)
-    iv_p = implied_vol_bisect(float(row["put_mid"]), "P", spot, float(row["strike"]), t, rate)
+    # Black-76: `spot` here is the parity-implied FORWARD, so undiscount
+    # each mid to forward value and invert at rate 0 (module docstring #2).
+    fwd_factor = math.exp(rate * t)
+    iv_c = implied_vol_bisect(
+        float(row["call_mid"]) * fwd_factor, "C", spot, float(row["strike"]), t, 0.0
+    )
+    iv_p = implied_vol_bisect(
+        float(row["put_mid"]) * fwd_factor, "P", spot, float(row["strike"]), t, 0.0
+    )
+    if iv_c is not None and not 0.0 < iv_c < 3.0:
+        iv_c = None
+    if iv_p is not None and not 0.0 < iv_p < 3.0:
+        iv_p = None
     return AtmIv(
         quote_date=str(quote_date),
         expiration=str(row["expiration"]),

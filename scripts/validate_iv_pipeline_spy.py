@@ -2,11 +2,14 @@
 """Validate alpha_graph.options.iv against vol_smile's audited SPY ATM-IV
 series (reports/atm_iv_daily_spy.csv, engine v2.1).
 
-Same method (37±9 DTE nearest expiry, nearest strike, both-leg bisect at
-rate=0.04); the one intended difference is spot: parity-implied here vs
-spot.parquet close there. On SPY (no splits) the two must agree closely —
-this run therefore validates BOTH the verbatim BS port AND the parity-spot
-construction before they touch single names.
+Same method (37±9 DTE nearest expiry, nearest strike, both-leg bisect);
+TWO intended differences: (1) spot — parity-implied FORWARD here vs
+spot.parquet close there; (2) inversion — Black-76 against that forward
+here (2026-07-17 audit fix; kills the −3.2 vol-pt leg wedge) vs spot-BS
+at rate=0.04 there. On SPY (no splits) the leg-AVERAGED ATM IV must still
+agree closely — this run validates the verbatim BS port, the parity-spot
+construction, and the Black-76 change before they touch single names
+(post-fix: same-selection median 8bp, leg wedge median 0.0 ± 0.6bp).
 
 Pass gate (printed verdict, REVISED after the first run's decomposition —
 the original single-number gate conflated selection-convention differences
@@ -57,7 +60,8 @@ def main() -> int:
             continue
         rows.append(
             {"qd": qd, "iv_ours": r.iv, "spot_impl": r.spot_impl,
-             "dte_ours": r.dte, "strike_ours": r.strike}
+             "dte_ours": r.dte, "strike_ours": r.strike,
+             "iv_call": r.iv_call, "iv_put": r.iv_put}
         )
     ours = pd.DataFrame(rows).set_index("qd")
     j = audited.join(ours, how="left")
@@ -78,6 +82,17 @@ def main() -> int:
     print(f"|Δspot|/spot median {med_spot:.5%}")
     print(f"same expiry picked: {same_e.mean():.1%}  same exp+strike: {same_sel.mean():.1%}")
     print(f"same-selection |ΔIV|: n={len(sel)} median {sel.median():.5f}")
+    # Leg-level diagnostic (2026-07-17 audit, finding 2: the leg AVERAGE is
+    # the one combination where a carry-double-count wedge cancels — report
+    # the call-put spread so a leg-level defect can't hide behind the gate).
+    # The audited CSV has no leg columns, so this is a self-diagnostic, not
+    # a comparison: post-Black-76 the same-strike spread should be small
+    # (residual = American early-exercise premium + quote noise, not carry).
+    leg_spread = j["iv_call"] - j["iv_put"]
+    print(
+        f"iv_call - iv_put: median {leg_spread.median():+.5f}  "
+        f"p5 {leg_spread.quantile(0.05):+.5f}  p95 {leg_spread.quantile(0.95):+.5f}"
+    )
     ok = (
         cov >= 0.95
         and len(sel) >= 500 and sel.median() <= 0.001
