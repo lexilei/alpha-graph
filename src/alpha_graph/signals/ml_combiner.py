@@ -382,6 +382,12 @@ FACTOR_SOURCES: list[FactorSource] = [
     # `528404c`).
     FactorSource("C28", "accruals_sloan.parquet",
                  ("accruals_sloan",), "avail_date", "filing", dropna="any"),
+    # C30: OSAP-faithful Haugen-Baker volume trend (signals/volume_trend.py) —
+    # 60-month slope of monthly share volume / window mean, month-end stamped
+    # at the ticker's last trading day of the month; "grid" merge → v0 t+1 on
+    # the daily grid. Registered 2026-07-17 (liquidity-volume family opening).
+    FactorSource("C30", "volume_trend.parquet",
+                 ("volume_trend",), "date", "grid", dropna="any"),
     FactorSource("C29", "gross_profitability.parquet",
                  ("gross_profitability",), "avail_date", "filing", dropna="any"),
 ]
