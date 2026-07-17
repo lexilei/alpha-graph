@@ -130,3 +130,42 @@ FACTORS.md 管"测一个想法",这里管"选择测什么"。想法先登记、�
   分享中)。到手核验粒度/覆盖后重估:I11(分钟级事件研究解锁)、I24
   (执行层素材)、C15 daily 变体(盘中入场)、执行成本模型;vol_smile
   的 intraday 队列同受益。**数据未验前不改任何分数。**
+- **5-agent 随机 ideation 扫描(2026-07-17,判决索引
+  `reports/ideation_agents_2026-07-17.md`;57 条 → 以下 12 条入 Inbox,
+  9 条并入既有 family 菜单,其余归档/淘汰;去重逮住 2 条已测尸体
+  C25/C23)**:
+  - **buyback_blackout**:3/5 agent 独立收敛 — 10b-18 回购盘(大盘最大
+    的价格不敏感买家)财报前 ~4-5 周法定沉默,撤走的 bid 无法被套利
+    补上;XBRL 回购 $ + 财报日历 + ADV 全在手;无发表横截面。Inbox 头名。
+  - **attention_crowdout_pead**:财报日拥挤度条件化 SUE — C17 的直接
+    扩展,数据全在手(SUE + 2.02 日期 + 宏观日历);DellaVigna-Pollet、
+    Hirshleifer-Lim-Teoh;earnings-events family 归属。
+  - **rsu_vest_taxsell**:Form 4 code-F/S 的机械 vest 卖压(文献专门
+    丢弃的行),form4_trans.parquet 在手;Form 4 族关闭中 → 2.0 bar。
+  - **buyback_insider_divergence**:回购盘 × 内部人净卖出的背离;
+    Form 4 + XBRL 在手;新交集;同受 Form 4 2.0 bar。
+  - **passive/inelastic 簇**(inelastic-float / passive-gap /
+    etf_flow_pressure / thematic-basket 合并):被动持有份额 × 流量的
+    过度反应+反转,及基本面意外 × 不弹性持有的欠反应;Gabaix-Koijen、
+    Koijen-Yogo、Ben-David 等;13F + ETF holdings 组装为成本。
+  - **crowd_exit_liquidity**:top-N 13F 持仓 $ ÷ ADV = 集体退出天数,
+    左尾预测;无发表;13F + 价格在手,便宜。
+  - **float_shrink_rebalance**:回购缩 float → 指数权重下调 → 被动
+    强制卖;shares PIT + rebalance 日历在手。
+  - **oct_fye_windowdress**:10 月 FYE 基金的税损卖压(12 月版已被套利,
+    10 月切面没有);13F + 收益在手,季节性。
+  - **fed_contract_award_flow**:USAspending/FPDS 合同净授予流领先
+    政府收入敞口名字的营收;免费、action 日期戳(retro 修改 → PIT 需
+    快照纪律);Belo-Gala-Li。
+  - **patent_maintenance_lapse**:主动弃缴专利维持费 = 创新线剪枝的
+    revealed preference;USPTO 费用事件文件免费、PIT 干净;无发表。
+  - **trademark_launch_pipeline**:商标申请领先产品发布;USPTO bulk
+    免费、PIT 干净;近乎无发表。
+  - **trace_bond_lead / fx_revenue_beta**:跨资产二条 — 发行人债券
+    超额收益领先股票坏消息(TRACE,staleness 过滤);FX 篮子 ×
+    XBRL 地理分部收入的换算滞后;均免费可 PIT。
+  - **options-xs 扩展菜单(family 层记录,I1-I3 判决后再议)**:
+    option_term_slope(期限倒挂)、skew_term_twist(短长 skew 扭转,
+    无发表)、pcp_implied_stock_gap(parity 缺口 = borrow/知情定位,
+    `parity_spot` 已算出原料)、O/S 量比 innovation 形态(I17 的
+    level 形态发表后已死,只许 innovation 构造)。
