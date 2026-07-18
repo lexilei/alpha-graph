@@ -388,6 +388,12 @@ FACTOR_SOURCES: list[FactorSource] = [
     # the daily grid. Registered 2026-07-17 (liquidity-volume family opening).
     FactorSource("C30", "volume_trend.parquet",
                  ("volume_trend",), "date", "grid", dropna="any"),
+    # C31: GKM high-volume event (signals/gkm_high_volume.py) — daily
+    # {+1,0,-1} vs the prior-49-day extreme deciles, stamped at the formation
+    # day; "grid" merge → v0 t+1 = GKM's next-day formation. Registered
+    # 2026-07-18 (liquidity-volume member 2).
+    FactorSource("C31", "gkm_high_volume.parquet",
+                 ("gkm_high_volume",), "date", "grid", dropna="any"),
     FactorSource("C29", "gross_profitability.parquet",
                  ("gross_profitability",), "avail_date", "filing", dropna="any"),
 ]
