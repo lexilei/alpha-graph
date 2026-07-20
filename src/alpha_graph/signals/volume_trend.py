@@ -22,6 +22,17 @@ Pinned details:
   ticker's last trading day of that month (computable at that close);
   merge kind "grid" → v0 t+1 on the daily grid.
 
+Known limitations (2026-07-20 audit; behavior deliberately unchanged —
+the C30 look is recorded on this exact construction):
+- volume==0 days count as trading days (a data hole reads as a volume
+  collapse; HWM 2016-11/12 is the one real case);
+- the panel-edge partial month at the very end of the panel is KEPT per
+  the pinned rule (n_days == panel_days there), which level-shifts the
+  final cross-section; it never feeds a forward return.
+- Post-2020 evaluation context: ~1/3 of the H2 IC is COVID window-transit
+  mechanics and the rest correlates −0.42 with trailing-60m price return
+  (uncontrolled by the judge) — see the ledger's amended rescue clause.
+
 Build: `.venv/bin/python -m alpha_graph.signals.volume_trend`
 → data/cache/volume_trend.parquet (ticker, date, volume_trend).
 """

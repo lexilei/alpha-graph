@@ -42,6 +42,33 @@ def test_min_months_gate():
     assert len(res) == 1  # exactly the 30th month qualifies
 
 
+def test_calendar_gap_not_compressed():
+    """A missing mid-series month must occupy its calendar slot (NaN), not
+    compress the time axis (2026-07-20 audit F4: this machinery had no
+    production exercise and no test)."""
+    vols = [1000.0 + 10.0 * m for m in range(40)]
+    full = daily_panel("A", vols)
+    # drop one interior month entirely
+    gap_month = full["date"].dt.to_period("M").unique()[35]
+    gapped = full[full["date"].dt.to_period("M") != gap_month]
+    res = build_volume_trend(gapped).set_index("date")
+    # last month's window: 39 defined obs over 40 calendar slots; the slope
+    # per CALENDAR month is still 10 (positions preserved), so the value
+    # must match the ungapped build's final value closely
+    ref = build_volume_trend(full).set_index("date")
+    last = res.index.max()
+    assert abs(res.loc[last, "volume_trend"] - ref.loc[last, "volume_trend"]) < 1e-3
+
+
+def test_stamp_is_last_trading_day_of_month():
+    vols = [500.0] * 31
+    res = build_volume_trend(daily_panel("A", vols))
+    months = res["date"].dt.to_period("M")
+    for d, m in zip(res["date"], months):
+        month_days = pd.bdate_range(m.start_time, m.end_time)
+        assert d == month_days.max()
+
+
 def test_partial_month_excluded():
     full = daily_panel("A", [1000.0] * 3)
     # B trades only the last 5 days of month 1, then fully
