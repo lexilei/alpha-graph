@@ -17,11 +17,19 @@ Per ticker in period_end order:
   the chain);
 - signal = SUE if sign(SUE) == sign(prior SUE) and SUE != 0, else NaN
   (non-streak / unclassifiable → the NaN row BLANKS any carried value:
-  the FactorSource merges with dropna=None);
-- every value row also emits a NaN expiry row at disclosure_date + 182
-  calendar days (the 6-month age-out; binds only when no later
-  announcement arrives first). Same-day collisions keep the
-  announcement row.
+  the FactorSource merges with dropna=None). NOTE the 190cd adjacency is
+  the WHOLE rule: when quarter-ends sit ≤190cd apart across an undefined
+  quarter (fiscal transitions, ~0.4% of pairs), the defined neighbors
+  still pair — an undefined quarter does not per se break the chain
+  (2026-07-20 audit F2 docstring correction; code always matched the pin);
+- a value row emits a NaN expiry row at disclosure_date + 182 calendar
+  days ONLY if that date precedes the ticker's next announcement row of
+  any kind — a later announcement always supersedes state, so expiries
+  bind exactly and only for >182cd announcement silences (2026-07-20
+  audit F1 fix, pinned in the ledger before computation: the original
+  builder never canceled expiries and blanked 39.8% of values early).
+  Same-day collisions keep the announcement row; sorts are stable so
+  the later period_end wins ties deterministically (audit F3).
 
 Availability = C17's window-capped disclosure_date ("filing" merge,
 v0 t+1). Sign hypothesis: POSITIVE (streak continuation).
@@ -71,15 +79,24 @@ def build_earnings_streak(sue: pd.DataFrame) -> pd.DataFrame:
             "earnings_streak": df["sue"].where(streak),
         }
     )
-    expiry = rows.dropna(subset=["earnings_streak"]).copy()
+    # expiry rows: only where the +182cd date PRECEDES the ticker's next
+    # announcement of any kind (audit F1 fix — a later announcement always
+    # supersedes state; expiries exist for announcement silences only)
+    ann = rows.sort_values(["ticker", "avail_date"], kind="mergesort")
+    next_avail = ann.groupby("ticker")["avail_date"].shift(-1)
+    exp_date = ann["avail_date"] + pd.Timedelta(days=EXPIRY_DAYS)
+    keep = ann["earnings_streak"].notna() & (
+        next_avail.isna() | (exp_date < next_avail)
+    )
+    expiry = ann[keep].copy()
     expiry["avail_date"] = expiry["avail_date"] + pd.Timedelta(days=EXPIRY_DAYS)
     expiry["earnings_streak"] = np.nan
     out = pd.concat([rows, expiry], ignore_index=True)
-    # same-(ticker, day) collisions keep the announcement row: sort so real
-    # values order after NaNs, then keep last
+    # same-(ticker, day) collisions keep the announcement row; stable sort
+    # so the later period_end (later in `rows` order) wins ties
     out["_rank"] = out["earnings_streak"].notna()
     out = (
-        out.sort_values(["ticker", "avail_date", "_rank"])
+        out.sort_values(["ticker", "avail_date", "_rank"], kind="mergesort")
         .drop_duplicates(["ticker", "avail_date"], keep="last")
         .drop(columns="_rank")
         .reset_index(drop=True)

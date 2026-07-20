@@ -50,3 +50,23 @@ def test_expiry_rows_emitted():
     assert len(hit) == 1 and np.isnan(hit["earnings_streak"].iloc[0])
     # only value rows get expiry rows: 2 announcements + 1 expiry
     assert len(res) == 3
+
+
+def test_expiry_superseded_by_next_announcement():
+    """Audit F1: an expiry must NOT outlive the next announcement — the
+    original builder blanked 39.8% of values via stale expiries."""
+    q = [("2020-03-31", 1.0), ("2020-06-30", 2.0), ("2020-09-30", 3.0),
+         ("2020-12-31", 4.0)]
+    res = build_earnings_streak(sue_rows("A", q))
+    vals = res.dropna(subset=["earnings_streak"])
+    blanks = res[res["earnings_streak"].isna()]
+    # q2/q3/q4 are streak values; only the LAST value gets an expiry row,
+    # and every blank row is either q1 (unclassifiable) or that expiry
+    assert list(vals["earnings_streak"]) == [2.0, 3.0, 4.0]
+    last_expiry = pd.Timestamp("2020-12-31") + pd.Timedelta(days=35 + 182)
+    assert set(blanks["avail_date"]) == {
+        pd.Timestamp("2020-03-31") + pd.Timedelta(days=35), last_expiry
+    }
+    # no blank row sits between two consecutive announcements <182d apart
+    anns = sorted(res[res["avail_date"] < last_expiry]["avail_date"])
+    assert len(anns) == 4
