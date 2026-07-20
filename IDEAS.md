@@ -124,8 +124,9 @@ FACTORS.md 管"测一个想法",这里管"选择测什么"。想法先登记、�
   2.25)· roaq(OSAP 2.93/2.85)· SP 销售/价格(OSAP 3.20/2.59)· cfp
   (3.01/2.69)· ChTax(2.75/3.09)· Tax(3.19/2.45)· Rdm(HXZ 2.75)·
   Ol(HXZ 2.63)· Noa(HXZ 3.25)。
-- **RevenueSurprise**(Jegadeesh-Livnat 2006;OSAP 发表后 2.76、2011+
-  3.03)— I23 的姊妹构造,I23 若过 1.5 再考虑,同 family 预算。
+- **RevenueSurprise**(Jegadeesh-Livnat 2006)— **→ C33(2026-07-20 注册,
+  earnings-events member 2,末位预算 primary;注册时复核:发表后 2.76、
+  2011+ 2.67 — 旧记 3.03 不可复现,已更正)**。
 - **盘中数据待入手(2026-07-15)**:伴侣有 ~5 年盘中数据(粒度未知,
   分享中)。到手核验粒度/覆盖后重估:I11(分钟级事件研究解锁)、I24
   (执行层素材)、C15 daily 变体(盘中入场)、执行成本模型;vol_smile
