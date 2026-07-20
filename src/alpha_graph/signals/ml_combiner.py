@@ -394,6 +394,13 @@ FACTOR_SOURCES: list[FactorSource] = [
     # 2026-07-18 (liquidity-volume member 2).
     FactorSource("C31", "gkm_high_volume.parquet",
                  ("gkm_high_volume",), "date", "grid", dropna="any"),
+    # C32: earnings-surprise streak (signals/earnings_streak.py) — SUE iff its
+    # sign matches the prior announcement's; NaN rows (non-streaks,
+    # unclassifiable, 182cd expiries) must BLANK carried values, hence
+    # dropna=None. Filing merge on the window-capped disclosure date (v0 t+1).
+    # Registered 2026-07-20 (earnings-events family opening).
+    FactorSource("C32", "earnings_streak.parquet",
+                 ("earnings_streak",), "avail_date", "filing"),
     FactorSource("C29", "gross_profitability.parquet",
                  ("gross_profitability",), "avail_date", "filing", dropna="any"),
 ]
