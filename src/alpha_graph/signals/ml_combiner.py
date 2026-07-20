@@ -401,6 +401,12 @@ FACTOR_SOURCES: list[FactorSource] = [
     # Registered 2026-07-20 (earnings-events family opening).
     FactorSource("C32", "earnings_streak.parquet",
                  ("earnings_streak",), "avail_date", "filing"),
+    # C33: J-L revenue surprise (signals/revenue_surprise.py) — drift-adjusted
+    # seasonal RPS change / prior-8 std; availability = sue-cache capped
+    # disclosure date (fallback stmt_filed). Registered 2026-07-20
+    # (earnings-events member 2).
+    FactorSource("C33", "revenue_surprise.parquet",
+                 ("revenue_surprise",), "avail_date", "filing", dropna="any"),
     FactorSource("C29", "gross_profitability.parquet",
                  ("gross_profitability",), "avail_date", "filing", dropna="any"),
 ]
