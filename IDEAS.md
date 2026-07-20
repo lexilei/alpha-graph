@@ -103,7 +103,7 @@ FACTORS.md 管"测一个想法",这里管"选择测什么"。想法先登记、�
 | industry-momentum | 未开,设计冲突待决 | I19;HXZ NYSE-VW 全 horizon PASS(2.86/3.01/3.57),但 v0 sn judge 按构造消灭跨行业信号 — 开测前须预注册非 sn 评价设计或写理由跳过;注意 OSAP 无行业动量条目("IntMom" 是 Novy-Marx 中期动量,发表后 1.05 弱,勿混淆勿顺手测) |
 | seasonality | 未开,**OSAP 判决后降级**(2026-07-15) | I20:HXZ in-sample NYSE-VW 3.43 pass 被 OSAP 发表后追踪(MomSeason −0.20)压倒 → P=1;若想救先核 year-1 对应物(MomSeasonShort) |
 | dividend-seasonality | 未开 | I22(DivYieldST + DivSeason 两构造);发表后 9.61/2.11、2011+ 2.24/2.87 但 mean 小(0.10-0.25%/mo)→ gate-2 换手是主威胁,注册前先算 break-even;栖息地对口大盘(分红股),不吃 −1 罚 |
-| earnings-events(PEAD 线) | **已开 2026-07-20**(C32=I23 注册) | 裁定:序列构造归此族,基本面族的关闭只覆盖水平/比率特征;pin:≤2 primaries、deadline 2026-08-31、stop 1.5、reopen 2.0;C17 老 path 不占预算;I23 earnings_streak(发表后 4.28、2011+ 4.71)→ **C32**;RevenueSurprise = 条件性 member 2(C32 过 1.5 才可注册);OSAP 全 universe PEAD 本尊 2011+ 仅 1.03 — 现代 PEAD 薄,与 C17 边缘 +2.01 一致 |
+| earnings-events(PEAD 线) | **预算已花完 2026-07-20:C32 candidate / C33 rejected** | 裁定:序列构造归此族,基本面族的关闭只覆盖水平/比率特征;pin:≤2 primaries、deadline 2026-08-31、stop 1.5、reopen 2.0;C17 老 path 不占预算;**C32=I23 streak:+1.57 擦线 candidate(构造恒等教训:= C17 值的 streak 选择,非独立信号;每名 IC 浓缩 29% 补不回截面减半)**;**C33=RevenueSurprise:+0.44 rejected(方向对、量级无;OSAP EW 2.67 不过大盘栖息地)**;exhaustion 判读:best 1.57 ≥ 1.5 → 不永久关,但无剩余 look,C32 走 member 级 candidate 流程;OSAP 全 universe PEAD 本尊 2011+ 仅 1.03 — 现代 PEAD 薄,与 C17 边缘 +2.01 一致 |
 | price-formulaic | 队尾 | I24 WQ101:无逐条统计、拥挤天花板、horizon 错配;N 税约束 — 只许复合单 look 或预注册选 ≤3;盘中数据到手后作为执行层素材重估 |
 | ownership-flow | 未开 | I5、I6;I6 先验依赖 U1 |
 | alt-activity | 未开,先验中低 | I7、I8 |
