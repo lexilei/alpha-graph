@@ -407,6 +407,11 @@ FACTOR_SOURCES: list[FactorSource] = [
     # (earnings-events member 2).
     FactorSource("C33", "revenue_surprise.parquet",
                  ("revenue_surprise",), "avail_date", "filing", dropna="any"),
+    # C34: FINRA short interest ratio (signals/short_interest_xs.py) — SI /
+    # shares_asof(avail), avail = settlement + 10bd stamped by the fetcher.
+    # Filing merge (v0 t+1). Registered 2026-07-20 (ownership-flow opening).
+    FactorSource("C34", "short_interest_xs.parquet",
+                 ("short_interest_xs",), "avail_date", "filing", dropna="any"),
     FactorSource("C29", "gross_profitability.parquet",
                  ("gross_profitability",), "avail_date", "filing", dropna="any"),
 ]
