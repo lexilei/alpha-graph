@@ -123,6 +123,11 @@ def evaluate(
     ic_raw, ic_resid, r2_list, n_xs = [], [], [], []
     # per-accepted correlation accumulators
     corr_acc = {a: [] for a in accepted}
+    # persistence diagnostic (2026-07-21 null calibration): month-over-month
+    # cross-sectional rank autocorrelation of the candidate — the number the
+    # persistence-class standing rule requires at registration
+    prev_ranks: pd.Series | None = None
+    rank_ac: list[float] = []
 
     for _, g in panel_m.groupby("month"):
         cols = needed + (["sector"] if has_sector else [])
@@ -142,6 +147,15 @@ def evaluate(
             continue
         if cand.std(ddof=0) == 0 or fwd.std(ddof=0) == 0:
             continue
+
+        cur_ranks = pd.Series(sub[candidate].rank().values,
+                              index=g.loc[sub.index, "ticker"].values)
+        if prev_ranks is not None:
+            joint = pd.concat([prev_ranks.rename("p"), cur_ranks.rename("c")],
+                              axis=1, join="inner").dropna()
+            if len(joint) >= MIN_XS:
+                rank_ac.append(float(joint["p"].corr(joint["c"])))
+        prev_ranks = cur_ranks
 
         # raw IC
         ic_raw.append(np.corrcoef(cand, fwd)[0, 1])
@@ -176,6 +190,13 @@ def evaluate(
 
     raw_m, raw_t, raw_icir = agg(ic_raw)
     inc_m, inc_t, inc_icir = agg(ic_resid)
+    # HAC t of the incremental-IC series (2026-07-20 integration-audit
+    # amendment: ceiling claims must carry this alongside the naive t;
+    # REPORTED diagnostic — the decision statistic stays the naive t, v0)
+    from alpha_graph.eval.ic_tools import default_lags, hac_tstat
+    ic_arr = np.array(ic_resid)
+    hac_t = float(hac_tstat(ic_arr, lags=default_lags(21, 21, ic=ic_arr)))
+    mean_rank_ac = float(np.mean(rank_ac)) if rank_ac else float("nan")
     return {
         "candidate": candidate,
         "accepted": list(accepted),
@@ -187,6 +208,8 @@ def evaluate(
         "ic_raw": float(raw_m), "ic_raw_t": float(raw_t), "ic_raw_icir": float(raw_icir),
         "ic_incremental": float(inc_m), "ic_incremental_t": float(inc_t),
         "ic_incremental_icir": float(inc_icir),
+        "ic_incremental_t_hac": hac_t,
+        "rank_autocorr": mean_rank_ac,
         "sector_neutral": bool(has_sector),
         "ok": True,
     }
@@ -207,6 +230,10 @@ def _print_eval(res: dict) -> None:
     print(f"    IC raw          : {res['ic_raw']:+.4f}  (t={res['ic_raw_t']:+.2f}, ICIR={res['ic_raw_icir']:+.2f})")
     print(f"    IC incremental  : {res['ic_incremental']:+.4f}  (t={res['ic_incremental_t']:+.2f}, "
           f"ICIR={res['ic_incremental_icir']:+.2f})  <-- decides inclusion")
+    ac = res.get("rank_autocorr", float("nan"))
+    slow = "  [SLOW class: bar/ceiling need HAC or empirical null]" if ac >= 0.9 else ""
+    print(f"    diagnostics     : HAC t={res['ic_incremental_t_hac']:+.2f}  "
+          f"rank-autocorr={ac:+.3f}{slow}")
 
 
 # --------------------------------------------------------------------------- #
