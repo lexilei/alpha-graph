@@ -100,10 +100,11 @@ def fetch_symbol_klines(sym: str) -> pd.DataFrame | None:
     for c in ("open", "high", "low", "close", "volume", "quote_volume"):
         df[c] = pd.to_numeric(df[c])
     df["n_trades"] = pd.to_numeric(df["n_trades"]).astype("int64")
+    df["taker_buy_volume"] = pd.to_numeric(df["taker_buy_volume"])
     df["date"] = _ts_to_utc(df["open_time"]).dt.date
     df["symbol"] = sym
     return df[["symbol", "date", "open", "high", "low", "close",
-               "volume", "quote_volume", "n_trades"]]
+               "volume", "quote_volume", "n_trades", "taker_buy_volume"]]
 
 
 def fetch_symbol_funding(sym: str) -> pd.DataFrame | None:
@@ -132,10 +133,13 @@ def main() -> None:
     symbols = [s for s in symbols if not re.search(r"_\d{6}$", s)]
     print(f"{len(symbols)} USDT perp symbols", flush=True)
 
-    for name, fn, out in (
+    jobs = (
         ("klines", fetch_symbol_klines, "perp_klines_1d.parquet"),
         ("funding", fetch_symbol_funding, "perp_funding.parquet"),
-    ):
+    )
+    if len(sys.argv) > 1:
+        jobs = tuple(j for j in jobs if j[0] in sys.argv[1:])
+    for name, fn, out in jobs:
         parts, failed = [], []
         with ThreadPoolExecutor(N_WORKERS) as ex:
             futs = {ex.submit(fn, s): s for s in symbols}

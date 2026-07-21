@@ -35,8 +35,9 @@ def load() -> dict[str, pd.DataFrame]:
     k = k[~k.symbol.isin(STABLE_PAIRS)]
     k["date"] = pd.to_datetime(k["date"])
     k = k.sort_values(["symbol", "date"]).drop_duplicates(["symbol", "date"])
-    p = {c: k.pivot(index="date", columns="symbol", values=c)
-         for c in ("close", "quote_volume", "volume", "taker_buy_volume")}
+    cols = [c for c in ("close", "quote_volume", "volume", "taker_buy_volume")
+            if c in k.columns]
+    p = {c: k.pivot(index="date", columns="symbol", values=c) for c in cols}
     f = pd.read_parquet(RAW / "perp_funding.parquet")
     f["date"] = f["funding_time"].dt.tz_convert("UTC").dt.normalize().dt.tz_localize(None)
     fund = f.groupby(["date", "symbol"]).funding_rate.sum().unstack()
@@ -51,7 +52,6 @@ def build_signals(p: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     btc = ret["BTCUSDT"]
     cov = ret.rolling(60).cov(btc)
     beta = cov.div(btc.rolling(60).var(), axis=0)
-    tbr = (p["taker_buy_volume"] / p["volume"]).replace([np.inf, -np.inf], np.nan)
     sigs = {
         "mom30s1": close.shift(1) / close.shift(31) - 1,
         "K1_carry_1d": -fund,
@@ -66,10 +66,13 @@ def build_signals(p: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
         "K10_size_qv": -np.log(qv.rolling(30).median()),
         "K11_amihud_30d": (ret.abs() / qv).replace([np.inf, -np.inf], np.nan)
                           .rolling(30).mean(),
-        "K12_tbr_7d": tbr.rolling(7).mean(),
         "K13_volz_7d": -(qv.rolling(7).mean() / qv.rolling(90).mean()),
         "K14_high_90d": close / close.rolling(90).max(),
     }
+    if "taker_buy_volume" in p:  # column absent until klines re-download lands
+        tbr = (p["taker_buy_volume"] / p["volume"]).replace(
+            [np.inf, -np.inf], np.nan)
+        sigs["K12_tbr_7d"] = tbr.rolling(7).mean()
     return sigs
 
 
