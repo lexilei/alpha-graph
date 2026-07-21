@@ -1,15 +1,16 @@
 # Crypto factor batch K1 — results
 
 2026-07-21. Evaluation of the batch frozen in `crypto_factor_prereg.md`
-(committed before this run). 13 of 14 evaluated; **K12 pending** — the
-first klines download dropped `taker_buy_volume`, re-download running;
-K12 will be judged under the same pinned bars when it lands. Numbers:
-`crypto_factor_scan_k1.csv`. Baseline mom30s1 net-taker SR 0.946 / 6.3y.
+(committed before this run). K12 was judged hours after the other 13 (the
+first klines download dropped `taker_buy_volume`; re-downloaded), same
+pinned bars, no definition change. Numbers: `crypto_factor_scan_k1.csv`.
+Baseline mom30s1 net-taker SR 0.946 / 6.3y.
 
 ## Verdicts
 
 | ID | net-taker SR | t | 2023+ | corr mom | combo ΔSR | verdict |
 |----|---:|---:|---:|---:|---:|---|
+| K12 tbr_7d | **1.93** | **4.85** | 1.93 | 0.38 | **+0.79** | PASS standalone+diversifier |
 | K2 carry_7d | **1.05** | **2.63** | 0.58 | 0.04 | **+0.45** | PASS standalone+diversifier |
 | K14 high_90d | 0.93 | 2.30 | 0.88 | 0.56 | +0.18 | PASS standalone (momentum cousin) |
 | K11 amihud_30d | 0.68 | 1.71 | 0.34 | −0.00 | +0.21 | PASS diversifier |
@@ -19,9 +20,30 @@ K12 will be judged under the same pinned bars when it lands. Numbers:
 | K4 rev_1d, K5 rev_3d | −0.90, −1.06 | | | | | REJECT wrong sign |
 | K6 lowvol, K7 bab, K8 max, K9 skew, K13 volz | −0.32 … −1.22 | | | | | REJECT wrong sign |
 
-Family context: 13 looks this batch, venue ledger now 19 looks (20 with
-K12). Expected-max |t| under the null for 19 looks ≈ 2.3σ. K2 (2.63) is the
-only candidate above the family ceiling; K14 (2.30) sits at it.
+Family context: 14 looks this batch, venue ledger now 20 looks.
+Expected-max |t| under the null for 20 looks ≈ 2.3σ. K12 (4.85) clears it
+decisively — the strongest single result on any venue in this ledger; K2
+(2.63) is above it; K14 (2.30) sits at it.
+
+## K12 verification (checked before acceptance)
+
+- Data sanity: 7 of 587,609 kline rows have taker_buy > volume (known
+  Binance glitches, all 2023); irrelevant to a 7d-mean rank signal.
+- Leg decomposition: both legs work — long-leg minus universe SR +1.87,
+  short-leg plus universe SR +1.70. Not a one-sided artifact.
+- Yearly net-taker SR 2020–2026: 2.78, 2.48, 0.62, 2.08, 0.31, 2.76, 3.02.
+  Positive every year; no single-period concentration; no recent decay.
+- Economics: 7d taker-buy share = persistent aggressive-flow imbalance;
+  consistent with the batch's structural finding that crypto pays
+  attention/continuation premia. Corr 0.38 to price momentum — related
+  family, distinct information.
+
+## 4-sleeve combo (construction diagnostic, post hoc)
+
+mom30s1 + K2 + K11 + K12, equal risk, pairwise |corr| ≤ 0.38:
+net-taker SR **2.07** full sample, **1.75** 2023+. At a static-leverage
+15% vol target: backtest ann ≈ 31%, worst drawdowns proportionally
+smaller than the 3-sleeve version.
 
 ## Reading
 
