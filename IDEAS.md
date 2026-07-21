@@ -90,6 +90,7 @@ FACTORS.md 管"测一个想法",这里管"选择测什么"。想法先登记、�
 
 | ID | name | status | 内容 |
 |----|------|--------|------|
+| U2 | `book_allocator` | backlog | **Book/资本分配层("一个大策略"的融合层,2026-07-20 用户批准登记)**:一个分配器管所有 sleeve — 统一风险预算、保证金/netting(期权 delta 腿与 equity 持仓同账户对消)、统一 P&L 与监控、多 rebalance 时钟。vol_smile 的 A2 vol-managed overlay(唯一幸存者)在此升格为整本书的仓位调节器;intraday 到手后先作全 sleeve 共享执行层(C15 类换手成本的解药)再论独立 sleeve。**触发条件(钉死,防提前施工):≥2 个 sleeve 各有 ≥1 个过确认(confirmation-passed)的策略才开工**;当前 0 accepted、2 candidate(C17/C34),未触发。判决层不融合(每 sleeve 自己的 judge)— 融合只发生在账本层(已做)与 book 层(此项)。 |
 | U1 | `universe_sharadar` | backlog | 扩到 Sharadar 全市场含退市 PIT universe(2000+ 名)。修掉每行 C 因子的 survivorship caveat;把栖息地搬到异象实际存活的小盘/难套利段(McLean-Pontiff 残余所在)。第一个标定测试:C17 SUE/PEAD 全市场重跑(PEAD 小盘集中,兼作 C17 的 out-of-design 确认)。成本:数据订阅 + `sharadar.py`/`sharadar_qa.py` 扩展 + 面板重建,约数天到一周。**这是当前最高杠杆的一项投资,优先级高于队列中任何单因子。** **衰减文献定论(2026-07-15,`data/reference/decay_literature/`)**:U1 把测试从"发表异象拟合残留 ≈ 0 的角落"(最大市值/最高流动/低特质波动,McLean-Pontiff Table 8:idio +4.05 p<.001、size −1.49 p=.013、$vol −1.67 p<.01)搬进残余 alpha 实际存活的栖息地,等价于给队列每个难套利异象恢复 +1 P;且 US 是唯一有可靠发表后衰减的市场(Jacobs-Müller 2020)— 本面板是全球最坏栖息地,U1 是对它唯一的结构性修复。 |
 
 ## Family 覆盖图(kill log 当数据读;测过哪里、结论是什么)
