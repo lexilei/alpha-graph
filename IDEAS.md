@@ -137,6 +137,16 @@ FACTORS.md 管"测一个想法",这里管"选择测什么"。想法先登记、�
   分享中)。到手核验粒度/覆盖后重估:I11(分钟级事件研究解锁)、I24
   (执行层素材)、C15 daily 变体(盘中入场)、执行成本模型;vol_smile
   的 intraday 队列同受益。**数据未验前不改任何分数。**
+- **OSAP 完备性判决(2026-07-20,`reports/survey_github_survivors_
+  2026-07-20.md`)**:53 存活者全部入账(7 测/2 控/14 队列/9 锁/21 残余);
+  残余实质挖尽——真正未测且在栖息地的只剩 3 个边缘名:**OperProfRD**
+  (唯一 VW,profitability 族)、**ShareRepurchase**(回购事件,与
+  buyback_blackout 互补)、**DivOmit**(停派息事件,事件稀疏 MIN_XS
+  风险)。结构性结论:新因子来自新数据(13F 免费管道 = 解锁 5 条,
+  性价比最高;IBES 个人难买走 WRDS/Zacks;U1 让 21 残余 + 15 post-U1
+  进栖息地)或新构造,不是再刷基本面表。**JKP 13-cluster 已入
+  data/reference/jkp/;CZ Placebos 作 judge 假阳性校准是最便宜的
+  基建升级(不算 look)。**
 - **crypto-xs vertical(用户提出 2026-07-20;潜在第四 sleeve,排在现有
   承诺之后)**:crypto 截面因子(momentum/size/funding-carry)。先验
   两面已议:栖息地论证成立(机构套利密度低)+ 数据免费 PIT 干净
