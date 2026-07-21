@@ -137,7 +137,18 @@ FACTORS.md 管"测一个想法",这里管"选择测什么"。想法先登记、�
   分享中)。到手核验粒度/覆盖后重估:I11(分钟级事件研究解锁)、I24
   (执行层素材)、C15 daily 变体(盘中入场)、执行成本模型;vol_smile
   的 intraday 队列同受益。**数据未验前不改任何分数。**
-- **5-agent 随机 ideation 扫描(2026-07-17,判决索引
+- **crypto-xs vertical(用户提出 2026-07-20;潜在第四 sleeve,排在现有
+  承诺之后)**:crypto 截面因子(momentum/size/funding-carry)。先验
+  两面已议:栖息地论证成立(机构套利密度低)+ 数据免费 PIT 干净
+  (交易所 API)+ 容量无虞;但幸存者偏差比 SP500 恶劣一个量级
+  (universe 必须含死币)、wash-trading 假量污染 volume 类信号、
+  regime 不稳(整个资产类只有三四个 regime,分半检验先天难看)、
+  交易所/托管尾部风险直接进 P&L。文献:Liu-Tsyvinski-Wu JF 2022
+  (size/momentum 截面,发表后样本短,待核)。**前置(数据工程,不算
+  look)**:含退市的 universe 构建 + wash-trading 筛查 + 日频面板;
+  开族按 rule 6 钉预算,judge 移植 XS-IC。**明确排序:在 C17/C34 确认、
+  options-xs 三连、U1/分析师数据决定之后**;"好赚钱"不是登记理由,
+  栖息地 + 免费数据 + 平台机器可移植才是。 |
   `reports/ideation_agents_2026-07-17.md`;57 条 → 以下 12 条入 Inbox,
   9 条并入既有 family 菜单,其余归档/淘汰;去重逮住 2 条已测尸体
   C25/C23)**:
