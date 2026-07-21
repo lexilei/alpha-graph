@@ -412,6 +412,11 @@ FACTOR_SOURCES: list[FactorSource] = [
     # Filing merge (v0 t+1). Registered 2026-07-20 (ownership-flow opening).
     FactorSource("C34", "short_interest_xs.parquet",
                  ("short_interest_xs",), "avail_date", "filing", dropna="any"),
+    # C35: CHS breadth of ownership (signals/breadth_13f.py) — quarterly
+    # Δ(# 13F holders), avail = period_end + 46cd deadline. Filing merge
+    # (v0 t+1). Registered 2026-07-21 (ownership-flow member 2).
+    FactorSource("C35", "breadth_13f.parquet",
+                 ("breadth_13f",), "avail_date", "filing", dropna="any"),
     FactorSource("C29", "gross_profitability.parquet",
                  ("gross_profitability",), "avail_date", "filing", dropna="any"),
 ]
