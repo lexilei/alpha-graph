@@ -417,6 +417,11 @@ FACTOR_SOURCES: list[FactorSource] = [
     # (v0 t+1). Registered 2026-07-21 (ownership-flow member 2).
     FactorSource("C35", "breadth_13f.parquet",
                  ("breadth_13f",), "avail_date", "filing", dropna="any"),
+    # C36: LR predicted dividend yield (signals/div_yield_st.py) — month-end
+    # stamped Ediv1/close on the payer universe; "grid" merge → v0 t+1.
+    # Registered 2026-07-21 (div-seasonality family opening).
+    FactorSource("C36", "div_yield_st.parquet",
+                 ("div_yield_st",), "date", "grid", dropna="any"),
     FactorSource("C29", "gross_profitability.parquet",
                  ("gross_profitability",), "avail_date", "filing", dropna="any"),
 ]
