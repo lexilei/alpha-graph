@@ -57,7 +57,7 @@ def make_null_signal(panel_m: pd.DataFrame, rho: float,
 
 def main() -> int:
     k = int(sys.argv[1]) if len(sys.argv) > 1 else 100
-    panel = load_panel(None, pit=True, lag=1, daily_signals=True)
+    panel = load_panel(None, pit=True, lag=1, daily=True)
     panel_m = to_monthly(panel).reset_index(drop=True)
     panel_m = panel_m.sort_values(["ticker", "month"]).reset_index(drop=True)
     rng = np.random.default_rng(20260721)
