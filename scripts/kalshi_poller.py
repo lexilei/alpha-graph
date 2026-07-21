@@ -1,0 +1,92 @@
+"""Poll Kalshi BTC market orderbooks alongside the Polymarket recorder.
+
+Public API, no account. Every POLL_SEC, fetch orderbooks for open KXBTC
+(hourly) and KXBTCD (daily) markets closing within HORIZON; market list
+refreshes every LIST_SEC. Output shares the Polymarket recorder's directory
+and format: JSONL {"t_local", "src": "kalshi", "msg"} gzip, hourly files.
+
+Usage:
+  .venv/bin/python scripts/kalshi_poller.py            # run until killed
+  .venv/bin/python scripts/kalshi_poller.py --probe 30
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import time
+import urllib.request
+from datetime import datetime, timezone
+
+from polymarket_recorder import OUT, Sink  # noqa: F401  (shared sink/dir)
+
+BASE = "https://api.elections.kalshi.com/trade-api/v2"
+SERIES = ("KXBTC", "KXBTCD")
+POLL_SEC = 10
+LIST_SEC = 60
+HORIZON_SEC = 2 * 3600
+
+
+def _get(path: str) -> dict:
+    req = urllib.request.Request(f"{BASE}{path}",
+                                 headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.load(r)
+
+
+def list_markets() -> list[dict]:
+    out = []
+    now = time.time()
+    for s in SERIES:
+        d = _get(f"/markets?series_ticker={s}&status=open&limit=200")
+        for mk in d.get("markets", []):
+            close = datetime.strptime(
+                mk["close_time"], "%Y-%m-%dT%H:%M:%SZ"
+            ).replace(tzinfo=timezone.utc).timestamp()
+            if close - now >= HORIZON_SEC:
+                continue
+            # near-the-money only: implied yes price away from 0 and 1
+            yes_bid = 1.0 - float(mk.get("no_ask_dollars") or 1.0)
+            yes_ask = 1.0 - float(mk.get("no_bid_dollars") or 0.0)
+            if yes_ask < 0.03 or yes_bid > 0.97:
+                continue
+            out.append({"ticker": mk["ticker"],
+                        "close_time": mk["close_time"],
+                        "floor_strike": mk.get("floor_strike"),
+                        "cap_strike": mk.get("cap_strike"),
+                        "yes_bid": yes_bid, "yes_ask": yes_ask})
+    return out
+
+
+def main() -> None:
+    stop = None
+    if "--probe" in sys.argv:
+        stop = time.time() + float(sys.argv[sys.argv.index("--probe") + 1])
+    sink = Sink("kalshi")
+    markets: list[dict] = []
+    last_list = 0.0
+    n = 0
+    while stop is None or time.time() < stop:
+        t0 = time.time()
+        try:
+            if t0 - last_list > LIST_SEC:
+                markets = list_markets()
+                sink.write("kalshi_markets", markets)
+                last_list = t0
+            for mk in markets:
+                ob = _get(f"/markets/{mk['ticker']}/orderbook")
+                sink.write("kalshi", {"ticker": mk["ticker"], "ob": ob})
+                n += 1
+        except Exception as e:  # noqa: BLE001
+            sink.write("kalshi_err", str(e))
+        sink.flush()
+        time.sleep(max(0.0, POLL_SEC - (time.time() - t0)))
+    if sink.fh:
+        sink.fh.close()
+    if stop:
+        print(f"probe: {n} orderbook snapshots, {len(markets)} markets tracked",
+              flush=True)
+
+
+if __name__ == "__main__":
+    main()
