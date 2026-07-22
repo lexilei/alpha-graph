@@ -79,6 +79,8 @@ def main() -> None:
         cboth = pd.concat([net / net.std(), combo3 / combo3.std()],
                           axis=1).dropna()
         combo_new = cboth.mean(axis=1)
+        # compare on the joint subsample, else period effects contaminate dSR
+        combo3_sub_sr = sharpe(combo3.reindex(cboth.index))
         sr = sharpe(net)
         rows.append({
             "id": name,
@@ -89,7 +91,7 @@ def main() -> None:
             "t": sr * np.sqrt(len(net) / ANN) if np.isfinite(sr) else np.nan,
             "taker_sr_2023on": sharpe(net23),
             "corr_combo3": corr,
-            "combo_dSR": sharpe(combo_new) - combo3_sr,
+            "combo_dSR": sharpe(combo_new) - combo3_sub_sr,
             "corr_K12": float(net.corr(base["K12_tbr_7d"])),
         })
     res = pd.DataFrame(rows)
