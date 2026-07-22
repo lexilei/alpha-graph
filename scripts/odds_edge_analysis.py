@@ -75,8 +75,17 @@ def snapshot_rows(d: dict) -> list[dict]:
         fair = per_book.get("pinnacle") or {
             t: pd.Series([b[t] for b in per_book.values() if t in b]).mean()
             for t in teams}
+        # ET game date to disambiguate series games (same team pair on
+        # consecutive days); commence is UTC, EDT = UTC-4
+        cm = ev.get("commence_time") or ""
+        try:
+            cm_us = pd.Timestamp(cm).value // 1000
+            date_et = (pd.Timestamp(cm) - pd.Timedelta(hours=4)).strftime(
+                "%Y-%m-%d")
+        except ValueError:
+            continue
         rows.append({"t": d["t_local"], "teams": teams,
-                     "commence": ev.get("commence_time"),
+                     "commence_us": cm_us, "date_et": date_et,
                      "fair": fair, "best_odds": best_odds,
                      "n_books": len(per_book)})
     return rows
@@ -95,18 +104,19 @@ def main() -> None:
         if not cands:
             continue
         osnap = min(cands, key=lambda s: abs(s[0]["t"] - t))
-        by_teams = {r["teams"]: r for r in osnap}
+        by_key = {(r["teams"], r["date_et"]): r for r in osnap}
         for g in d["msg"]:
             try:
                 outs = json.loads(g["outcomes"])
             except (TypeError, json.JSONDecodeError):
                 continue
-            key = frozenset(outs)
-            r = by_teams.get(key)
+            r = by_key.get((frozenset(outs), g["slug"][-10:]))
             if r is None or g.get("bestAsk") is None or g.get("bestBid") is None:
                 continue
             if "vs." not in (g.get("question") or ""):
                 continue  # moneyline only, skip props/spreads
+            if r["commence_us"] <= t:
+                continue  # pre-game only: in-play books devig differently
             ask_a, bid_a = float(g["bestAsk"]), float(g["bestBid"])
             a, b = outs[0], outs[1]
             if a not in r["fair"] or b not in r["fair"]:
