@@ -107,8 +107,9 @@ def main() -> None:
     now = datetime.now(timezone.utc)
     spot = der["msg"]["index"]["index_price"]
     kal = {"msg": kalshi_listing(spot)}
+    n_mkts = len(kal["msg"])
     print(f"deribit snapshot age: {(now.timestamp() - der['t_local']/1e6)/60:.1f}min"
-          f" | index ${spot:,.0f} | kalshi live listing: {len(kal["msg"])} markets")
+          f" | index ${spot:,.0f} | kalshi live listing: {n_mkts} markets")
 
     # all future settlements 1h..36h out, each judged on its own ladder
     rows = []
