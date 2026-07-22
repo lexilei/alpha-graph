@@ -73,7 +73,7 @@ def main() -> None:
     der = last_line("deribit_*.jsonl.gz", "deribit_surface", RAW / "deribit")
     kal = last_line("kalshi_*.jsonl.gz", "kalshi_markets", RAW / "polymarket")
     now = datetime.now(timezone.utc)
-    spot = der["msg"]["index"]["price"]
+    spot = der["msg"]["index"]["index_price"]
     print(f"deribit snapshot age: {(now.timestamp() - der['t_local']/1e6)/60:.1f}min"
           f" | index ${spot:,.0f} | kalshi list age: "
           f"{(now.timestamp() - kal['t_local']/1e6)/60:.1f}min")
