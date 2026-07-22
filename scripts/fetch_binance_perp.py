@@ -19,6 +19,7 @@ import csv
 import io
 import re
 import sys
+import threading
 import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -26,6 +27,9 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 import pandas as pd
+import requests
+
+_tls = threading.local()
 
 BUCKET = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
 NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
@@ -40,11 +44,18 @@ KLINE_COLS = [
 
 
 def _get(url: str, retries: int = 4) -> bytes:
+    """Keep-alive GET: one requests.Session per thread (67k tiny files —
+    per-request TLS handshakes were 10x slower than the payloads)."""
+    if not hasattr(_tls, "s"):
+        _tls.s = requests.Session()
+        _tls.s.headers["User-Agent"] = "Mozilla/5.0"
     last = None
-    for i in range(retries):
+    for _ in range(retries):
         try:
-            with urllib.request.urlopen(url, timeout=60) as r:
-                return r.read()
+            r = _tls.s.get(url, timeout=60)
+            if r.status_code == 200:
+                return r.content
+            last = RuntimeError(f"HTTP {r.status_code}")
         except Exception as e:  # noqa: BLE001 - retry any transport error
             last = e
     raise RuntimeError(f"failed after {retries} tries: {url}") from last
