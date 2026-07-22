@@ -22,17 +22,21 @@ HAC t +3.33) were evaluated under pre-pinned bars: C17 is a below-ceiling
 candidate; C16 passed its pinned bar but a shifted-event placebo attributes
 the alpha to portfolio composition rather than event timing, so its
 ceiling-clearing claim was retracted the same day (see the ledger's
-re-grade). The registry holds **0 accepted factors**, and no result is
-currently treated as clearing the statistical bar (N = 133 tracked looks,
-two-sided E[max] ceiling ≈ 2.86 — a mean, not a significance bar; the 5%
-family-wise threshold is ≈ 3.55). A concurrency-conditioned insider variant
+re-grade). The **equity** registry holds **0 accepted factors**, and no
+equity result is currently treated as clearing the statistical bar (N = 161
+tracked looks as of 2026-07-21 — the latest *Accounting refresh* row of
+`reports/factor_preregistration.md` is always the authoritative count;
+two-sided E[max] ceiling ≈ 2.92, a mean, not a significance bar; the 5%
+family-wise threshold is ≈ 3.60). Since 2026-07-21 the same protocol also
+runs on other venues, where the picture differs — see **Other venues**
+below. A concurrency-conditioned insider variant
 (C20) was registered, evaluated against a pre-pinned three-condition bar,
 and rejected the same day.
 
 ## Method
 
-Each of the twenty registered candidates receives a permanent ID
-(`FACTORS.md`) and is scored by the monthly cross-sectional Spearman rank-IC
+Each registered candidate receives a permanent ID
+(`FACTORS.md`; C1–C36 as of 2026-07-21, next free ID noted there) and is scored by the monthly cross-sectional Spearman rank-IC
 between the signal and forward returns. The decision statistic is the
 **incremental** IC — the candidate residualized, each month, against a
 six-factor price/volume control set (12-1 and short-horizon momentum,
@@ -154,8 +158,8 @@ predictive content is the frequency anomaly specifically: constructions
 reading 8-K item content (hard-negative items) or tone (Loughran-McDonald
 sentiment) carried nothing even pre-PIT (sector-neutral |t| ≤ 1.0).
 
-Both variants sit below the full-ledger ceiling (≈ 2.86 at the current
-count). Status:
+Both variants sit below the full-ledger ceiling (see *Significance* for the
+authoritative count and ceiling). Status:
 candidates, unconfirmed; no significance claim is made.
 
 ### C15 tradeable backtest (gate-2): failed, live path closed
@@ -185,20 +189,76 @@ full 0.98, i.e. adding C1 does not help — predates the v0 conventions. It
 shows the combiner is a momentum machine; it is not a test of the SEC
 signals.
 
+## Other venues
+
+The equity program's protocol — pre-registration with pinned signs and
+bars, per-venue look ledgers, expected-max ceilings — also runs on two
+other venues since 2026-07-21. Each venue keeps its own ledger; looks are
+never pooled across venues for significance accounting.
+
+### Crypto perp cross-section (Binance USDT-M)
+
+787 USDT-M perpetuals, 2020-01 → 2026-06, survivorship-free (the vision
+bucket listing retains 28 delisted symbols). A pre-committed 6-cell
+momentum feasibility grid (`reports/crypto_perp_xs_feasibility.md`)
+passed net of taker fees, so two candidate batches were registered and
+judged under pinned bars: K1–K14 (`reports/crypto_factor_prereg.md`,
+signs frozen before evaluation) and M1–M5
+(`reports/crypto_factor_prereg_m.md`, frozen before the metrics data
+landed). Venue ledger: 25 looks, E[max|null] ≈ 2.4σ.
+
+Headline: **K12, 7-day taker-buy share** — net-taker SR 1.93, t = 4.85,
+positive every calendar year 2020–2026, both legs contribute
+(`reports/crypto_factor_scan_k1.md`). It is the only result on any venue
+decisively above every ceiling (5% family-wise at 25 looks ≈ 3.1). K2
+(7-day funding carry, t = 2.63, corr 0.04 to momentum) passed the
+diversifier bar; the entire short-the-risky-side family (low-vol, BAB,
+short-MAX, short-skew, 1–3d reversal) was wrong-signed and stays
+rejected per protocol. A post-hoc equal-risk 4-sleeve combo
+(mom30s1 + K2 + K11 + K12) reaches net-taker SR 2.07 full-sample / 1.75
+post-2023 — labeled a construction diagnostic, not a pre-registered
+result; a BTC-beta hedge and naive vol targeting were each tested once
+and rejected (`reports/crypto_combo_risk.md`). Live expectation is
+shaded to 0.8–1.2. Caveat: the panel is Binance; the restricted-universe
+rerun on Coinbase-perp-mappable symbols
+(`reports/crypto_restricted_universe.md`) gives 2.37 / 1.90 on 51
+names/day — upward-biased by listing-date lookahead, so the pair is
+treated as bounds, with the live expectation unchanged.
+
+### Event markets (Kalshi / Polymarket) — early, mostly infrastructure
+
+Recorders for Polymarket CLOB books + Binance spot trades, Kalshi
+orderbooks, Deribit surfaces, and sportsbook odds; an authenticated
+Kalshi client (demo orders passing) and a maker replay simulator with
+tiered latency assumptions. First-look findings on ~6.5 h of overnight
+data (`reports/arb_first_look_2026-07-22.md`): pure taker-side sniping
+is dead (maker requote p50 ≈ 51 ms), an external-FV maker is
+structurally attractive but not executable on Polymarket from this
+jurisdiction, and a Kalshi hourly pin premium is an open question at
+n = 6 settlements. No edge claim is made at this sample size.
+
 ## Significance and multiple testing
 
-As of 2026-07-14, N = 133 tracked ledger looks record a computed evaluation
+As of 2026-07-21, N = 161 tracked ledger looks record a computed evaluation
 statistic (registrations and infrastructure notes excluded; superseded rows
 count — they were looks, as do the 12 back-filled looks from the 2026-07-10
-IC-decay sweep). Selection is over |t|, so the reference bar for any
+IC-decay sweep; the count grows continuously — the latest *Accounting
+refresh* row of `reports/factor_preregistration.md` is authoritative).
+Selection is over |t|, so the reference bar for any
 external claim is the two-sided expected-max ceiling E[max |t| | null] =
-`emax_null(2N)` = **2.86** — with two review caveats now recorded in the
+`emax_null(2N)` = **2.92** — with two review caveats now recorded in the
 ledger: the E[max] ceiling is a mean, not a significance bar (the 5%
-family-wise threshold at this N is ≈ 3.4), and row-based counting
-understates statistic-level looks (≈ 150–185, ceiling ≈ 2.9). No result is
-currently treated as clearing the bar: C16's +3.33 was re-graded after a
-composition placebo (see the ledger), and C17 +1.70 / C15 −2.34 / C11
-−2.00 sit below it. The candidates are correlated same-family
+family-wise threshold at this N is ≈ 3.60), and row-based counting
+understates statistic-level looks (statistic-level basis runs higher, with
+a correspondingly higher ceiling — both recorded in the ledger). No result
+is currently treated as clearing the bar: C16's +3.33 was re-graded after a
+composition placebo (see the ledger), and C17 +2.01 / C15 −2.34 / C11
+−2.02 sit below it. A judge-null calibration (300 synthetic
+zero-information signals through the exact production judge, 2026-07-21;
+`reports/judge_null_calibration.csv`) quantified naive-t inflation for
+slow-persistence signals — a pure-noise slow signal reached |t| = 3.89 —
+so slow-class candidates are barred on HAC t or the empirical slow-regime
+null, pinned at registration. The candidates are correlated same-family
 measurements: an eigenspectrum estimate puts the effective number of
 independent bets at ≈ 7–9. That effective-N describes redundancy — how many
 distinct ideas were really tried — and is never the significance
