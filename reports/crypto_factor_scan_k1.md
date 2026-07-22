@@ -69,7 +69,8 @@ smaller than the 3-sleeve version.
 
 ## Next
 
-- Judge K12 when re-download lands (same bars).
+- ~~Judge K12 when re-download lands (same bars).~~ *(done same day — verdict
+  in the table above; stale bullet struck 2026-07-22.)*
 - Beta-neutralize and vol-target the 3-sleeve combo; check residual BTC
   beta — this is the within-sleeve "hedge" that matters first.
 - Cross-venue combination (equity/options sleeves) blocked on the other

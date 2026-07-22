@@ -37,6 +37,8 @@ after the joint-subsample fix. Verdict bars unchanged from prereg.
 4. Combo stands unchanged: **mom30s1 + K2 + K11 + K12, net-taker SR 2.07
    full / 1.75 2023+.**
 
-Venue look ledger after batch M: 25 looks, 5 passes (K2, K3, K11, K12,
-K14, M3 = 6 pass verdicts; 2 of them redundant), family E[max] ≈ 2.4σ;
-K12 (4.85) remains the only result decisively above every ceiling.
+Venue look ledger after batch M: 25 looks; **6 pass verdicts** (K2, K3,
+K11, K12, K14, M3), 2 of them redundant (K3 with K2, corr 0.55; M3 with
+K12, corr 0.61); family E[max] ≈ 2.4σ; K12 (4.85) remains the only result
+decisively above every ceiling. *(Arithmetic in this paragraph corrected
+2026-07-22 — "5 passes" miscounted its own list.)*
