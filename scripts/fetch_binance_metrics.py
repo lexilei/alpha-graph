@@ -28,7 +28,7 @@ import pandas as pd
 from fetch_binance_perp import OUT_DIR, _get, list_keys
 
 RANK_CUTOFF = 150
-N_WORKERS = 24
+N_WORKERS = 32
 
 NUM_COLS = ["sum_open_interest", "sum_open_interest_value",
             "count_toptrader_long_short_ratio",
