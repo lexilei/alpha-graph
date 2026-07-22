@@ -78,78 +78,78 @@ def main() -> None:
           f" | index ${spot:,.0f} | kalshi list age: "
           f"{(now.timestamp() - kal['t_local']/1e6)/60:.1f}min")
 
-    # target = the KXBTCD close nearest in the future
+    # all future settlements 1h..36h out, each judged on its own ladder
     rows = []
     for mkt in kal["msg"]:
         p = parse_kalshi_ticker(mkt["ticker"])
-        if p and p[0] == "KXBTCD" and p[1] > now:
-            rows.append((p[1], mkt, p[2], p[3]))
+        if not p:
+            continue
+        series, close, kind, val = p
+        h = (close - now).total_seconds() / 3600
+        if 1.0 <= h <= 36.0:
+            rows.append((close, mkt, kind, val))
     if not rows:
-        print("no future KXBTCD markets in the last listing")
+        print("no ladders 1-36h out in the last listing")
         return
-    target = min(r[0] for r in rows)
-    ladder = [(m, kind, val) for c, m, kind, val in rows if c == target]
-    tau_t = (target - now).total_seconds() / (365 * 86400)
-    print(f"target settlement: {target} (tau = {tau_t*365*24:.1f}h), "
-          f"{len(ladder)} markets on ladder")
 
-    # nearest-after deribit expiry smile
-    opts = []
+    all_opts = []
     for o in der["msg"]["options"]:
         pr = parse_deribit_name(o["instrument_name"])
-        if not pr or not o.get("mark_iv"):
+        if pr and o.get("mark_iv"):
+            all_opts.append((*pr, o["mark_iv"] / 100.0))
+
+    n_sig_total = 0
+    for target in sorted({r[0] for r in rows}):
+        ladder = [(m, kind, val) for c, m, kind, val in rows if c == target]
+        tau_t = (target - now).total_seconds() / (365 * 86400)
+        after = [o for o in all_opts if o[0] > target]
+        if not after:
             continue
-        exp, k, cp = pr
-        if exp > target:
-            opts.append((exp, k, cp, o["mark_iv"] / 100.0))
-    exp0 = min(o[0] for o in opts)
-    smile = pd.DataFrame([(k, iv) for e, k, cp, iv in opts
-                          if e == exp0 and cp == "C"],
-                         columns=["k", "iv"]).groupby("k").iv.mean().sort_index()
-    print(f"using deribit expiry {exp0} ({len(smile)} strikes), "
-          f"flat-forward-vol scaling to target tau")
+        exp0 = min(o[0] for o in after)
+        smile = pd.DataFrame(
+            [(k, iv) for e, k, cp, iv in after if e == exp0 and cp == "C"],
+            columns=["k", "iv"]).groupby("k").iv.mean().sort_index()
+        logm = np.log(smile.index.values / spot)
+        iv = smile.values
+        dk = np.gradient(iv, smile.index.values)
 
-    logm = np.log(smile.index.values / spot)
-    iv = smile.values
-    def sigma_at(K):
-        return float(np.interp(np.log(K / spot), logm, iv))
-    dk = np.gradient(iv, smile.index.values)
-    def dsigma_at(K):
-        return float(np.interp(np.log(K / spot), logm, dk))
+        def p_above(K):
+            s = float(np.interp(np.log(K / spot), logm, iv))
+            st = s * np.sqrt(tau_t)
+            d1 = (np.log(spot / K) + 0.5 * st * st) / st
+            vega = spot * norm.pdf(d1) * np.sqrt(tau_t)
+            dsg = float(np.interp(np.log(K / spot), logm, dk))
+            return float(np.clip(norm.cdf(d1 - st) - vega * dsg, 0, 1))
 
-    def p_above(K):
-        s = sigma_at(K)
-        st = s * np.sqrt(tau_t)
-        d1 = (np.log(spot / K) + 0.5 * st * st) / st
-        d2 = d1 - st
-        vega = spot * norm.pdf(d1) * np.sqrt(tau_t)
-        return float(np.clip(norm.cdf(d2) - vega * dsigma_at(K) / 1.0, 0, 1))
-
-    out = []
-    for mkt, kind, val in ladder:
-        if kind == "T":
-            p_fair = p_above(val)
-            label = f"T>{val:,.0f}"
-        else:
-            fs, cs = mkt.get("floor_strike"), mkt.get("cap_strike")
-            if fs is None or cs is None:
-                continue
-            p_fair = p_above(fs) - p_above(cs)
-            label = f"B{fs:,.0f}-{cs:,.0f}"
-        bid, ask = mkt["yes_bid"], mkt["yes_ask"]
-        mid = (bid + ask) / 2
-        fee = 0.07 * mid * (1 - mid)
-        dev = p_fair - mid
-        trade = ("BUY" if p_fair > ask + fee else
-                 "SELL" if p_fair < bid - fee else "")
-        out.append({"market": label, "kalshi_bid": bid, "kalshi_ask": ask,
-                    "deribit_p": round(p_fair, 3), "dev_vs_mid": round(dev, 3),
-                    "fee": round(fee, 3), "signal": trade})
-    df = pd.DataFrame(out).sort_values("dev_vs_mid", key=abs, ascending=False)
-    with pd.option_context("display.width", 160):
-        print(df.to_string(index=False))
-    n_sig = (df.signal != "").sum()
-    print(f"\n{n_sig} strikes cross the fee-adjusted band "
+        out = []
+        for mkt, kind, val in ladder:
+            if kind == "T":
+                p_fair, label = p_above(val), f"T>{val:,.0f}"
+            else:
+                fs, cs = mkt.get("floor_strike"), mkt.get("cap_strike")
+                if fs is None or cs is None:
+                    continue
+                p_fair = p_above(fs) - p_above(cs)
+                label = f"B{fs:,.0f}-{cs:,.0f}"
+            bid, ask = mkt["yes_bid"], mkt["yes_ask"]
+            mid = (bid + ask) / 2
+            fee = 0.07 * mid * (1 - mid)
+            dev = p_fair - mid
+            trade = ("BUY" if p_fair > ask + fee else
+                     "SELL" if p_fair < bid - fee else "")
+            out.append({"market": label, "bid": bid, "ask": ask,
+                        "deribit_p": round(p_fair, 3),
+                        "dev": round(dev, 3), "fee": round(fee, 3),
+                        "sig": trade})
+        df = pd.DataFrame(out).sort_values("dev", key=abs, ascending=False)
+        n_sig = (df.sig != "").sum()
+        n_sig_total += n_sig
+        print(f"\n== settle {target} (tau {tau_t*365*24:.1f}h, deribit exp "
+              f"{exp0.strftime('%d%b %H:%M')}): {len(df)} strikes, "
+              f"{n_sig} cross fee band ==")
+        with pd.option_context("display.width", 160):
+            print(df.head(10).to_string(index=False))
+    print(f"\nTOTAL fee-band crossings: {n_sig_total} "
           f"(taker fee; maker halves the bar)")
     print("caveats: flat-forward-vol maturity scaling; deribit RND is "
           "risk-neutral (VRP wedge); kalshi listing bid/ask may be stale "
