@@ -180,14 +180,19 @@ def main() -> None:
                 # kalshi v1 listing: side yes/no + action; normalize via price
                 px = float(o.get("yes_price_dollars") or 0) or None
                 live[(tick, side)] = (oid, px)
+            canceled_any = False
             for (tick, side), (oid, px) in live.items():
                 tgt = targets.get(tick, {}).get(side)
                 if tgt is None or px is None or abs(px - tgt) > STICKY:
                     try:
                         k.delete(f"/portfolio/events/orders/{oid}")
+                        canceled_any = True
                     except Exception:  # noqa: BLE001
                         pass
                     live[(tick, side)] = None
+            if canceled_any:
+                time.sleep(1.0)  # let cancels land before re-quoting: avoids
+                # post-only crossing our own in-flight canceled orders
             for tick, tgt in targets.items():
                 for side in ("bid", "ask"):
                     if side not in tgt or live.get((tick, side)):
