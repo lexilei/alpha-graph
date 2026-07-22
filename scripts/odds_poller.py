@@ -32,7 +32,7 @@ ODDS_DIR = ROOT / "data" / "raw" / "odds"
 KEY = (ODDS_DIR / "apikey.txt").read_text().strip()
 POLL_MIN = 15
 RESERVE = 60
-GAME_RE = re.compile(r"^mlb-\w+-\w+-\d{4}-\d{2}-\d{2}$")
+GAME_RE = re.compile(r"^mlb-\w+-\w+-(\d{4}-\d{2}-\d{2})$")
 
 
 class OddsSink(rec.Sink):
@@ -61,21 +61,22 @@ def fetch_odds(sink: rec.Sink) -> int | None:
 
 
 def fetch_polymarket(sink: rec.Sink) -> None:
+    # end_date_min keeps zombie unresolved games (May/June, closed=false
+    # forever) out of the window; without it ascending order returns only them
+    min_end = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 6 * 3600))
     url = ("https://gamma-api.polymarket.com/events?closed=false&limit=100"
-           "&tag_slug=mlb&order=endDate&ascending=true")
+           f"&tag_slug=mlb&order=endDate&ascending=true&end_date_min={min_end}")
     events, _ = _get(url)
     games, token_ids = [], []
-    horizon = time.time() + 3 * 86400
+    # window on the game date from the slug — gamma endDate is game + ~7d
+    # resolution buffer, useless for "is this game near now"
+    lo = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 86400))
+    hi = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 2 * 86400))
     for e in events:
         slug = e.get("slug") or ""
-        if not GAME_RE.match(slug):
+        m = GAME_RE.match(slug)
+        if not m or not lo <= m.group(1) <= hi:
             continue
-        end = e.get("endDate")
-        if end:
-            end_ts = time.mktime(time.strptime(end[:19], "%Y-%m-%dT%H:%M:%S")) \
-                - time.timezone
-            if end_ts > horizon:
-                continue
         for mk in e.get("markets", []):
             ids = mk.get("clobTokenIds")
             if isinstance(ids, str):
