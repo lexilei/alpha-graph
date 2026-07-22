@@ -42,6 +42,9 @@ def main() -> None:
                 .rank(axis=1, ascending=False) <= 100) & close.notna()
 
     m = pd.read_parquet(ROOT / "data/raw/binance/perp_metrics_daily.parquet")
+    # a daily zip's snapshots can spill past midnight -> duplicate (symbol, date)
+    m = m.sort_values(["symbol", "date"]).drop_duplicates(
+        ["symbol", "date"], keep="last")
     pv = {c: m.pivot(index="date", columns="symbol", values=c)
           .reindex(index=close.index, columns=close.columns)
           for c in ("sum_open_interest_value_last",
