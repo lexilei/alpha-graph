@@ -91,7 +91,9 @@ def kalshi_listing(spot: float) -> list[dict]:
                    "yes_bid": 1.0 - float(mk.get("no_ask_dollars") or 1),
                    "yes_ask": 1.0 - float(mk.get("no_bid_dollars") or 0)}
             ks = [k for k in (row["floor_strike"], row["cap_strike"]) if k]
-            if ks and any(abs(k / spot - 1) < 0.08 for k in ks):
+            row["has_ob"] = bool(ks) and any(
+                abs(k / spot - 1) < 0.08 for k in ks)
+            if row["has_ob"]:
                 ob = _kget(f"/markets/{mk['ticker']}/orderbook?depth=1"
                            ).get("orderbook_fp", {})
                 yb = ob.get("yes_dollars") or []
@@ -102,7 +104,7 @@ def kalshi_listing(spot: float) -> list[dict]:
     return out
 
 
-def main() -> None:
+def main(sink=None) -> None:
     der = last_line("deribit_*.jsonl.gz", "deribit_surface", RAW / "deribit")
     now = datetime.now(timezone.utc)
     spot = der["msg"]["index"]["index_price"]
@@ -168,20 +170,32 @@ def main() -> None:
             mid = (bid + ask) / 2
             fee = 0.07 * mid * (1 - mid)
             dev = p_fair - mid
-            trade = ("BUY" if p_fair > ask + fee else
-                     "SELL" if p_fair < bid - fee else "")
-            out.append({"market": label, "bid": bid, "ask": ask,
-                        "deribit_p": round(p_fair, 3),
-                        "dev": round(dev, 3), "fee": round(fee, 3),
-                        "sig": trade})
+            # signal only on strikes with a real orderbook read: the listing
+            # bid/ask fields fabricate 0.00/0.01 on one-sided books
+            trade = ""
+            if mkt.get("has_ob"):
+                trade = ("BUY" if p_fair > ask + fee else
+                         "SELL" if p_fair < bid - fee else "")
+            out.append({"market": label, "ticker": mkt["ticker"],
+                        "bid": bid, "ask": ask,
+                        "deribit_p": round(p_fair, 4),
+                        "dev": round(dev, 4), "fee": round(fee, 4),
+                        "tau_h": round(tau_t * 365 * 24, 2), "sig": trade})
         df = pd.DataFrame(out).sort_values("dev", key=abs, ascending=False)
         n_sig = (df.sig != "").sum()
         n_sig_total += n_sig
-        print(f"\n== settle {target} (tau {tau_t*365*24:.1f}h, deribit exp "
-              f"{exp0.strftime('%d%b %H:%M')}): {len(df)} strikes, "
-              f"{n_sig} cross fee band ==")
-        with pd.option_context("display.width", 160):
-            print(df.head(10).to_string(index=False))
+        if sink is not None:
+            sink.write("devscan", {"settle": str(target), "spot": spot,
+                                   "rows": out})
+        else:
+            print(f"\n== settle {target} (tau {tau_t*365*24:.1f}h, deribit "
+                  f"exp {exp0.strftime('%d%b %H:%M')}): {len(df)} strikes, "
+                  f"{n_sig} cross fee band ==")
+            with pd.option_context("display.width", 160):
+                print(df.head(10).to_string(index=False))
+    if sink is not None:
+        sink.flush()
+        return
     print(f"\nTOTAL fee-band crossings: {n_sig_total} "
           f"(taker fee; maker halves the bar)")
     print("caveats: flat-forward-vol maturity scaling; deribit RND is "
@@ -190,4 +204,19 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    import time as _time
+    if "--loop" in sys.argv:
+        import polymarket_recorder as rec
+        _sink = rec.Sink("devscan")
+        period = float(sys.argv[sys.argv.index("--loop") + 1])
+        while True:
+            t0 = _time.time()
+            try:
+                main(sink=_sink)
+            except Exception as e:  # noqa: BLE001
+                _sink.write("devscan_err", str(e))
+                _sink.flush()
+            _time.sleep(max(0.0, period - (_time.time() - t0)))
+    else:
+        main()
