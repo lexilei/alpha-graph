@@ -1,0 +1,4 @@
+variant,ann_ret,ann_vol,sharpe,maxdd,worst_month,sharpe_2023on
+raw_equal_risk,0.4572,0.2868,1.5943,-0.4094,-0.1287,1.1986
+btc_hedged,0.4518,0.2955,1.5291,-0.4379,-0.1061,0.9309
+hedged_voltarget_15pct,0.2228,0.1719,1.2959,-0.3279,-0.0910,0.8078
