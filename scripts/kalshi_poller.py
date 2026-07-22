@@ -45,16 +45,17 @@ def list_markets() -> list[dict]:
             ).replace(tzinfo=timezone.utc).timestamp()
             if close - now >= HORIZON_SEC:
                 continue
-            # near-the-money only: implied yes price away from 0 and 1
+            # full ladder recorded; near-the-money flag sets the poll tier
+            # (ATM books every cycle, far strikes every 6th) so dutching /
+            # sum-of-ladder consistency is answerable without 24 req/s
             yes_bid = 1.0 - float(mk.get("no_ask_dollars") or 1.0)
             yes_ask = 1.0 - float(mk.get("no_bid_dollars") or 0.0)
-            if yes_ask < 0.03 or yes_bid > 0.97:
-                continue
             out.append({"ticker": mk["ticker"],
                         "close_time": mk["close_time"],
                         "floor_strike": mk.get("floor_strike"),
                         "cap_strike": mk.get("cap_strike"),
-                        "yes_bid": yes_bid, "yes_ask": yes_ask})
+                        "yes_bid": yes_bid, "yes_ask": yes_ask,
+                        "atm": 0.03 <= yes_ask and yes_bid <= 0.97})
     return out
 
 
@@ -73,10 +74,13 @@ def main() -> None:
                 markets = list_markets()
                 sink.write("kalshi_markets", markets)
                 last_list = t0
+            cycle = n
             for mk in markets:
+                if not mk.get("atm", True) and cycle % 6 != 0:
+                    continue
                 ob = _get(f"/markets/{mk['ticker']}/orderbook")
                 sink.write("kalshi", {"ticker": mk["ticker"], "ob": ob})
-                n += 1
+            n += 1
         except Exception as e:  # noqa: BLE001
             sink.write("kalshi_err", str(e))
         sink.flush()
@@ -84,8 +88,8 @@ def main() -> None:
     if sink.fh:
         sink.fh.close()
     if stop:
-        print(f"probe: {n} orderbook snapshots, {len(markets)} markets tracked",
-              flush=True)
+        print(f"probe: {n} poll cycles, {len(markets)} markets tracked "
+              f"({sum(1 for m in markets if m.get('atm'))} ATM)", flush=True)
 
 
 if __name__ == "__main__":
