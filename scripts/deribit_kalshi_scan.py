@@ -69,14 +69,46 @@ def parse_kalshi_ticker(t: str):
     return series, close, kind, float(val)
 
 
+def _kget(path: str):
+    import urllib.request
+    req = urllib.request.Request(
+        f"https://api.elections.kalshi.com/trade-api/v2{path}",
+        headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.load(r)
+
+
+def kalshi_listing(spot: float) -> list[dict]:
+    """Live listing; strikes within 8% of spot get REAL top-of-book quotes
+    (the /markets bid/ask fields are unreliable on one-sided books)."""
+    out = []
+    for s in ("KXBTC", "KXBTCD"):
+        for mk in _kget(f"/markets?series_ticker={s}&status=open&limit=500"
+                        ).get("markets", []):
+            row = {"ticker": mk["ticker"],
+                   "floor_strike": mk.get("floor_strike"),
+                   "cap_strike": mk.get("cap_strike"),
+                   "yes_bid": 1.0 - float(mk.get("no_ask_dollars") or 1),
+                   "yes_ask": 1.0 - float(mk.get("no_bid_dollars") or 0)}
+            ks = [k for k in (row["floor_strike"], row["cap_strike"]) if k]
+            if ks and any(abs(k / spot - 1) < 0.08 for k in ks):
+                ob = _kget(f"/markets/{mk['ticker']}/orderbook?depth=1"
+                           ).get("orderbook_fp", {})
+                yb = ob.get("yes_dollars") or []
+                nb = ob.get("no_dollars") or []
+                row["yes_bid"] = float(yb[-1][0]) if yb else 0.0
+                row["yes_ask"] = 1.0 - float(nb[-1][0]) if nb else 1.0
+            out.append(row)
+    return out
+
+
 def main() -> None:
     der = last_line("deribit_*.jsonl.gz", "deribit_surface", RAW / "deribit")
-    kal = last_line("kalshi_*.jsonl.gz", "kalshi_markets", RAW / "polymarket")
     now = datetime.now(timezone.utc)
     spot = der["msg"]["index"]["index_price"]
+    kal = {"msg": kalshi_listing(spot)}
     print(f"deribit snapshot age: {(now.timestamp() - der['t_local']/1e6)/60:.1f}min"
-          f" | index ${spot:,.0f} | kalshi list age: "
-          f"{(now.timestamp() - kal['t_local']/1e6)/60:.1f}min")
+          f" | index ${spot:,.0f} | kalshi live listing: {len(kal_msg)} markets")
 
     # all future settlements 1h..36h out, each judged on its own ladder
     rows = []
