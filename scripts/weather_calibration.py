@@ -23,7 +23,7 @@ import pandas as pd
 CITIES = ["KXHIGHNY", "KXHIGHCHI", "KXHIGHMIA", "KXHIGHAUS", "KXHIGHDEN",
           "KXHIGHLAX", "KXHIGHPHIL"]
 LEADS_H = (18, 8)
-MAX_PER_CITY = 60
+MAX_PER_CITY = 200
 
 
 def kget(path: str):
