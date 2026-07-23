@@ -247,19 +247,28 @@ def paper_trade() -> None:
     if state["start"] is None:
         state["start"] = datetime.now(timezone.utc).isoformat()
 
-    ids = "&".join(f"product_ids={p_}" for p_ in mapped.values())
+    # quote everything we target OR hold: held-but-untargeted symbols must
+    # still be priced so they can be flattened and counted in NAV
+    quote_syms = {**mapped,
+                  **{s2: to_product(s2) for s2 in state["positions"]
+                     if to_product(s2) in prods}}
+    ids = "&".join(f"product_ids={p_}" for p_ in set(quote_syms.values()))
     books = {b["product_id"]: b for b in c.get(
         f"/api/v3/brokerage/best_bid_ask?{ids}").get("pricebooks", [])}
 
     nav = state["cash"]
     quotes = {}
-    for sym, prod in mapped.items():
+    for sym, prod in quote_syms.items():
         b = books.get(prod, {})
         try:
             bid = float(b["bids"][0]["price"]); ask = float(b["asks"][0]["price"])
         except (KeyError, IndexError):
             continue
         quotes[sym] = (bid, ask, (bid + ask) / 2)
+    unpriceable = [s2 for s2 in state["positions"] if s2 not in quotes]
+    if unpriceable:
+        log(f"WARN: held positions with no quote (excluded from NAV): "
+            f"{unpriceable}")
     for sym, pos in state["positions"].items():
         if sym in quotes:
             nav += pos["qty"] * quotes[sym][2]
