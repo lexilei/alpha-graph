@@ -105,8 +105,9 @@ def update_panel(test_n: int | None = None) -> None:
     k["date"] = pd.to_datetime(k["date"])
     last = k.groupby("symbol").date.max()
     yesterday = pd.Timestamp(datetime.now(timezone.utc).date() - timedelta(days=1))
-    # live symbols only: delisted names would 404 for every day since death
-    alive = last[last >= yesterday - pd.Timedelta(days=10)]
+    # live symbols only: delisted names would 404 for every day since death.
+    # 40d window covers the initial monthly-panel catch-up (~23d stale).
+    alive = last[last >= yesterday - pd.Timedelta(days=40)]
     syms = sorted(alive.index)
     if test_n:
         syms = syms[:test_n]
@@ -187,6 +188,10 @@ def compute_targets() -> dict:
     uni = (med.where(close.notna()).rank(axis=1, ascending=False) <= 100) \
         & close.notna()
     sigs = scan.build_signals(p)
+    # anchor on the last date where the universe actually exists (the funding
+    # proxy can extend the index past the latest klines)
+    valid_rows = uni.sum(axis=1)
+    anchor = valid_rows[valid_rows >= 20].index[-1]
     weights, rets = {}, {}
     for s in SLEEVES:
         sig = sigs[s].where(uni)
@@ -204,7 +209,7 @@ def compute_targets() -> dict:
     vol90 = rd.tail(90).std()
     inv = (1.0 / vol90)
     inv /= inv.sum()
-    combo_w = sum(weights[s].iloc[-1] * inv[s] for s in SLEEVES)
+    combo_w = sum(weights[s].loc[anchor] * inv[s] for s in SLEEVES)
     combo_ret = (rd / rd.std()).mean(axis=1)
     lever = TARGET_VOL / (combo_ret.tail(90).std() * np.sqrt(365))
     tgt = combo_w * lever
@@ -212,7 +217,7 @@ def compute_targets() -> dict:
     if gross > GROSS_CAP:
         tgt *= GROSS_CAP / gross
     tgt = tgt[tgt.abs() > 1e-4]
-    asof = str(p["close"].index[-1].date())
+    asof = str(anchor.date())
     return {"asof": asof, "weights": tgt.to_dict(), "lever": float(lever),
             "gross": float(tgt.abs().sum())}
 
