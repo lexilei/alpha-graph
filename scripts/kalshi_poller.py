@@ -34,6 +34,9 @@ def _get(path: str) -> dict:
         return json.load(r)
 
 
+_ATM_CACHE: dict[str, bool] = {}  # ticker -> last real-orderbook ATM verdict
+
+
 def list_markets() -> list[dict]:
     out = []
     now = time.time()
@@ -50,12 +53,14 @@ def list_markets() -> list[dict]:
             # sum-of-ladder consistency is answerable without 24 req/s
             yes_bid = 1.0 - float(mk.get("no_ask_dollars") or 1.0)
             yes_ask = 1.0 - float(mk.get("no_bid_dollars") or 0.0)
+            # ATM tier from the LAST REAL orderbook (listing bid/ask lies
+            # on one-sided books); unseen tickers default to ATM-frequency
             out.append({"ticker": mk["ticker"],
                         "close_time": mk["close_time"],
                         "floor_strike": mk.get("floor_strike"),
                         "cap_strike": mk.get("cap_strike"),
                         "yes_bid": yes_bid, "yes_ask": yes_ask,
-                        "atm": 0.03 <= yes_ask and yes_bid <= 0.97})
+                        "atm": _ATM_CACHE.get(mk["ticker"], True)})
     return out
 
 
@@ -80,6 +85,15 @@ def main() -> None:
                     continue
                 ob = _get(f"/markets/{mk['ticker']}/orderbook")
                 sink.write("kalshi", {"ticker": mk["ticker"], "ob": ob})
+                obf = ob.get("orderbook_fp", {}) if isinstance(ob, dict) else {}
+                yb = obf.get("yes_dollars") or []
+                nb = obf.get("no_dollars") or []
+                two_sided = bool(yb) and bool(nb)
+                if two_sided:
+                    mid = (float(yb[-1][0]) + 1.0 - float(nb[-1][0])) / 2
+                    _ATM_CACHE[mk["ticker"]] = 0.03 <= mid <= 0.97
+                else:
+                    _ATM_CACHE[mk["ticker"]] = False
             n += 1
         except Exception as e:  # noqa: BLE001
             sink.write("kalshi_err", str(e))

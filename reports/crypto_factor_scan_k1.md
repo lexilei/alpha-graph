@@ -25,6 +25,14 @@ Expected-max |t| under the null for 20 looks ≈ 2.3σ. K12 (4.85) clears it
 decisively — the strongest single result on any venue in this ledger; K2
 (2.63) is above it; K14 (2.30) sits at it.
 
+*(Correction note 2026-07-23: the scan's combo_dSR compared a joint-window
+combo against the full-sample baseline SR — a subsample-mismatch defect found
+in code review. Recomputed with the corrected formula on the original
+judgment window (panel ≤ 2026-06-30): every dSR and every verdict in this
+file's table is unchanged to 3 decimals — the mismatch term was nil on this
+window because all pass-tier factors share the baseline's live window. The
+code fix is in `crypto_factor_scan.py`; future evaluations use it.)*
+
 ## K12 verification (checked before acceptance)
 
 - Data sanity: 7 of 587,609 kline rows have taker_buy > volume (known

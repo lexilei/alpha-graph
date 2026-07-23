@@ -63,9 +63,11 @@ def parse_kalshi_ticker(t: str):
     if not m:
         return None
     series, yy, mon, dd, hh, kind, val = m.groups()
-    # settle hour is ET; EDT in July = UTC-4
+    # settle hour is US/Eastern; resolve the actual UTC offset per date
+    from zoneinfo import ZoneInfo
     close = datetime(2000 + int(yy), MONTHS[mon], int(dd), int(hh),
-                     tzinfo=timezone.utc) + pd.Timedelta(hours=4)
+                     tzinfo=ZoneInfo("America/New_York")).astimezone(
+                         timezone.utc)
     return series, close, kind, float(val)
 
 

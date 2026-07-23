@@ -122,6 +122,9 @@ def main() -> None:
         a = net / net.std()
         b = base_net / base_net.std()
         combo = (a.add(b, fill_value=np.nan)).dropna()
+        # compare on the joint subsample: full-sample base_sr vs a
+        # short-history factor's combo window mixes Sharpe regimes
+        base_sub_sr = sharpe(base_net.reindex(combo.index))
         sr = sharpe(net)
         rows.append({
             "id": name,
@@ -132,7 +135,7 @@ def main() -> None:
             "t": sr * np.sqrt(len(net) / ANN) if np.isfinite(sr) else np.nan,
             "taker_sr_2023on": sharpe(net23),
             "corr_mom": corr,
-            "combo_dSR": sharpe(combo) - base_sr,
+            "combo_dSR": sharpe(combo) - base_sub_sr,
         })
     res = pd.DataFrame(rows)
 

@@ -69,14 +69,18 @@ def discover() -> dict[str, dict]:
     with urllib.request.urlopen(req, timeout=15) as r:
         events = json.load(r)
     toks: dict[str, dict] = {}
-    horizon = time.time() + 45 * 60
+    import calendar
+    now_ts = time.time()
+    horizon = now_ts + 45 * 60
     for e in events:
         if SERIES_KEY not in (e.get("slug") or ""):
             continue
         end = e.get("endDate")
         if end:
-            end_ts = time.mktime(time.strptime(end, "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
-            if end_ts > horizon:
+            end_ts = calendar.timegm(time.strptime(end, "%Y-%m-%dT%H:%M:%SZ"))
+            # skip stale zombies (closed=false but long past) AND far-future:
+            # zombies churned the set 33x/hour -> reconnect data loss
+            if end_ts > horizon or end_ts < now_ts - 120:
                 continue
         for mk in e.get("markets", []):
             ids = mk.get("clobTokenIds")
