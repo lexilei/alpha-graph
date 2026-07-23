@@ -99,20 +99,25 @@ def main() -> None:
             vol.update(S, t0)
             sig = vol.sigma_1s
 
-            bal = float(k.get("/portfolio/balance")["balance_dollars"])
-            if bal < start_bal - DAILY_LOSS_STOP:
+            bal_resp = k.get("/portfolio/balance")
+            bal = float(bal_resp["balance_dollars"])
+            equity = bal + float(bal_resp.get("portfolio_value", 0) or 0)
+            if equity < start_bal - DAILY_LOSS_STOP:
                 for oid in list(my_orders):
                     try:
                         k.delete(f"/portfolio/events/orders/{oid}")
                     except Exception:  # noqa: BLE001
                         pass
-                sink.write("maker_stop", {"balance": bal})
+                sink.write("maker_stop", {"balance": bal, "equity": equity})
                 print("loss stop hit, all orders canceled", flush=True)
                 break
 
             pos = {p["ticker"]: float(p.get("position_fp") or p.get("position", 0))
                    for p in k.get("/portfolio/positions").get(
                        "market_positions", [])}
+            net_total = sum(pos.values())  # all markets share the BTC underlying
+            long_capped = net_total > 3 * INV_CAP
+            short_capped = net_total < -3 * INV_CAP
 
             mkts = []
             for series in ("KXBTC", "KXBTCD"):
@@ -155,13 +160,13 @@ def main() -> None:
                 except Exception:  # noqa: BLE001
                     book_bid = book_ask = None
                 q = {}
-                if inv < INV_CAP:
+                if inv < INV_CAP and not long_capped:
                     b = max(0.01, round(fv - delta, 2))
                     if book_ask is not None:
                         b = min(b, round(book_ask - 0.01, 2))
                     if b >= 0.01:
                         q["bid"] = b
-                if inv > -INV_CAP:
+                if inv > -INV_CAP and not short_capped:
                     a = min(0.99, round(fv + delta, 2))
                     if book_bid is not None:
                         a = max(a, round(book_bid + 0.01, 2))
