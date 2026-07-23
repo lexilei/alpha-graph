@@ -45,7 +45,7 @@ import polymarket_recorder as rec  # noqa: E402  (Sink)
 PHI0 = 0.3989
 CYCLE_S = 10.0
 STICKY = 0.02
-SIZE = 10
+SIZE = 5
 INV_CAP = 50
 DAILY_LOSS_STOP = 25.0
 BAND = 0.05   # strike band vs spot; nearest N picked below
