@@ -213,7 +213,11 @@ def main() -> None:
                             "time_in_force": "good_till_canceled",
                             "self_trade_prevention_type": "maker",
                             "post_only": True,
-                            "cancel_order_on_pause": True})
+                            "cancel_order_on_pause": True,
+                            # poor-man's dead-man switch: orders self-expire;
+                            # a live loop re-places them, a dead loop leaves
+                            # nothing resting beyond 120s
+                            "expiration_time": int(time.time()) + 120})
                     except Exception as e:  # noqa: BLE001
                         sink.write("order_err", {"ticker": tick, "side": side,
                                                  "err": str(e)[:200]})
