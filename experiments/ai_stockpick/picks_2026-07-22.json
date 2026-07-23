@@ -1,0 +1,42 @@
+{
+  "round": 1,
+  "pick_date": "2026-07-22",
+  "entry": "2026-07-22 close",
+  "exit": "2026-07-29 close",
+  "model": "claude-fable-5",
+  "protocol": "reports/ai_stockpick_prereg.md",
+  "searches": [
+    "AAPL MSFT NVDA GOOGL stock news this week July 2026",
+    "AMZN META TSLA AVGO stock news this week July 2026",
+    "JPM V UNH XOM stock news this week July 2026",
+    "LLY HD KO PEP stock news this week July 2026",
+    "MRK COST WMT DIS stock news this week July 2026",
+    "SUPPLEMENT: Visa Costco Disney stock news July 21 2026 (V/COST/DIS zero coverage in batch)"
+  ],
+  "regime_read": "Semis in sharp rout (SOXX -18.6% July, worst month since 2008, chips worst week in a year); oil shock backdrop with Middle East instability; rates/housing anxiety; Tue 7/21 was a bounce day (SPX +0.85%). Ranking tilts defensive + positive-catalyst, fades chip-crash momentum and negative-skew earnings events inside the window.",
+  "ranking": [
+    {"rank": 1,  "ticker": "LLY",  "why": "Record-high momentum, Mounjaro +125% YoY, Medicare GLP-1 Bridge (7/1) expands access, JPM target 1400; defensive growth"},
+    {"rank": 2,  "ticker": "UNH",  "why": "Q2 beat 6.38 vs 4.94, +1.2% reaction; post-earnings drift, defensive"},
+    {"rank": 3,  "ticker": "MRK",  "why": "FDA approval (Lipfendra) + AIDS 2026 pipeline data + RBC Buy; catalyst-rich defensive"},
+    {"rank": 4,  "ticker": "JPM",  "why": "Record high post Q2 beat, nearing $1T; financials leadership intact"},
+    {"rank": 5,  "ticker": "XOM",  "why": "Cleanest oil-shock play per street, +17% YTD; risk-off hedge in this tape"},
+    {"rank": 6,  "ticker": "KO",   "why": "Uptrend intact, -4% dip on staples weakness, pricing-power narrative into 7/28 BMO earnings (inside window)"},
+    {"rank": 7,  "ticker": "WMT",  "why": "Defensive; lettuce-recall headline transient, jobs-goal positive"},
+    {"rank": 8,  "ticker": "COST", "why": "Quality defensive, already corrected 14% from May high; dividend ex 7/24"},
+    {"rank": 9,  "ticker": "V",    "why": "Near highs, street bullish, stablecoin bet; 7/28 AMC earnings event risk inside window caps rank"},
+    {"rank": 10, "ticker": "MSFT", "why": "No specific news; quality, but Citi 'end of Seven Giants era' sentiment headwind"},
+    {"rank": 11, "ticker": "GOOGL","why": "Same as MSFT: no idiosyncratic news, mega-tech sentiment drag"},
+    {"rank": 12, "ticker": "DIS",  "why": "Kraft Heinz alliance mildly positive; otherwise neutral"},
+    {"rank": 13, "ticker": "AAPL", "why": "No news; consumer exposure + mega-tech drag"},
+    {"rank": 14, "ticker": "HD",   "why": "Rates/housing anxiety was the July 8 -3.4% driver and persists"},
+    {"rank": 15, "ticker": "AMZN", "why": "7/24 AMC earnings inside window, AWS growth question, tech sentiment drag"},
+    {"rank": 16, "ticker": "META", "why": "Run-up into 7/29 earnings + split chatter, but tech drag; negative-skew if tape stays risk-off"},
+    {"rank": 17, "ticker": "PEP",  "why": "Q2 miss already reported, -11% and staples weakness; no bounce catalyst"},
+    {"rank": 18, "ticker": "TSLA", "why": "7/23 AMC earnings with slowing deliveries narrative = negative-skew event inside window"},
+    {"rank": 19, "ticker": "NVDA", "why": "Epicenter of semi rout; crash-momentum continuation over 1w horizon"},
+    {"rank": 20, "ticker": "AVGO", "why": "Semi rout + insider $10M sale + already down premarket Wed"}
+  ],
+  "long5": ["LLY", "UNH", "MRK", "JPM", "XOM"],
+  "short5": ["META", "PEP", "TSLA", "NVDA", "AVGO"],
+  "notes": "Week-1 methodological observation, logged per protocol: this ranking is human-legible macro consensus (defensive+catalyst vs chip-crash momentum) — exactly the 'consensus compression' hypothesis the experiment is testing. Coverage was thin for V/COST/DIS even after supplement; MSFT/GOOGL/AAPL ranked on priors alone this round."
+}
