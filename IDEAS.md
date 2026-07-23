@@ -122,6 +122,13 @@ FACTORS.md 管"测一个想法",这里管"选择测什么"。想法先登记、�
 想法随手丢这里(手机上丢 Notion Experiments Inbox 也行,定期搬运)。
 补全六字段后领 I-ID 进队列。
 
+- **ai_stockpick_calibration**(用户来源 2026-07-22,小红书 AI 选股热):
+  前向预注册校准实验 — LLM 每周三按固定流程排序 20 个大盘名,测胜率/
+  Spearman IC vs SPY 对照。**不占 N、不动冻结面板、不产生交易**;协议
+  `reports/ai_stockpick_prereg.md`,留痕 `experiments/ai_stockpick/`,评分
+  `scripts/ai_stockpick_score.py`。预期 = 命中率 50–55%、IC≈0(LLM 判断
+  ≈ 共识压缩);若 24 轮后有信号,另走 I-ID → C-ID,本实验只算先验。
+
 - **post-U1 基本面 re-pin 候选**(现 universe family 已关,U1 重开时按此
   优先;HXZ = RFS 2020 Table 3 NYSE-VW \|t\|,OSAP = 发表后 t / 2011+ t,
   重算复核):NetPayoutYield(OSAP 3.78/3.67,mean 1.5%/mo)· XFIN
