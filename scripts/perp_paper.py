@@ -211,6 +211,8 @@ def compute_targets(tradable_bases: set | None = None) -> dict:
         pnl = (w * ret.shift(-1)).sum(axis=1) - (w * fund.shift(-1)).sum(axis=1)
         rets[s] = pnl
     rd = pd.DataFrame(rets).dropna()
+    if rd.empty:
+        raise RuntimeError("no valid sleeve returns — panel too sparse")
     vol90 = rd.tail(90).std()
     inv = (1.0 / vol90)
     inv /= inv.sum()

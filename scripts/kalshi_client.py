@@ -53,16 +53,23 @@ class Kalshi:
                 "User-Agent": "Mozilla/5.0"}
 
     def request(self, method: str, path: str, body: dict | None = None):
-        req = urllib.request.Request(
-            self.base + path,
-            data=json.dumps(body).encode() if body is not None else None,
-            headers=self._headers(method, path), method=method)
-        try:
-            with urllib.request.urlopen(req, timeout=20) as r:
-                return json.load(r)
-        except urllib.error.HTTPError as e:
-            raise RuntimeError(f"{method} {path} -> {e.code}: "
-                               f"{e.read().decode()[:300]}") from e
+        last = None
+        for attempt in range(3):
+            req = urllib.request.Request(
+                self.base + path,
+                data=json.dumps(body).encode() if body is not None else None,
+                headers=self._headers(method, path), method=method)
+            try:
+                with urllib.request.urlopen(req, timeout=20) as r:
+                    return json.load(r)
+            except urllib.error.HTTPError as e:
+                if e.code in (429, 500, 502, 503) and attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))
+                    last = e
+                    continue
+                raise RuntimeError(f"{method} {path} -> {e.code}: "
+                                   f"{e.read().decode()[:300]}") from e
+        raise RuntimeError(f"{method} {path} retries exhausted") from last
 
     def get(self, path: str):
         return self.request("GET", path)

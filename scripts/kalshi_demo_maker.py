@@ -25,12 +25,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import calendar
 import math
 import sys
+from datetime import datetime, timezone
 import time
 import urllib.request
 import uuid
-from collections import deque
 from pathlib import Path
 
 from scipy.stats import norm
@@ -87,8 +88,8 @@ def main() -> None:
     k = kc.Kalshi("demo")
     sink = rec.Sink("demomaker")
     vol = Vol()
-    my_orders: dict[str, dict] = {}  # order_id -> {ticker, side, price}
     start_bal = float(k.get("/portfolio/balance")["balance_dollars"])
+    stop_day = datetime.now(timezone.utc).date()
     print(f"demo maker start, balance ${start_bal}", flush=True)
 
     n = 0
@@ -102,14 +103,23 @@ def main() -> None:
             bal_resp = k.get("/portfolio/balance")
             bal = float(bal_resp["balance_dollars"])
             equity = bal + float(bal_resp.get("portfolio_value", 0) or 0)
+            today = datetime.now(timezone.utc).date()
+            if today != stop_day:  # reset the DAILY loss baseline at UTC roll
+                stop_day, start_bal = today, equity
             if equity < start_bal - DAILY_LOSS_STOP:
-                for oid in list(my_orders):
+                resting = k.get("/portfolio/orders?status=resting"
+                                ).get("orders", [])
+                n_fail = 0
+                for o in resting:
                     try:
-                        k.delete(f"/portfolio/events/orders/{oid}")
+                        k.delete(f"/portfolio/events/orders/{o['order_id']}")
                     except Exception:  # noqa: BLE001
-                        pass
-                sink.write("maker_stop", {"balance": bal, "equity": equity})
-                print("loss stop hit, all orders canceled", flush=True)
+                        n_fail += 1
+                sink.write("maker_stop", {"balance": bal, "equity": equity,
+                                          "canceled": len(resting) - n_fail,
+                                          "cancel_failed": n_fail})
+                print(f"loss stop hit: canceled {len(resting)-n_fail}, "
+                      f"failed {n_fail} (self-expire <=120s)", flush=True)
                 break
 
             pos = {p["ticker"]: float(p.get("position_fp") or p.get("position", 0))
@@ -129,8 +139,8 @@ def main() -> None:
                 fs = m.get("floor_strike")
                 if not fs or abs(fs / S - 1) > BAND:
                     continue
-                close = time.mktime(time.strptime(
-                    m["close_time"], "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
+                close = calendar.timegm(time.strptime(
+                    m["close_time"], "%Y-%m-%dT%H:%M:%SZ"))
                 tau = close - now
                 if not 600 < tau < 16 * 3600:
                     continue
@@ -158,7 +168,7 @@ def main() -> None:
                     book_bid = float(yb[-1][0]) if yb else None
                     book_ask = 1.0 - float(nb[-1][0]) if nb else None
                 except Exception:  # noqa: BLE001
-                    book_bid = book_ask = None
+                    continue  # no book read -> do not quote blind this cycle
                 q = {}
                 if inv < INV_CAP and not long_capped:
                     b = max(0.01, round(fv - delta, 2))
@@ -180,21 +190,46 @@ def main() -> None:
             live = {}
             for o in open_orders:
                 tick, oid = o["ticker"], o["order_id"]
-                side = "bid" if o.get("side") == "yes" and o.get(
-                    "action", "buy") == "buy" else "ask"
-                # kalshi v1 listing: side yes/no + action; normalize via price
-                px = float(o.get("yes_price_dollars") or 0) or None
-                live[(tick, side)] = (oid, px)
+                o_side, o_act = o.get("side"), o.get("action")
+                if o_side == "yes" and o_act == "buy":
+                    side = "bid"
+                elif o_side == "yes" and o_act == "sell":
+                    side = "ask"
+                elif o_side == "no" and o_act == "buy":
+                    side = "ask"   # buy-no == sell-yes economically
+                elif o_side == "no" and o_act == "sell":
+                    side = "bid"
+                else:
+                    sink.write("order_warn", {"ticker": tick, "oid": oid,
+                                              "side": o_side, "action": o_act,
+                                              "note": "unrecognized, skipping"})
+                    continue
+                px = o.get("yes_price_dollars")
+                if px is None and o.get("no_price_dollars") is not None:
+                    px = 1.0 - float(o["no_price_dollars"])
+                px = float(px) if px is not None else None
+                created = o.get("created_time")
+                live[(tick, side)] = (oid, px, created)
             canceled_any = False
-            for (tick, side), (oid, px) in live.items():
+            now_utc = time.time()
+            for (tick, side), (oid, px, created) in list(live.items()):
                 tgt = targets.get(tick, {}).get(side)
-                if tgt is None or px is None or abs(px - tgt) > STICKY:
+                age = 0.0
+                if created:
+                    try:
+                        age = now_utc - calendar.timegm(time.strptime(
+                            created[:19], "%Y-%m-%dT%H:%M:%S"))
+                    except ValueError:
+                        age = 0.0
+                stale = tgt is None or px is None or abs(px - tgt) > STICKY
+                near_expiry = age > 90  # renew before the 120s self-expiry
+                if stale or near_expiry:
                     try:
                         k.delete(f"/portfolio/events/orders/{oid}")
                         canceled_any = True
+                        live[(tick, side)] = None
                     except Exception:  # noqa: BLE001
-                        pass
-                    live[(tick, side)] = None
+                        pass  # keep slot occupied: order may still be live
             if canceled_any:
                 time.sleep(1.0)  # let cancels land before re-quoting: avoids
                 # post-only crossing our own in-flight canceled orders
