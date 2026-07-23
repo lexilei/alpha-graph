@@ -18,7 +18,7 @@
   (WebSearch,4 名/批 × 5 批;覆盖为零的名允许一次合并补检,补检
   与否记入当轮日志);(2) 模型输出 1–20 完整排序 + 每名
   一句理由;(3) 全量留痕(检索结果要点、排序、理由、模型 ID)写入
-  `data/ai_stockpick/picks_YYYY-MM-DD.json`,当日 commit — commit
+  `experiments/ai_stockpick/picks_YYYY-MM-DD.json`,当日 commit — commit
   时间戳即封存证明。
 - **评分**(`scripts/ai_stockpick_score.py`,adjusted close):
   - primary:top5 等权 − bottom5 等权的一周价差收益,每周 1 个二元
