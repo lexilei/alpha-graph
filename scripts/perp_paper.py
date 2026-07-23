@@ -180,11 +180,16 @@ def load_panels_with_proxy():
     return p
 
 
-def compute_targets() -> dict:
+def compute_targets(tradable_bases: set | None = None) -> dict:
     p = load_panels_with_proxy()
     close, qv, fund = p["close"], p["quote_volume"], p["fund"]
     ret = close.pct_change(fill_method=None)
     med = qv.rolling(30, min_periods=30).median()
+    if tradable_bases:
+        elig = close.columns.isin(tradable_bases)
+        med = med.where(pd.DataFrame(
+            {c: elig[i] for i, c in enumerate(close.columns)},
+            index=close.index))
     uni = (med.where(close.notna()).rank(axis=1, ascending=False) <= 100) \
         & close.notna()
     sigs = scan.build_signals(p)
@@ -210,7 +215,7 @@ def compute_targets() -> dict:
     inv = (1.0 / vol90)
     inv /= inv.sum()
     combo_w = sum(weights[s].loc[anchor] * inv[s] for s in SLEEVES)
-    combo_ret = (rd / rd.std()).mean(axis=1)
+    combo_ret = (rd * inv).sum(axis=1)  # raw units, not z-scored
     lever = TARGET_VOL / (combo_ret.tail(90).std() * np.sqrt(365))
     tgt = combo_w * lever
     gross = tgt.abs().sum()
@@ -227,11 +232,12 @@ def to_product(sym: str) -> str:
 
 
 def paper_trade() -> None:
-    tgt = compute_targets()
     c = cbm.Coinbase()
     prods = {p_["product_id"] for p_ in c.get(
         "/api/v3/brokerage/products?product_type=FUTURE"
         "&contract_expiry_type=PERPETUAL").get("products", [])}
+    tradable = {pid.replace("-PERP-INTX", "") + "USDT" for pid in prods}
+    tgt = compute_targets(tradable)
     mapped = {s: to_product(s) for s in tgt["weights"]
               if to_product(s) in prods}
     dropped = sorted(set(tgt["weights"]) - set(mapped))
