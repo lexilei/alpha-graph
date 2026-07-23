@@ -104,10 +104,44 @@ def kalshi_listing(spot: float) -> list[dict]:
     return out
 
 
+def brti_spot() -> float | None:
+    """VW mid of the last ~10s of recorded Coinbase+Kraken trades — the
+    settlement-relevant anchor (Kalshi settles on BRTI, whose constituents
+    are US venues; Binance/Deribit-index carry a measured +6bp basis)."""
+    files = sorted((RAW / "polymarket").glob("brti_*.jsonl.gz"))
+    if not files:
+        return None
+    rows = []
+    for f in files[-2:]:
+      try:
+        for line in gzip.open(f, "rt"):
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if d["src"] == "coinbase":
+                rows.append((d["t_local"], float(d["msg"]["p"]), float(d["msg"]["s"])))
+            elif d["src"] == "kraken":
+                for tr in d["msg"]:
+                    rows.append((d["t_local"], float(tr[0]), float(tr[1])))
+      except (EOFError, zlib.error):
+        pass
+    if not rows:
+        return None
+    tmax = rows[-1][0]
+    recent = [(p_, v) for t, p_, v in rows if t >= tmax - 10_000_000]
+    if not recent:
+        return None
+    ps = [p_ for p_, v in recent]
+    ws = [max(v, 1e-9) for p_, v in recent]
+    return float(sum(p_ * w for p_, w in zip(ps, ws)) / sum(ws))
+
+
 def main(sink=None) -> None:
     der = last_line("deribit_*.jsonl.gz", "deribit_surface", RAW / "deribit")
     now = datetime.now(timezone.utc)
-    spot = der["msg"]["index"]["index_price"]
+    spot_deribit = der["msg"]["index"]["index_price"]
+    spot = brti_spot() or spot_deribit * (1 - 6e-4)  # fallback: -6bp basis
     kal = {"msg": kalshi_listing(spot)}
     n_mkts = len(kal["msg"])
     print(f"deribit snapshot age: {(now.timestamp() - der['t_local']/1e6)/60:.1f}min"
