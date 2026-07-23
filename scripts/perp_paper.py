@@ -105,12 +105,14 @@ def update_panel(test_n: int | None = None) -> None:
     k["date"] = pd.to_datetime(k["date"])
     last = k.groupby("symbol").date.max()
     yesterday = pd.Timestamp(datetime.now(timezone.utc).date() - timedelta(days=1))
-    syms = sorted(last.index)
+    # live symbols only: delisted names would 404 for every day since death
+    alive = last[last >= yesterday - pd.Timedelta(days=10)]
+    syms = sorted(alive.index)
     if test_n:
         syms = syms[:test_n]
     jobs = []
     for s in syms:
-        d = last[s] + timedelta(days=1)
+        d = alive[s] + timedelta(days=1)
         while d <= yesterday:
             jobs.append((s, d.date()))
             d += timedelta(days=1)
