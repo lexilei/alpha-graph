@@ -66,14 +66,14 @@ def main() -> None:
                 if not prior:
                     continue
                 c = prior[-1]
-                px = c.get("price", {}).get("close") or c.get("close")
-                if px is None:
-                    yb = c.get("yes_bid", {}).get("close")
-                    ya = c.get("yes_ask", {}).get("close")
-                    if yb is None or ya is None:
-                        continue
-                    px = (yb + ya) / 2
-                px = float(px) / 100.0 if float(px) > 1 else float(px)
+                try:
+                    yb = float(c["yes_bid"]["close_dollars"])
+                    ya = float(c["yes_ask"]["close_dollars"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if ya - yb > 0.20:  # junk-wide book, mid meaningless
+                    continue
+                px = (yb + ya) / 2
                 if not 0.005 <= px <= 0.995:
                     continue
                 rows.append({"city": city, "ticker": m["ticker"],
