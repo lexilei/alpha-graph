@@ -21,6 +21,10 @@ spec interrupted, watchdog-managed. A spec found in running/ at startup
 means the runner died mid-job: it is moved to done/ marked interrupted,
 never silently re-run (jobs are not assumed idempotent).
 
+Jobs run with cwd=~/Lex/queue — a spec must `cd` to its repo or use
+absolute paths (learned from a live rc=127: the watchdog starts this
+runner from scripts/, so relative spec paths are meaningless).
+
 Usage: nohup .venv/bin/python scripts/queue_runner.py >> data/logs/launchd/queue_runner.log 2>&1 &
 Queue a job:  cat > ~/Lex/queue/pending/030_name.sh
 """
@@ -134,7 +138,9 @@ def run_job(spec: Path) -> None:
                 ["caffeinate", "-ims", "nice", "-n", "19", "bash",
                  str(claimed)],
                 stdout=lf, stderr=subprocess.STDOUT,
-                start_new_session=True)  # own group: killable as a unit
+                start_new_session=True,  # own group: killable as a unit
+                cwd=str(Q))  # deterministic cwd (watchdog starts us from
+            # scripts/): specs must cd or use absolute paths
             _current["proc"], _current["spec"] = p, claimed
             rc = p.wait()
     except Exception as e:  # noqa: BLE001
