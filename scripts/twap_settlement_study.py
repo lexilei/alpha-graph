@@ -46,11 +46,21 @@ def brti_proxy() -> pd.Series:
     rows = []
     for d in load_lines("brti"):
         t = d["t_local"] // 1_000_000
+        m = d["msg"]
         if d["src"] == "coinbase":
-            m = d["msg"]
+            # ETH-USD joined the feed 07-24; this proxy is BTC only —
+            # unfiltered, $1.8k ETH prints poison the VW mid
+            if m.get("prod", "BTC-USD") != "BTC-USD":
+                continue
             rows.append((t, float(m["p"]), float(m["s"])))
         elif d["src"] == "kraken":
-            for tr in d["msg"]:
+            if isinstance(m, dict):  # post-ETH shape: {"pair", "trades"}
+                if not str(m.get("pair", "XBT")).startswith("XBT"):
+                    continue
+                trades = m.get("trades") or []
+            else:                    # legacy BTC-only shape: bare list
+                trades = m
+            for tr in trades:
                 rows.append((t, float(tr[0]), float(tr[1])))
     df = pd.DataFrame(rows, columns=["t", "p", "v"])
     vw = df.groupby("t").apply(
