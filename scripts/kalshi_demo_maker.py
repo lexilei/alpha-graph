@@ -88,11 +88,15 @@ def main() -> None:
     k = kc.Kalshi("demo")
     sink = rec.Sink("demomaker")
     vol = Vol()
-    start_bal = float(k.get("/portfolio/balance")["balance_dollars"])
+    start_bal = None  # set from full equity (cash+positions) on first cycle
     stop_day = datetime.now(timezone.utc).date()
     stop_armed = False  # loss stop fires only on two consecutive breaches
-    # (portfolio_value transiently reads 0 during settlement processing)
-    print(f"demo maker start, balance ${start_bal}", flush=True)
+    # settlement makes portfolio_value spike toward $1-marks or read 0 for
+    # minutes at a time, so the stop AND the daily baseline both use a
+    # 30-cycle (~5min) median of equity, never an instantaneous read
+    eq_hist: list[float] = []
+    flag_dir = rec.OUT.parent.parent / "logs" / "launchd"
+    print("demo maker start", flush=True)
 
     n = 0
     while max_cycles is None or n < max_cycles:
@@ -106,13 +110,27 @@ def main() -> None:
             bal = float(bal_resp["balance_dollars"])
             # portfolio_value is in CENTS (no _dollars twin in the payload)
             equity = bal + float(bal_resp.get("portfolio_value", 0) or 0) / 100.0
+            eq_hist = (eq_hist + [equity])[-30:]
+            eq_med = sorted(eq_hist)[len(eq_hist) // 2]
             today = datetime.now(timezone.utc).date()
+            if start_bal is None:
+                start_bal = equity
             if today != stop_day:  # reset the DAILY loss baseline at UTC roll
-                stop_day, start_bal = today, equity
-            breached = equity < start_bal - DAILY_LOSS_STOP
+                stop_day, start_bal = today, eq_med
+            stop_flag = flag_dir / f"maker_stop_{today}.flag"
+            if stop_flag.exists():
+                # halted for the day; the flag survives watchdog restarts so
+                # a restart cannot silently defeat the stop. Auto-resumes at
+                # the next UTC roll (new flag name) with a fresh baseline.
+                sink.flush()
+                n += 1
+                time.sleep(45)
+                continue
+            breached = eq_med < start_bal - DAILY_LOSS_STOP
             if breached and not stop_armed:
                 stop_armed = True
-                sink.write("stop_armed", {"equity": equity, "bal": bal})
+                sink.write("stop_armed", {"equity": equity, "eq_med": eq_med,
+                                          "bal": bal})
                 breached = False
             elif not breached:
                 stop_armed = False
@@ -125,12 +143,18 @@ def main() -> None:
                         k.delete(f"/portfolio/events/orders/{o['order_id']}")
                     except Exception:  # noqa: BLE001
                         n_fail += 1
+                stop_flag.write_text(
+                    f"eq_med {eq_med:.2f} baseline {start_bal:.2f}\n")
                 sink.write("maker_stop", {"balance": bal, "equity": equity,
+                                          "eq_med": eq_med,
+                                          "baseline": start_bal,
                                           "canceled": len(resting) - n_fail,
                                           "cancel_failed": n_fail})
                 print(f"loss stop hit: canceled {len(resting)-n_fail}, "
-                      f"failed {n_fail} (self-expire <=120s)", flush=True)
-                break
+                      f"failed {n_fail}; halted until next UTC day",
+                      flush=True)
+                sink.flush()
+                continue
 
             pos = {p["ticker"]: float(p.get("position_fp") or p.get("position", 0))
                    for p in k.get("/portfolio/positions").get(
@@ -243,12 +267,43 @@ def main() -> None:
             if canceled_any:
                 time.sleep(1.0)  # let cancels land before re-quoting: avoids
                 # post-only crossing our own in-flight canceled orders
+            # collateral budget: placing what cash can't back just 400-spams
+            # insufficient_balance (10k+ rejects on the first low-cash run)
+            budget = bal * 0.9
+            n_skip_budget = n_skip_clamp = 0
             for tick, tgt in targets.items():
+                fresh = None
                 for side in ("bid", "ask"):
                     if side not in tgt or live.get((tick, side)):
                         continue
                     # v2 API: side bid=buy yes, ask=sell yes; price is yes price
                     price = tgt[side]
+                    if canceled_any:
+                        # the clamp book is >=1s stale after the cancel settle
+                        # (that staleness was the residual post-only-cross
+                        # source); re-clamp against a fresh top level
+                        if fresh is None:
+                            try:
+                                ob = k.get(f"/markets/{tick}/orderbook?depth=1"
+                                           ).get("orderbook_fp", {})
+                                yb = ob.get("yes_dollars") or []
+                                nb = ob.get("no_dollars") or []
+                                fresh = {
+                                    "bid": float(yb[-1][0]) if yb else None,
+                                    "ask": 1.0 - float(nb[-1][0]) if nb else None}
+                            except Exception:  # noqa: BLE001
+                                fresh = {"bid": None, "ask": None}
+                        if side == "bid" and fresh["ask"] is not None:
+                            price = min(price, round(fresh["ask"] - 0.01, 2))
+                        if side == "ask" and fresh["bid"] is not None:
+                            price = max(price, round(fresh["bid"] + 0.01, 2))
+                        if not 0.01 <= price <= 0.99:
+                            n_skip_clamp += 1
+                            continue
+                    cost = price * SIZE if side == "bid" else (1 - price) * SIZE
+                    if cost > budget:
+                        n_skip_budget += 1
+                        continue
                     try:
                         k.post("/portfolio/events/orders", {
                             "ticker": tick,
@@ -263,11 +318,15 @@ def main() -> None:
                             # a live loop re-places them, a dead loop leaves
                             # nothing resting beyond 120s
                             "expiration_time": int(time.time()) + 120})
+                        budget -= cost
                     except Exception as e:  # noqa: BLE001
                         sink.write("order_err", {"ticker": tick, "side": side,
                                                  "err": str(e)[:200]})
             sink.write("maker_cycle", {
                 "spot": S, "sigma_1s": sig, "balance": bal,
+                "equity": round(equity, 2), "eq_med": round(eq_med, 2),
+                "baseline": round(start_bal, 2),
+                "skip_budget": n_skip_budget, "skip_clamp": n_skip_clamp,
                 "targets": {t: {kk: round(v, 4) if isinstance(v, float) else v
                                 for kk, v in d.items()}
                             for t, d in targets.items()},
