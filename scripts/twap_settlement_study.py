@@ -100,6 +100,10 @@ def main() -> None:
     rows = []
     for H in hours:
         win = brti.loc[H - 60:H - 1]
+        if win.nunique() <= 1:
+            continue  # blackout window: brti_proxy ffills across gaps, so
+            # isna never fires and 60 identical values fabricated an exact-
+            # zero projection error (8/58 settlements; deflated the medians)
         if win.isna().any() or len(win) < 60:
             continue
         settle = win.mean()
