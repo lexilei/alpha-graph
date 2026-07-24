@@ -27,6 +27,29 @@ from pathlib import Path
 _CHUNK = 1 << 16
 
 
+def _salvage(raw: bytes, i: int, bad: int, n: int) -> bytes:
+    """Redo the member at i whose chunked decode raised inside chunk
+    [bad:bad+_CHUNK]. A raising decompress() call loses its own output (the
+    append around it never runs), so re-run full-speed up to the failing
+    chunk, then byte-wise inside it: every byte decoded before the first
+    bad byte is recovered. zlib is deterministic, so the refeed matches."""
+    o = zlib.decompressobj(wbits=31)
+    out = []
+    if bad > i:
+        try:
+            out.append(o.decompress(raw[i:bad]))
+        except (zlib.error, OSError):  # can't happen (same bytes succeeded)
+            o, out, bad = zlib.decompressobj(wbits=31), [], i
+    for k in range(bad, min(bad + _CHUNK, n)):
+        if o.eof:
+            break
+        try:
+            out.append(o.decompress(raw[k:k + 1]))
+        except (zlib.error, OSError):
+            break
+    return b"".join(out)
+
+
 def iter_members(raw: bytes):
     """Yield each gzip member's decompressed bytes, best-effort on corruption."""
     i, n = 0, len(raw)
@@ -40,7 +63,7 @@ def iter_members(raw: bytes):
                 err = True
                 break
             fed = min(fed + _CHUNK, n)
-        data = b"".join(out)
+        data = _salvage(raw, i, fed, n) if err else b"".join(out)
         if data:
             yield data
         if not err and o.eof:
