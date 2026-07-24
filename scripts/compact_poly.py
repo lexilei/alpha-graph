@@ -125,6 +125,12 @@ class TokenMap:
             self.tok[asset_id] = i
             self.market[asset_id] = market
             self.dirty = True
+        elif market and not self.market.get(asset_id):
+            # discovery-first tokens are created with market="" — back-fill
+            # the hash when the first trade/change supplies it, or it is
+            # lost forever once raw retention deletes the source
+            self.market[asset_id] = market
+            self.dirty = True
         return i
 
     def set_slug(self, asset_id: str, slug: str) -> None:
@@ -283,6 +289,11 @@ def compact_day(day: str) -> dict:
 
 
 def retention(days: int = RETENTION_DAYS) -> None:
+    if days < 7:
+        # N<=0 would put the cutoff at/after today and delete EVERY verified
+        # day; a sub-week window is never intended either
+        log(f"retention: refusing days={days} (<7)")
+        return
     meta = json.loads(META_F.read_text()) if META_F.exists() else {}
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y%m%d")
     for f in sorted(RAW.glob("poly_????????_*.jsonl.gz")):
