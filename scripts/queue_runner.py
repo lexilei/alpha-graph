@@ -12,10 +12,14 @@ Layout (~/Lex/queue/):
   logs/      one log per job
   HISTORY.log  start/finish lines with exit codes
 
-One job at a time, nice -19 + caffeinate -ims, so the live pipeline keeps
-priority and the machine stays awake only while a job runs. A spec found in
-running/ at startup means the runner died mid-job: it is moved to done/ and
-marked interrupted, never silently re-run (jobs are not assumed idempotent).
+One job at a time, nice -19 + caffeinate, so the live pipeline keeps
+priority and the machine stays awake only while a job runs. A gated job
+does NOT block later runnable jobs: the runner picks the first RUNNABLE
+spec in order. Hardening (2026-07-24 review): flock singleton, loop-level
+exception guard, SIGTERM kills the whole job process group and marks the
+spec interrupted, watchdog-managed. A spec found in running/ at startup
+means the runner died mid-job: it is moved to done/ marked interrupted,
+never silently re-run (jobs are not assumed idempotent).
 
 Usage: nohup .venv/bin/python scripts/queue_runner.py >> data/logs/launchd/queue_runner.log 2>&1 &
 Queue a job:  cat > ~/Lex/queue/pending/030_name.sh
@@ -23,7 +27,10 @@ Queue a job:  cat > ~/Lex/queue/pending/030_name.sh
 
 from __future__ import annotations
 
+import fcntl
+import os
 import re
+import signal
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -36,12 +43,17 @@ HISTORY = Q / "HISTORY.log"
 POLL_SEC = 60
 DEFAULT_MEM_GB = 8
 
+_current = {"proc": None, "spec": None}  # for the SIGTERM handler
+
 
 def log(msg: str) -> None:
     line = f"[{datetime.now(timezone.utc):%m-%d %H:%M:%S}] {msg}"
     print(line, flush=True)
-    with open(HISTORY, "a") as f:
-        f.write(line + "\n")
+    try:
+        with open(HISTORY, "a") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
 
 
 def free_mem_gb() -> float:
@@ -57,7 +69,10 @@ def free_mem_gb() -> float:
 
 def gates(spec: Path) -> str | None:
     """Return None if runnable, else a short reason to wait."""
-    head = spec.read_text(errors="replace").splitlines()[:10]
+    try:
+        head = spec.read_text(errors="replace").splitlines()[:10]
+    except OSError:
+        return "vanished"  # deleted between iterdir and here: skip
     mem_need = DEFAULT_MEM_GB
     for ln in head:
         m = re.match(r"#\s*after:\s*(\S+)", ln)
@@ -77,43 +92,99 @@ def gates(spec: Path) -> str | None:
     return None
 
 
+def move_unique(src: Path, dest_dir: Path, prefix: str = "") -> Path:
+    """Move without clobbering an existing same-named archive."""
+    tgt = dest_dir / f"{prefix}{src.name}"
+    k = 2
+    while tgt.exists():
+        tgt = dest_dir / f"{prefix}{src.name}.{k}"
+        k += 1
+    src.rename(tgt)
+    return tgt
+
+
+def _on_term(signum, frame):  # noqa: ARG001
+    p, spec = _current["proc"], _current["spec"]
+    if p is not None and p.poll() is None:
+        try:
+            os.killpg(p.pid, signal.SIGTERM)  # whole job group, no orphans
+        except (ProcessLookupError, PermissionError):
+            pass
+    if spec is not None and spec.exists():
+        try:
+            move_unique(spec, DONE, "INTERRUPTED_")
+            log(f"INTERRUPTED {spec.name} (runner terminated)")
+        except OSError:
+            pass
+    raise SystemExit(0)
+
+
 def run_job(spec: Path) -> None:
-    claimed = RUNNING / spec.name
     try:
-        spec.rename(claimed)  # atomic claim
+        claimed = spec.rename(RUNNING / spec.name) or (RUNNING / spec.name)
     except OSError:
-        return
-    logf = LOGS / f"{spec.stem}.log"
-    log(f"START {spec.name} -> {logf.name}")
+        return  # lost the claim race or spec vanished
+    logf_path = LOGS / f"{spec.stem}.log"
+    log(f"START {spec.name} -> {logf_path.name}")
     t0 = time.time()
-    with open(logf, "a") as lf:
-        rc = subprocess.run(
-            ["caffeinate", "-ims", "nice", "-n", "19", "bash", str(claimed)],
-            stdout=lf, stderr=subprocess.STDOUT).returncode
-    claimed.rename(DONE / spec.name)
+    rc = -1
+    try:
+        with open(logf_path, "a") as lf:
+            p = subprocess.Popen(
+                ["caffeinate", "-ims", "nice", "-n", "19", "bash",
+                 str(claimed)],
+                stdout=lf, stderr=subprocess.STDOUT,
+                start_new_session=True)  # own group: killable as a unit
+            _current["proc"], _current["spec"] = p, claimed
+            rc = p.wait()
+    except Exception as e:  # noqa: BLE001
+        log(f"RUN ERROR {spec.name}: {str(e)[:150]}")
+    finally:
+        _current["proc"] = _current["spec"] = None
+        try:
+            if claimed.exists():
+                move_unique(claimed, DONE)
+        except OSError as e:
+            log(f"ARCHIVE ERROR {spec.name}: {str(e)[:150]}")
     log(f"DONE {spec.name} rc={rc} took={time.time()-t0:.0f}s")
 
 
 def main() -> None:
     for d in (PENDING, RUNNING, DONE, LOGS):
         d.mkdir(parents=True, exist_ok=True)
+    lock_f = open(Q / ".runner.lock", "a")
+    try:
+        fcntl.flock(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        log("another queue_runner holds the lock; exiting")
+        return
+    signal.signal(signal.SIGTERM, _on_term)
     for orphan in RUNNING.iterdir():
-        orphan.rename(DONE / f"INTERRUPTED_{orphan.name}")
+        move_unique(orphan, DONE, "INTERRUPTED_")
         log(f"INTERRUPTED {orphan.name} (runner died mid-job, NOT re-run)")
     log("queue runner up")
     waiting_msg = ""
     while True:
-        specs = sorted(p for p in PENDING.iterdir()
-                       if p.suffix == ".sh" and not p.name.startswith("."))
-        if specs:
-            why = gates(specs[0])
-            if why is None:
-                waiting_msg = ""
-                run_job(specs[0])
-                continue  # next job immediately after one finishes
-            if why != waiting_msg:  # log gate reason once, not every poll
-                log(f"WAIT {specs[0].name}: {why}")
-                waiting_msg = why
+        try:
+            specs = sorted(p for p in PENDING.iterdir()
+                           if p.suffix == ".sh" and not p.name.startswith("."))
+            ran = False
+            reasons = []
+            for spec in specs:  # first RUNNABLE spec; gated heads don't
+                why = gates(spec)  # block later runnable jobs
+                if why is None:
+                    waiting_msg = ""
+                    run_job(spec)
+                    ran = True
+                    break
+                reasons.append(f"{spec.name}: {why}")
+            if ran:
+                continue  # look for the next job immediately
+            if reasons and reasons[0] != waiting_msg:
+                log(f"WAIT {reasons[0]}")  # log head's reason once, not per poll
+                waiting_msg = reasons[0]
+        except Exception as e:  # noqa: BLE001
+            log(f"runner loop error: {str(e)[:200]}")
         time.sleep(POLL_SEC)
 
 
