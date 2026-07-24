@@ -66,14 +66,22 @@ def compact_binance(day: str) -> int:
 
 
 def compact_coverage(day: str) -> dict:
-    """Per-source: first/last t_local and the gap list (>60s) in seconds."""
+    """Per-source: first/last t_local and the gap list in seconds. The gap
+    threshold is per-source (audit: a flat 60s flagged deribit's own 60s
+    poll cadence as ~52 fake gaps/day)."""
     manifest = {}
-    for src, glob in (("binance", f"binance_{day}_*.jsonl.gz"),
-                      ("poly", f"poly_{day}_*.jsonl.gz"),
-                      ("brti", f"brti_{day}_*.jsonl.gz"),
-                      ("kalshi", f"kalshi_{day}_*.jsonl.gz"),
-                      ("deribit", None)):
-        base = DERIBIT if src == "deribit" else RAW
+    for src, glob, thresh in (("binance", f"binance_{day}_*.jsonl.gz", 60),
+                              ("poly", f"poly_{day}_*.jsonl.gz", 60),
+                              ("brti", f"brti_{day}_*.jsonl.gz", 60),
+                              ("kalshi", f"kalshi_{day}_*.jsonl.gz", 60),
+                              ("deribit", None, 150),
+                              ("odds", f"odds_{day}_*.jsonl.gz", 2000)):
+        if src == "deribit":
+            base = DERIBIT
+        elif src == "odds":
+            base = RAW.parent / "odds"
+        else:
+            base = RAW
         g = glob or f"deribit_{day}_*.jsonl.gz"
         ts = []
         for f in sorted(base.glob(g)):
@@ -84,7 +92,7 @@ def compact_coverage(day: str) -> dict:
             continue
         ts = sorted(set(ts))
         gaps = [(ts[i], ts[i + 1]) for i in range(len(ts) - 1)
-                if ts[i + 1] - ts[i] > 60]
+                if ts[i + 1] - ts[i] > thresh]
         manifest[src] = {"present": True, "start": ts[0], "end": ts[-1],
                          "n_sec": len(ts),
                          "gaps": [[a, b, b - a] for a, b in gaps]}
