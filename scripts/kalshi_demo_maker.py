@@ -98,6 +98,12 @@ def main() -> None:
     flag_dir = rec.OUT.parent.parent / "logs" / "launchd"
     flag_dir.mkdir(parents=True, exist_ok=True)
     base_f = flag_dir / "maker_baseline.txt"  # "<day> <start_bal>"
+
+    def _write_baseline(path, day, val):
+        tmp = path.with_suffix(".tmp")  # atomic: a torn write would defeat
+        tmp.write_text(f"{day} {val}")  # the durability this file exists for
+        tmp.replace(path)
+
     print("demo maker start", flush=True)
 
     n = 0
@@ -118,8 +124,13 @@ def main() -> None:
             eq_med = sorted(eq_hist)[(len(eq_hist) - 1) // 2]
             today = datetime.now(timezone.utc).date()
             if today != stop_day:  # reset the DAILY loss baseline at UTC roll
-                stop_day, start_bal = today, eq_med
-                base_f.write_text(f"{today} {start_bal}")
+                stop_day = today
+                if len(eq_hist) >= 10:
+                    start_bal = eq_med
+                    _write_baseline(base_f, today, start_bal)
+                else:
+                    start_bal = None  # process started seconds before the
+                    # roll: warm up like a cold start, don't latch 1 sample
             if start_bal is None:
                 # baseline must survive restarts, else every restart re-arms
                 # a fresh $25 budget (daily loss becomes restarts x $25); and
@@ -128,13 +139,23 @@ def main() -> None:
                 # ~100s and set it from the median.
                 try:
                     day_s, bal_s = base_f.read_text().split()
+                    if day_s == str(today):
+                        start_bal = float(bal_s)
                 except (OSError, ValueError):
-                    day_s = ""
-                if day_s == str(today):
-                    start_bal = float(bal_s)
-                elif len(eq_hist) >= 10:
+                    pass
+                if start_bal is None and len(eq_hist) >= 10:
                     start_bal = eq_med
-                    base_f.write_text(f"{today} {start_bal}")
+                    _write_baseline(base_f, today, start_bal)
+            if start_bal is None:
+                # warming up: the stop is not armed yet, so DO NOT QUOTE —
+                # round-4 review caught this window placing orders with the
+                # loss stop disarmed (and crashing telemetry on round(None))
+                sink.write("maker_warmup", {"balance": bal, "equity": equity,
+                                            "n_hist": len(eq_hist)})
+                sink.flush()
+                n += 1
+                time.sleep(max(0.0, CYCLE_S - (time.time() - t0)))
+                continue
             stop_flag = flag_dir / f"maker_stop_{today}.flag"
             if stop_flag.exists():
                 # halted for the day; the flag survives watchdog restarts so
@@ -352,7 +373,7 @@ def main() -> None:
             sink.write("maker_cycle", {
                 "spot": S, "sigma_1s": sig, "balance": bal,
                 "equity": round(equity, 2), "eq_med": round(eq_med, 2),
-                "baseline": round(start_bal, 2),
+                "baseline": round(start_bal, 2) if start_bal is not None else None,
                 "skip_budget": n_skip_budget, "skip_clamp": n_skip_clamp,
                 "targets": {t: {kk: round(v, 4) if isinstance(v, float) else v
                                 for kk, v in d.items()}
