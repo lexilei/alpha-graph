@@ -37,16 +37,11 @@ EWMA_HL_S = 300.0
 
 
 def load_lines(prefix: str):
+    # gz_recover: the plain reader silently dropped every member after a
+    # kill-corrupted one, not just the truncated tail
+    from gz_recover import iter_jsonl
     for f in sorted(RAW.glob(f"{prefix}_*.jsonl.gz")):
-        try:
-            with gzip.open(f, "rt") as fh:
-                for line in fh:
-                    try:
-                        yield json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-        except (EOFError, zlib.error):
-            continue
+        yield from iter_jsonl(f)
 
 
 def token_windows() -> dict[str, int]:
