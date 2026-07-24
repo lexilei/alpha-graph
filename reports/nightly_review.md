@@ -25,3 +25,10 @@
 **推迟/记录**:maker+perp 进程重启留待白天(夜间不动交易进程,代码已就位);止损中位数滞后是接受的权衡;HISTORY.log 无轮转;perp last_mark 无时效上限(记账口径待定);PID 复用 TOCTOU(单用户机,忽略)。
 
 **执行动作**:10 commit 推送;polymarket_recorder/devscan/watchdog/queue_runner 已用新代码重启(11/11 单实例);poly_meta 重置 + 全量重压已入队(新验证规则重新认证三天 + 收录 discovery slug)。
+
+**收尾补记(当晚后续)**:
+- twap 复跑暴露 ETH 接入的连锁伤:kraken 记录改成 dict 后 twap 仍按裸列表迭代(崩溃),且 coinbase 分支没过滤 prod——ETH $1.8k 成交正混入 BTC BRTI 代理毒化基差。已修(e81c27c),复跑 51 个结算通过;T-15s TWAP 投影误差 p50 0.06bp vs 裸现货 0.44bp,结算锁定的机械信息可用于末分钟定价。
+- watchdog 实战暴露 pgrep 是 POSIX ERE、不认 `\S`:带路径前缀的 argv 永远匹配不上 → 每 5 分钟误判 queue_runner 死亡并起新实例(全被 flock 弹走——防御生效,检测在漏)。已修([^ ] 类)并重启验证。
+- queue 作业 cwd 陷阱:watchdog 从 scripts/ 启动 runner,相对路径 spec 三连 rc=127;runner 现在固定作业 cwd 并立规范"spec 自带 cd"。
+- 重压完成:三天全部按严格规则重新 verified(books 表按 level 行数对账),5.96GB→881MB,discovery slug 已入 token 表。
+- 分析三连全部复跑通过(latency/width/twap exit 0)。
