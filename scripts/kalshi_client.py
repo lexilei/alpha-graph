@@ -69,6 +69,16 @@ class Kalshi:
                     continue
                 raise RuntimeError(f"{method} {path} -> {e.code}: "
                                    f"{e.read().decode()[:300]}") from e
+            except OSError as e:
+                # URLError / socket timeout / conn reset. Retrying is safe
+                # even for POST: the same body (incl. client_order_id) is
+                # resent and Kalshi dedups on client_order_id, so an order
+                # that landed before the timeout cannot be double-placed.
+                if attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))
+                    last = e
+                    continue
+                raise RuntimeError(f"{method} {path} -> network: {e}") from e
         raise RuntimeError(f"{method} {path} retries exhausted") from last
 
     def get(self, path: str):
