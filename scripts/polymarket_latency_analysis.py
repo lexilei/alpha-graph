@@ -21,6 +21,8 @@ Usage: .venv/bin/python scripts/polymarket_latency_analysis.py
 from __future__ import annotations
 
 import gzip
+
+from gz_recover import iter_jsonl
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -33,16 +35,10 @@ JUMP_BP = 4.0
 
 
 def load_lines(prefix: str):
+    # gz_recover: plain gzip readers crash on kill-corrupted members and
+    # silently drop everything after them (nightly batch died on this)
     for f in sorted(RAW.glob(f"{prefix}_*.jsonl.gz")):
-        try:
-            with gzip.open(f, "rt") as fh:
-                for line in fh:
-                    try:
-                        yield json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-        except EOFError:
-            continue
+        yield from iter_jsonl(f)
 
 
 def btc5m_tokens() -> dict[str, str]:
