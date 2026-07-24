@@ -90,6 +90,8 @@ def main() -> None:
     vol = Vol()
     start_bal = float(k.get("/portfolio/balance")["balance_dollars"])
     stop_day = datetime.now(timezone.utc).date()
+    stop_armed = False  # loss stop fires only on two consecutive breaches
+    # (portfolio_value transiently reads 0 during settlement processing)
     print(f"demo maker start, balance ${start_bal}", flush=True)
 
     n = 0
@@ -102,11 +104,19 @@ def main() -> None:
 
             bal_resp = k.get("/portfolio/balance")
             bal = float(bal_resp["balance_dollars"])
-            equity = bal + float(bal_resp.get("portfolio_value", 0) or 0)
+            # portfolio_value is in CENTS (no _dollars twin in the payload)
+            equity = bal + float(bal_resp.get("portfolio_value", 0) or 0) / 100.0
             today = datetime.now(timezone.utc).date()
             if today != stop_day:  # reset the DAILY loss baseline at UTC roll
                 stop_day, start_bal = today, equity
-            if equity < start_bal - DAILY_LOSS_STOP:
+            breached = equity < start_bal - DAILY_LOSS_STOP
+            if breached and not stop_armed:
+                stop_armed = True
+                sink.write("stop_armed", {"equity": equity, "bal": bal})
+                breached = False
+            elif not breached:
+                stop_armed = False
+            if breached:
                 resting = k.get("/portfolio/orders?status=resting"
                                 ).get("orders", [])
                 n_fail = 0
