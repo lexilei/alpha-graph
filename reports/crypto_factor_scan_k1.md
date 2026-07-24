@@ -84,3 +84,24 @@ smaller than the 3-sleeve version.
 - Cross-venue combination (equity/options sleeves) blocked on the other
   ledgers having an accepted factor; crypto L/S corr to those will be
   ~0 by construction and the benefit arrives automatically when they do.
+
+---
+
+## 勘误与管线修订(2026-07-24,十域审计后)
+
+三个独立 agent 从原始面板精确复现了本报告全部数字(K12 1.9320/t 4.8509、组合 2.072,
+逐年分解至三位小数),前视三明治检验通过(作弊口径 SR 8.77 vs 实际 1.93)。审计发现的
+缺陷全部为稀释性(清除后数字略升),无一膨胀性。据此做三项管线修订:
+
+1. **PANEL_END=2026-06-30 钉入代码**。此前判决窗口只存在于文档,直接重跑会得到
+   全样本漂移数字并覆盖本 CSV(已发生一次,已回滚)。现默认冻结窗口;`--full`
+   写入 `*_full.csv` 用于实时监控,永不触碰记录文件。
+2. **僵尸 K 线掩码**。Binance 对停牌合约持续发布 0 成交量冻结价日线(原始行的
+   7.9%,最长 398 天),此前仅靠流动性 universe 侥幸拦截。掩码后冻结窗口重算:
+   K12 t 4.85→4.88、基线 mom 0.946→0.987。**副产品:K10 从 reject 翻为边缘
+   PASS diversifier(dSR 0.106)——属管线修订产物而非新判决,不入组合、不计新 look。**
+3. **资金费代理修正**(仅影响 >06-30 的实时段):按每 symbol 实际结算频率
+   (2026 年 72% symbol-day 为 4h/6 次)+利率基线 0.03%/日+钳制重建,替换固定 ×3。
+   判决窗口实测 0 行代理数据,不受影响。**任何判决前先补真值 funding 下载。**
+
+本次重跑后的 CSV 即为修订后记录文件;修订前原值见 git 历史(K12 1.9320/4.8509)。

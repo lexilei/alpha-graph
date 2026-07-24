@@ -15,6 +15,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import sys
+
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,30 +32,55 @@ MAKER = 2e-4
 ANN = 365
 
 
+# pre-registered judgment window: numbers of record are computed on the
+# panel truncated here. Run with --full for live monitoring; that mode
+# writes *_full.csv and never touches the frozen artifact.
+PANEL_END = "2026-06-30"
+FULL_PANEL = "--full" in sys.argv
+
+
 def load() -> dict[str, pd.DataFrame]:
     k = pd.read_parquet(RAW / "perp_klines_1d.parquet")
     k = k[~k.symbol.isin(STABLE_PAIRS)]
     k["date"] = pd.to_datetime(k["date"])
     k = k.sort_values(["symbol", "date"]).drop_duplicates(["symbol", "date"])
-    cols = [c for c in ("close", "quote_volume", "volume", "taker_buy_volume")
+    cols = [c for c in ("close", "quote_volume", "volume", "taker_buy_volume",
+                        "n_trades")
             if c in k.columns]
     p = {c: k.pivot(index="date", columns="symbol", values=c) for c in cols}
+    # zombie bars: Binance keeps emitting flat 0-volume daily bars for
+    # halted contracts (7.9% of raw rows, some 398 days long); mask them so
+    # frozen prices can never enter returns or the universe
+    if "volume" in p and "n_trades" in p:
+        zombie = (p["volume"] == 0) & (p["n_trades"] == 0)
+        for c in ("close", "quote_volume", "volume", "taker_buy_volume"):
+            if c in p:
+                p[c] = p[c].mask(zombie)
     f = pd.read_parquet(RAW / "perp_funding.parquet")
     f["date"] = f["funding_time"].dt.tz_convert("UTC").dt.normalize().dt.tz_localize(None)
     fund = f.groupby(["date", "symbol"]).funding_rate.sum().unstack()
+    # events/day per symbol from recent truth: 4h-funding symbols are the
+    # 2026 majority (72% of symbol-days) and a flat x3 halves their carry
+    n_ev = (f.groupby(["date", "symbol"]).size().unstack()
+            .tail(14).median().clip(1, 6))
     fund = fund.reindex(index=p["close"].index, columns=p["close"].columns)
-    # months past the last monthly-truth file: premiumIndexKlines proxy
-    # (premium_close x3 = daily funding), so carry factors are not silently
-    # zero-filled on a freshly-updated panel. Flagged: rank-level proxy.
+    # months past the last monthly-truth file: premiumIndexKlines proxy.
+    # Per interval, funding ~= premium + clamp(interest - premium, +-0.05%)
+    # with interest = 0.03%/day split across intervals; then x events/day.
+    # Flagged: rank-level proxy - refresh truth funding before any verdict.
     proxy_f = RAW / "premium_proxy_daily.parquet"
     if proxy_f.exists():
         pr = pd.read_parquet(proxy_f)
         pr["date"] = pd.to_datetime(pr["date"])
-        proxy = (pr.pivot(index="date", columns="symbol",
-                          values="premium_close") * 3).reindex(
+        prem = pr.pivot(index="date", columns="symbol", values="premium_close")
+        n = n_ev.reindex(prem.columns).fillna(3.0)
+        adj = (0.0003 / n - prem).clip(lower=-0.0005, upper=0.0005)
+        proxy = (prem + adj).mul(n, axis=1).reindex(
             index=p["close"].index, columns=p["close"].columns)
         fund = fund.combine_first(proxy)
     p["fund"] = fund.fillna(0.0)
+    if not FULL_PANEL:
+        p = {c: df.loc[:PANEL_END] for c, df in p.items()}
     return p
 
 
@@ -168,7 +195,8 @@ def main() -> None:
         return "reject"
 
     res["verdict"] = res.apply(verdict, axis=1)
-    out = ROOT / "reports" / "crypto_factor_scan_k1.csv"
+    tag = "_full" if FULL_PANEL else ""
+    out = ROOT / "reports" / f"crypto_factor_scan_k1{tag}.csv"
     res.to_csv(out, index=False, float_format="%.4f")
     with pd.option_context("display.width", 220, "display.max_columns", 30):
         print(res.round(3).to_string(index=False))
