@@ -1,5 +1,16 @@
 # 夜间对抗审查日志
 
+## 2026-07-24 第四轮(用户加发,审"修复的修复",范围 ab32e85^..HEAD)
+
+四镜头全部命中,8 commit 修复,全实测验证:
+- **[HIGH,运维+钱数双确认]** maker 暖机回归:基线未建立的 ~90s 里止损失灵却照常报价,且 round(None) 每周期崩掉遥测(当日 15:10 重启 9 连 maker_err 实锤)。修:暖机期不报价(maker_warmup 记录)、滚日分支同加 ≥10 样本护栏、基线文件原子写、解析防呆。重启后实测:3 周期 0 错 0 暖机,基线即时领养。
+- **[资源,实测 6.2GB]** iter_jsonl 整 member 物化在最大 poly 小时峰值 6,172MB(机器已在 swap)。重写为流式(增量解压+增量解码+逐行产出):同文件 **290MB**,296 万条记录一条不差;四个损坏样本文件与批处理路径完全等价。顺手把最后三个裸 gzip 消费者(replay/pin/odds_edge)也统一。
+- **[MED,回归]** TokenMap:slug 修复让 discovery-first 的 token 永久空 market(26 个已中招);get() 现在回填,下次压缩自愈。retention 拒绝 <7 天窗口(N≤0 本会删光全部已认证 raw)。
+- **[LOW]** queue SIGTERM 认领空窗(spec 先于 Popen 注册)+ TERM 不理会时升级 KILL;watchdog pgrep token 加 re.escape。
+- **量化战果**:twap 不修的话 ETH 打印会把 BRTI 均值拉偏 −2,917bp(37.7% 秒数偏 >10bp);修后基差 +6.9bp 与判决口径一致。perp 今晚过渡确认无损(100/100 仓位现有报价,首次调仓即全量补 last_mark)。
+- **攻击未破**:watchdog 正则对全部 10 种活进程形态 1:1;四象限保证金公式(含买 no@0.98→$4.90);poly flush 实测 628-674 标记/小时;compact 原子写/阻塞锁/边界价格。
+
+
 每天 04:07 自动运行:有新 commit 则派 4 个 Opus agent(逻辑/数据/运维/钱数四镜头)审当日改动,复核后修 CRITICAL/HIGH。无新 commit 则跳过。
 
 ---
