@@ -54,7 +54,10 @@ RAW = ROOT / "data" / "raw"
 
 
 def log(msg: str) -> None:
-    print(f"[{datetime.now(timezone.utc):%m-%d %H:%M:%S}] {msg}", flush=True)
+    try:
+        print(f"[{datetime.now(timezone.utc):%m-%d %H:%M:%S}] {msg}", flush=True)
+    except OSError:
+        pass  # ENOSPC on our own log must not kill the self-healer
 
 
 def pids_of(script_token: str) -> list[int]:
