@@ -125,18 +125,15 @@ def main() -> None:
         t0 = time.time()
         try:
             S = spot_now()
-            if prev_S is not None and abs(S / prev_S - 1) > 0.03:
-                # one glitched/stale print must not poison fv and sigma;
-                # accept it next cycle if it persists (real crash = fine to
-                # sit out one cycle)
+            # a glitched/stale print must not poison fv and sigma — but it
+            # must skip only QUOTING, never the loss-stop below (fix-review
+            # M2: the first version of this guard bypassed both)
+            glitch = prev_S is not None and abs(S / prev_S - 1) > 0.03
+            if glitch:
                 sink.write("spot_glitch", {"prev": prev_S, "now": S})
-                sink.flush()
-                prev_S = S
-                n += 1
-                time.sleep(max(0.0, CYCLE_S - (time.time() - t0)))
-                continue
             prev_S = S
-            vol.update(S, t0)
+            if not glitch:
+                vol.update(S, t0)
             sig = vol.sigma_1s
 
             bal_resp = k.get("/portfolio/balance")
@@ -185,7 +182,11 @@ def main() -> None:
                 n += 1
                 time.sleep(max(0.0, CYCLE_S - (time.time() - t0)))
                 continue
-            stop_flag = flag_dir / f"maker_stop_{today}.flag"
+            # keyed by stop_day, not today: in the 00:00-00:05 pre-roll
+            # window yesterday's halt must keep holding under yesterday's
+            # flag, not re-fire under today's and halt the whole new day
+            # (fix-review M3)
+            stop_flag = flag_dir / f"maker_stop_{stop_day}.flag"
             if stop_flag.exists():
                 # halted for the day; the flag survives watchdog restarts so
                 # a restart cannot silently defeat the stop. Auto-resumes at
@@ -226,6 +227,11 @@ def main() -> None:
                 n += 1
                 continue
 
+            if glitch:  # stop evaluated above; only quoting sits out
+                sink.flush()
+                n += 1
+                time.sleep(max(0.0, CYCLE_S - (time.time() - t0)))
+                continue
             pos = {p["ticker"]: float(p.get("position_fp") or p.get("position", 0))
                    for p in k.get("/portfolio/positions").get(
                        "market_positions", [])}
@@ -239,7 +245,7 @@ def main() -> None:
             mkts = []
             for series in ("KXBTC", "KXBTCD"):
                 cursor = ""
-                for _page in range(6):
+                for _page in range(12):
                     resp = k.get(f"/markets?series_ticker={series}"
                                  f"&status=open&limit=200"
                                  + (f"&cursor={cursor}" if cursor else ""))
@@ -247,6 +253,10 @@ def main() -> None:
                     cursor = resp.get("cursor") or ""
                     if not cursor:
                         break
+                else:
+                    if cursor:  # fix-review M1: never truncate SILENTLY —
+                        sink.write("mkts_truncated",  # that class of bug
+                                   {"series": series, "n": len(mkts)})
             now = time.time()
             cands = []
             for m in mkts:
