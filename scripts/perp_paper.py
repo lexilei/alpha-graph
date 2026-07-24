@@ -11,8 +11,11 @@ Daily cycle (UTC close + a few minutes):
      Coinbase *-PERP-INTX products, and paper-execute the weight deltas at
      live Coinbase best bid/ask plus TAKER_FEE. Positions/cash persist in
      data/paper/state.json; every action appends to data/paper/ledger.jsonl.
-  3. mark    — daily NAV at Coinbase mids; funding accrual on held positions
-     via the premium proxy (flagged, backfilled monthly).
+  3. mark    — daily NAV at Coinbase mids. NOTE: funding P&L is NOT accrued
+     (quantified ~1-2%/yr of NAV on the current book); the 8/06 paper-vs-
+     backtest comparison must normalize for this, for the fee gap (paper
+     3bp+real spread ~10bp/side vs backtest flat 5bp), and for the
+     Coinbase-mid vs Binance-close marking basis.
 
 Modes:
   update | trade | run-once (update+trade) | loop (daily at 00:10 UTC)
@@ -280,6 +283,11 @@ def paper_trade() -> None:
             # silently vanishing from NAV
             nav += pos["qty"] * pos["last_mark"]
     trades, fees, slip = [], 0.0, 0.0
+    # audit F1: silently skipping quote-less targets is how the book once
+    # drifted to +26% net-long (short legs unbuilt at build time). Record
+    # them so an imbalance is visible the day it forms.
+    skipped_unquoted = [s for s in mapped if s not in quotes
+                        and abs(tgt["weights"].get(s, 0.0)) > 0]
     for sym, prod in mapped.items():
         if sym not in quotes:
             continue
@@ -299,24 +307,44 @@ def paper_trade() -> None:
                                    "last_mark": mid}
         trades.append({"sym": sym, "dq": round(dq, 6), "px": px,
                        "notional": round(dq * px, 2)})
-    # drop zeroed positions not in targets
+    # drop zeroed positions not in targets (audit F4: these close-outs must
+    # hit the ledger's trade/fee/spread totals like any other trade)
     for sym in list(state["positions"]):
         if sym not in mapped and sym in quotes:
             pos = state["positions"].pop(sym)
             bid, ask, mid = quotes[sym]
             px = bid if pos["qty"] > 0 else ask
+            fee = abs(pos["qty"]) * px * TAKER_FEE
             state["cash"] += pos["qty"] * px
-            state["cash"] -= abs(pos["qty"]) * px * TAKER_FEE
+            state["cash"] -= fee
+            fees += fee
+            slip += abs(pos["qty"]) * abs(mid - px)
+            trades.append({"sym": sym, "dq": round(-pos["qty"], 6), "px": px,
+                           "notional": round(-pos["qty"] * px, 2),
+                           "flatten": True})
     # reported NAV must carry bookless positions at last_mark too — the
     # first fix only patched the sizing NAV, so the ledger still dropped them
     nav2 = state["cash"] + sum(
         pos["qty"] * (quotes[s][2] if s in quotes else pos["last_mark"])
         for s, pos in state["positions"].items()
         if s in quotes or pos.get("last_mark") is not None)
+    # net exposure must be ledger-visible every day (audit F1): the target
+    # is net-zero by construction, so any drift here is an execution bug
+    net_expo = sum(pos["qty"] * (quotes[s][2] if s in quotes
+                                 else pos.get("last_mark") or 0.0)
+                   for s, pos in state["positions"].items())
+    net_frac = net_expo / nav2 if nav2 else 0.0
+    if abs(net_frac) > 0.02:
+        log(f"WARN net exposure {net_frac:+.1%} of NAV "
+            f"(target is net-zero; skipped_unquoted={skipped_unquoted[:8]})")
     state_f.parent.mkdir(parents=True, exist_ok=True)
-    state_f.write_text(json.dumps(state, indent=1))
+    tmp = state_f.with_suffix(".tmp")  # atomic: a torn write bricked every
+    tmp.write_text(json.dumps(state, indent=1))  # later cycle (audit F5)
+    tmp.replace(state_f)
     ledger_write({"event": "rebalance", "asof": tgt["asof"],
                   "n_targets": len(tgt["weights"]), "n_mapped": len(mapped),
+                  "net_frac": round(net_frac, 4),
+                  "skipped_unquoted": skipped_unquoted[:10],
                   "dropped": dropped[:10], "n_trades": len(trades),
                   "fees": round(fees, 2), "half_spread_cost": round(slip, 2),
                   "gross": tgt["gross"], "lever": tgt["lever"],
