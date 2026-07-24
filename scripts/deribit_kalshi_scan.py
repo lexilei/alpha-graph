@@ -136,6 +136,14 @@ def brti_spot(currency: str = "BTC") -> float | None:
     if not rows:
         return None
     tmax = rows[-1][0]
+    # staleness guard (audit F2): the surface has a 15min guard but the spot
+    # anchor had none — at 0.75-1.4 c/bp near ATM a silently stale anchor
+    # shifts every bracket by cents. Fall back to the index-basis anchor.
+    now_us = datetime.now(timezone.utc).timestamp() * 1e6
+    if now_us - tmax > 60e6:
+        print(f"brti {currency} stale ({(now_us-tmax)/6e7:.1f}min) -> "
+              "index anchor", flush=True)
+        return None
     recent = [(p_, v) for t, p_, v in rows if t >= tmax - 10_000_000]
     if not recent:
         return None
@@ -249,20 +257,31 @@ def main(sink=None) -> None:
                     continue
                 p_fair = p_above(fs) - p_above(cs)
                 label = f"B{fs:,.0f}-{cs:,.0f}"
+            # beyond the smile grid the level clamps flat but the slope
+            # clamps nonzero -> tiny negative bracket probs; clip (audit F4)
+            p_fair = min(1.0, max(0.0, p_fair))
             bid, ask = mkt["yes_bid"], mkt["yes_ask"]
             mid = (bid + ask) / 2
-            fee = 0.07 * mid * (1 - mid)
+            # Kalshi fee = 0.07*P*(1-P) CEILED TO THE NEXT CENT at the
+            # execution price. The old continuous mid-fee understated it so
+            # badly that 44% of recorded signals (sell-heavy, low-priced)
+            # were non-tradable (audit F1).
+            fee_buy = float(np.ceil(0.07 * ask * (1 - ask) * 100) / 100)
+            fee_sell = float(np.ceil(0.07 * bid * (1 - bid) * 100) / 100)
             dev = p_fair - mid
             # signal only on strikes with a real orderbook read: the listing
             # bid/ask fields fabricate 0.00/0.01 on one-sided books
             trade = ""
             if mkt.get("has_ob"):
-                trade = ("BUY" if p_fair > ask + fee else
-                         "SELL" if p_fair < bid - fee else "")
+                trade = ("BUY" if p_fair > ask + fee_buy else
+                         "SELL" if p_fair < bid - fee_sell else "")
             out.append({"market": label, "ticker": mkt["ticker"],
                         "bid": bid, "ask": ask,
+                        "has_ob": bool(mkt.get("has_ob")),
                         "deribit_p": round(p_fair, 4),
-                        "dev": round(dev, 4), "fee": round(fee, 4),
+                        "dev": round(dev, 4),
+                        "fee_b": round(fee_buy, 2),
+                        "fee_s": round(fee_sell, 2),
                         "tau_h": round(tau_t * 365 * 24, 2), "sig": trade})
         df = pd.DataFrame(out).sort_values("dev", key=abs, ascending=False)
         n_sig = (df.sig != "").sum()
