@@ -47,6 +47,7 @@ JOBS = {
     "kalshi_demo_maker": ("kalshi_demo_maker.py", None, 0),
     "perp_paper": ("perp_paper.py loop", None, 0),
     "nightly_compact": ("nightly_compact.py loop", None, 0),
+    "queue_runner": ("queue_runner.py", None, 0),
 }
 RAW = ROOT / "data" / "raw"
 
@@ -56,9 +57,13 @@ def log(msg: str) -> None:
 
 
 def pids_of(script_token: str) -> list[int]:
-    # python-scoped: won't match editors/tail/grep holding the filename
-    out = subprocess.run(["pgrep", "-f", rf"python[0-9.]* .*{script_token}"],
-                         capture_output=True, text=True)
+    # python-scoped AND token anchored as argv[1]: won't match editors/tail
+    # or `python -c '...' token`-style holders. Residual: a manual debug run
+    # `python <token> --probe` still matches — avoid running those while the
+    # managed copy is stale.
+    out = subprocess.run(
+        ["pgrep", "-f", rf"python[0-9.]* (\S*/)?{script_token}( |$)"],
+        capture_output=True, text=True)
     me = os.getpid()
     return [int(p) for p in out.stdout.split() if int(p) != me]
 
@@ -86,7 +91,7 @@ def terminate(pids: list[int]) -> None:
         if _alive(pid):
             try:
                 os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
                 pass
 
 
@@ -110,7 +115,7 @@ def start(name: str, args: str) -> None:
 
 def main() -> None:
     LOGS.mkdir(parents=True, exist_ok=True)
-    lock_f = open(LOGS / "watchdog.lock", "w")
+    lock_f = open(LOGS / "watchdog.lock", "a")  # "a": never truncate
     try:
         fcntl.flock(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -119,12 +124,18 @@ def main() -> None:
     log("watchdog up")
     last_start: dict[str, float] = {}
     last_stale_kill: dict[str, float] = {}
+    first_sweep = True
     while True:
         for name, (args, glob, max_stale) in JOBS.items():
             try:
                 token = args.split()[0]
                 pids = pids_of(token)
                 now = time.time()
+                if pids and first_sweep:
+                    # adopted process: grant the same post-start grace, so a
+                    # watchdog (re)boot during an upstream outage doesn't
+                    # kill an alive-but-stale recorder on cycle 0
+                    last_start.setdefault(name, now)
                 if not pids:
                     log(f"{name}: process dead -> restart")
                     start(name, args)
@@ -144,6 +155,7 @@ def main() -> None:
                     last_start[name] = last_stale_kill[name] = now
             except Exception as e:  # noqa: BLE001
                 log(f"{name}: watchdog check error: {str(e)[:150]}")
+        first_sweep = False
         time.sleep(CHECK_SEC)
 
 
