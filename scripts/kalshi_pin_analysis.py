@@ -85,6 +85,9 @@ def load_kalshi():
 def btc_spot() -> pd.DataFrame:
     rows = []
     for d in load("binance"):
+        if d.get("src") != "binance":
+            continue  # binance_err records carry a plain string msg — the
+            # one missing src guard in the repo crashed this study for days
         m = d["msg"].get("data", {})
         if m.get("s") == "BTCUSDT":
             rows.append((d["t_local"], float(m["p"])))
