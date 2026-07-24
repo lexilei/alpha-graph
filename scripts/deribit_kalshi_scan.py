@@ -48,18 +48,18 @@ def last_line(pattern: str, src: str, base: Path) -> dict | None:
 
 
 def parse_deribit_name(name: str):
-    m = re.match(r"BTC-(\d{1,2})([A-Z]{3})(\d{2})-(\d+)-([CP])", name)
+    m = re.match(r"(BTC|ETH)-(\d{1,2})([A-Z]{3})(\d{2})-(\d+)-([CP])", name)
     if not m:
         return None
-    day, mon, yy, k, cp = m.groups()
+    cur, day, mon, yy, k, cp = m.groups()
     exp = datetime(2000 + int(yy), MONTHS[mon], int(day), 8, 0,
                    tzinfo=timezone.utc)
-    return exp, float(k), cp
+    return cur, exp, float(k), cp
 
 
 def parse_kalshi_ticker(t: str):
     # KXBTCD-26JUL2217-T75749.99 / KXBTC-26JUL2217-B75250
-    m = re.match(r"(KXBTCD?|KXBTC)-(\d{2})([A-Z]{3})(\d{2})(\d{2})-([TB])(.+)", t)
+    m = re.match(r"(KXBTCD|KXBTC|KXETHD|KXETH)-(\d{2})([A-Z]{3})(\d{2})(\d{2})-([TB])(.+)", t)
     if not m:
         return None
     series, yy, mon, dd, hh, kind, val = m.groups()
@@ -80,11 +80,15 @@ def _kget(path: str):
         return json.load(r)
 
 
-def kalshi_listing(spot: float) -> list[dict]:
-    """Live listing; strikes within 8% of spot get REAL top-of-book quotes
-    (the /markets bid/ask fields are unreliable on one-sided books)."""
+def kalshi_listing(spots: dict) -> list[dict]:
+    """Live listing; strikes within 8% of the SERIES' OWN spot get real
+    top-of-book quotes (listing bid/ask lies on one-sided books)."""
     out = []
-    for s in ("KXBTC", "KXBTCD"):
+    for s in ("KXBTC", "KXBTCD", "KXETH", "KXETHD"):
+        spot = spots.get({"KXBTC": "BTC", "KXBTCD": "BTC",
+                          "KXETH": "ETH", "KXETHD": "ETH"}[s])
+        if not spot:
+            continue
         for mk in _kget(f"/markets?series_ticker={s}&status=open&limit=500"
                         ).get("markets", []):
             row = {"ticker": mk["ticker"],
@@ -106,10 +110,12 @@ def kalshi_listing(spot: float) -> list[dict]:
     return out
 
 
-def brti_spot() -> float | None:
-    """VW mid of the last ~10s of recorded Coinbase+Kraken trades — the
-    settlement-relevant anchor (Kalshi settles on BRTI, whose constituents
-    are US venues; Binance/Deribit-index carry a measured +6bp basis)."""
+def brti_spot(currency: str = "BTC") -> float | None:
+    """VW mid of the last ~10s of recorded Coinbase+Kraken trades for the
+    given currency — the settlement-relevant anchor. Handles both the
+    legacy (BTC-only) and the tagged (prod/pair) record formats."""
+    want_cb = f"{currency}-USD"
+    want_kr = ("XBT/USD" if currency == "BTC" else f"{currency}/USD")
     files = sorted((RAW / "polymarket").glob("brti_*.jsonl.gz"))
     if not files:
         return None
@@ -122,10 +128,20 @@ def brti_spot() -> float | None:
             except json.JSONDecodeError:
                 continue
             if d["src"] == "coinbase":
-                rows.append((d["t_local"], float(d["msg"]["p"]), float(d["msg"]["s"])))
+                m = d["msg"]
+                prod = m.get("prod") or "BTC-USD"  # legacy rows were BTC
+                if prod == want_cb:
+                    rows.append((d["t_local"], float(m["p"]), float(m["s"])))
             elif d["src"] == "kraken":
-                for tr in d["msg"]:
-                    rows.append((d["t_local"], float(tr[0]), float(tr[1])))
+                m = d["msg"]
+                if isinstance(m, dict):
+                    if m.get("pair") == want_kr:
+                        for tr in m.get("trades", []):
+                            rows.append((d["t_local"], float(tr[0]),
+                                         float(tr[1])))
+                elif currency == "BTC":  # legacy list rows were BTC
+                    for tr in m:
+                        rows.append((d["t_local"], float(tr[0]), float(tr[1])))
       except (EOFError, zlib.error):
         pass
     if not rows:
@@ -139,15 +155,44 @@ def brti_spot() -> float | None:
     return float(sum(p_ * w for p_, w in zip(ps, ws)) / sum(ws))
 
 
+def last_surfaces() -> dict:
+    """Last deribit_surface record per currency (records are tagged since
+    the ETH extension; untagged legacy records count as BTC)."""
+    out = {}
+    for f in sorted((RAW / "deribit").glob("deribit_*.jsonl.gz"))[-3:]:
+        try:
+            for line in gzip.open(f, "rt"):
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if d["src"] == "deribit_surface":
+                    cur = d["msg"].get("currency", "BTC")
+                    out[cur] = d
+        except (EOFError, zlib.error):
+            continue
+    return out
+
+
+SERIES_CUR = {"KXBTC": "BTC", "KXBTCD": "BTC", "KXETH": "ETH", "KXETHD": "ETH"}
+
+
 def main(sink=None) -> None:
-    der = last_line("deribit_*.jsonl.gz", "deribit_surface", RAW / "deribit")
+    surfaces = last_surfaces()
     now = datetime.now(timezone.utc)
-    spot_deribit = der["msg"]["index"]["index_price"]
-    spot = brti_spot() or spot_deribit * (1 - 6e-4)  # fallback: -6bp basis
-    kal = {"msg": kalshi_listing(spot)}
+    spots = {}
+    for cur, der in surfaces.items():
+        anchor = brti_spot(cur)
+        spots[cur] = anchor or der["msg"]["index"]["index_price"] * (1 - 6e-4)
+    spot = spots.get("BTC")
+    if spot is None:
+        print("no BTC surface recorded yet")
+        return
+    kal = {"msg": kalshi_listing(spots)}
     n_mkts = len(kal["msg"])
-    print(f"deribit snapshot age: {(now.timestamp() - der['t_local']/1e6)/60:.1f}min"
-          f" | index ${spot:,.0f} | kalshi live listing: {n_mkts} markets")
+    print(f"surfaces: {sorted(surfaces)} | BTC ${spot:,.0f}"
+          + (f" | ETH ${spots['ETH']:,.0f}" if "ETH" in spots else "")
+          + f" | kalshi live listing: {n_mkts} markets")
 
     # all future settlements 1h..36h out, each judged on its own ladder
     rows = []
@@ -158,22 +203,30 @@ def main(sink=None) -> None:
         series, close, kind, val = p
         h = (close - now).total_seconds() / 3600
         if 1.0 <= h <= 36.0:
-            rows.append((close, mkt, kind, val))
+            rows.append((close, mkt, kind, val, SERIES_CUR[series]))
     if not rows:
         print("no ladders 1-36h out in the last listing")
         return
 
-    all_opts = []
-    for o in der["msg"]["options"]:
-        pr = parse_deribit_name(o["instrument_name"])
-        if pr and o.get("mark_iv"):
-            all_opts.append((*pr, o["mark_iv"] / 100.0))
+    all_opts = {}  # currency -> [(exp, k, cp, iv)]
+    for cur, der in surfaces.items():
+        for o in der["msg"]["options"]:
+            pr = parse_deribit_name(o["instrument_name"])
+            if pr and o.get("mark_iv"):
+                _, exp, k, cp = pr
+                all_opts.setdefault(cur, []).append(
+                    (exp, k, cp, o["mark_iv"] / 100.0))
 
     n_sig_total = 0
-    for target in sorted({r[0] for r in rows}):
-        ladder = [(m, kind, val) for c, m, kind, val in rows if c == target]
+    for target, lcur in sorted({(r[0], r[4]) for r in rows}):
+        ladder = [(m, kind, val) for c, m, kind, val, cu in rows
+                  if c == target and cu == lcur]
+        cspot = spots.get(lcur)
+        if cspot is None:
+            continue
+        spot = cspot
         tau_t = (target - now).total_seconds() / (365 * 86400)
-        after = [o for o in all_opts if o[0] > target]
+        after = [o for o in all_opts.get(lcur, []) if o[0] > target]
         if not after:
             continue
         exp0 = min(o[0] for o in after)
@@ -221,10 +274,10 @@ def main(sink=None) -> None:
         n_sig = (df.sig != "").sum()
         n_sig_total += n_sig
         if sink is not None:
-            sink.write("devscan", {"settle": str(target), "spot": spot,
-                                   "rows": out})
+            sink.write("devscan", {"settle": str(target), "cur": lcur,
+                                   "spot": spot, "rows": out})
         else:
-            print(f"\n== settle {target} (tau {tau_t*365*24:.1f}h, deribit "
+            print(f"\n== settle {target} {lcur} (tau {tau_t*365*24:.1f}h, deribit "
                   f"exp {exp0.strftime('%d%b %H:%M')}): {len(df)} strikes, "
                   f"{n_sig} cross fee band ==")
             with pd.option_context("display.width", 160):

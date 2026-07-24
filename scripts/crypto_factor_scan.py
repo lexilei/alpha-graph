@@ -41,8 +41,19 @@ def load() -> dict[str, pd.DataFrame]:
     f = pd.read_parquet(RAW / "perp_funding.parquet")
     f["date"] = f["funding_time"].dt.tz_convert("UTC").dt.normalize().dt.tz_localize(None)
     fund = f.groupby(["date", "symbol"]).funding_rate.sum().unstack()
-    p["fund"] = fund.reindex(index=p["close"].index,
-                             columns=p["close"].columns).fillna(0.0)
+    fund = fund.reindex(index=p["close"].index, columns=p["close"].columns)
+    # months past the last monthly-truth file: premiumIndexKlines proxy
+    # (premium_close x3 = daily funding), so carry factors are not silently
+    # zero-filled on a freshly-updated panel. Flagged: rank-level proxy.
+    proxy_f = RAW / "premium_proxy_daily.parquet"
+    if proxy_f.exists():
+        pr = pd.read_parquet(proxy_f)
+        pr["date"] = pd.to_datetime(pr["date"])
+        proxy = (pr.pivot(index="date", columns="symbol",
+                          values="premium_close") * 3).reindex(
+            index=p["close"].index, columns=p["close"].columns)
+        fund = fund.combine_first(proxy)
+    p["fund"] = fund.fillna(0.0)
     return p
 
 

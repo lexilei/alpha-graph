@@ -26,7 +26,7 @@ KRAKEN_WS = "wss://ws.kraken.com"
 
 
 async def coinbase_loop(sink: Sink, stop: float | None) -> None:
-    sub = {"type": "subscribe", "product_ids": ["BTC-USD"],
+    sub = {"type": "subscribe", "product_ids": ["BTC-USD", "ETH-USD"],
            "channels": ["matches"]}
     while stop is None or time.time() < stop:
         try:
@@ -36,7 +36,8 @@ async def coinbase_loop(sink: Sink, stop: float | None) -> None:
                     m = json.loads(await asyncio.wait_for(ws.recv(), timeout=30))
                     if m.get("type") == "match":
                         sink.write("coinbase", {"p": m["price"], "s": m["size"],
-                                                "t": m["time"]})
+                                                "t": m["time"],
+                                                "prod": m.get("product_id")})
         except Exception as e:  # noqa: BLE001
             sink.write("coinbase_err", str(e))
             await asyncio.sleep(3)
@@ -44,7 +45,7 @@ async def coinbase_loop(sink: Sink, stop: float | None) -> None:
 
 
 async def kraken_loop(sink: Sink, stop: float | None) -> None:
-    sub = {"event": "subscribe", "pair": ["XBT/USD"],
+    sub = {"event": "subscribe", "pair": ["XBT/USD", "ETH/USD"],
            "subscription": {"name": "trade"}}
     while stop is None or time.time() < stop:
         try:
@@ -53,7 +54,7 @@ async def kraken_loop(sink: Sink, stop: float | None) -> None:
                 while stop is None or time.time() < stop:
                     m = json.loads(await asyncio.wait_for(ws.recv(), timeout=30))
                     if isinstance(m, list) and len(m) > 2 and m[2] == "trade":
-                        sink.write("kraken", m[1])  # [[price, vol, time, ...]]
+                        sink.write("kraken", {"pair": m[-1], "trades": m[1]})
         except Exception as e:  # noqa: BLE001
             sink.write("kraken_err", str(e))
             await asyncio.sleep(3)

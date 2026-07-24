@@ -46,13 +46,17 @@ def main() -> None:
     while stop is None or time.time() < stop:
         t0 = time.time()
         try:
-            summ = _get("/get_book_summary_by_currency?currency=BTC&kind=option")
-            idx = _get("/get_index_price?index_name=btc_usd")
-            slim = [{k: s.get(k) for k in
-                     ("instrument_name", "bid_price", "ask_price", "mark_price",
-                      "mark_iv", "underlying_price", "open_interest", "volume")}
-                    for s in summ]
-            sink.write("deribit_surface", {"index": idx, "options": slim})
+            for cur, idx_name in (("BTC", "btc_usd"), ("ETH", "eth_usd")):
+                summ = _get(f"/get_book_summary_by_currency?currency={cur}"
+                            "&kind=option")
+                idx = _get(f"/get_index_price?index_name={idx_name}")
+                slim = [{k: s.get(k) for k in
+                         ("instrument_name", "bid_price", "ask_price",
+                          "mark_price", "mark_iv", "underlying_price",
+                          "open_interest", "volume")}
+                        for s in summ]
+                sink.write("deribit_surface",
+                           {"currency": cur, "index": idx, "options": slim})
             n += 1
         except Exception as e:  # noqa: BLE001
             sink.write("deribit_err", str(e))
