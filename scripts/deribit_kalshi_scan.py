@@ -276,6 +276,7 @@ def main(sink=None) -> None:
 if __name__ == "__main__":
     import sys
     import time as _time
+    sys.stdout.reconfigure(line_buffering=True)  # log stays live when stdout is a file
     if "--loop" in sys.argv:
         import polymarket_recorder as rec
         _sink = rec.Sink("devscan")
