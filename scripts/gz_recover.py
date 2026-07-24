@@ -80,14 +80,79 @@ def iter_members(raw: bytes):
         i = j
 
 
+def _iter_lines(raw: bytes):
+    """Stream decoded lines member-by-member without materializing whole
+    members: a 2GB decompressed hour peaked 6.2GB RSS through the batch
+    path (join + decode + splitlines copies); this path holds only the
+    compressed bytes plus a 64KB chunk and one partial line."""
+    import codecs
+    i, n = 0, len(raw)
+    while i < n:
+        o = zlib.decompressobj(wbits=31)
+        dec = codecs.getincrementaldecoder("utf-8")("replace")
+        carry = ""
+        fed, err = i, False
+        while fed < n and not o.eof:
+            try:
+                out = o.decompress(raw[fed:fed + _CHUNK])
+            except (zlib.error, OSError):
+                err = True
+                break
+            fed = min(fed + _CHUNK, n)
+            if out:
+                carry += dec.decode(out)
+                if "\n" in carry:
+                    *lines, carry = carry.split("\n")
+                    yield from lines
+        if err:
+            # the raising call's output is lost inside zlib: rebuild state
+            # full-speed to the failing chunk (re-decoded lines discarded —
+            # already yielded; zlib is deterministic), then byte-wise inside
+            # it to salvage everything up to the first bad byte
+            o2 = zlib.decompressobj(wbits=31)
+            dec2 = codecs.getincrementaldecoder("utf-8")("replace")
+            carry2, redo_ok = "", True
+            if fed > i:
+                try:
+                    out2 = o2.decompress(raw[i:fed])
+                except (zlib.error, OSError):
+                    redo_ok = False
+                else:
+                    carry2 = dec2.decode(out2).rsplit("\n", 1)[-1]
+            if redo_ok:
+                for k in range(fed, min(fed + _CHUNK, n)):
+                    if o2.eof:
+                        break
+                    try:
+                        out2 = o2.decompress(raw[k:k + 1])
+                    except (zlib.error, OSError):
+                        break
+                    if out2:
+                        carry2 += dec2.decode(out2)
+                        if "\n" in carry2:
+                            *lines, carry2 = carry2.split("\n")
+                            yield from lines
+                carry = carry2  # salvaged tail's partial line
+        if carry.strip():
+            yield carry
+        if not err and o.eof:
+            nxt = fed - len(o.unused_data)
+            if nxt > i:
+                i = nxt
+                continue
+        j = raw.find(b"\x1f\x8b", i + 2)
+        if j == -1:
+            return
+        i = j
+
+
 def iter_jsonl(path: Path):
     raw = Path(path).read_bytes()
-    for member in iter_members(raw):
-        for line in member.decode("utf-8", "replace").splitlines():
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
-                continue
+    for line in _iter_lines(raw):
+        try:
+            yield json.loads(line)
+        except json.JSONDecodeError:
+            continue
 
 
 if __name__ == "__main__":
