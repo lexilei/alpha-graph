@@ -136,6 +136,7 @@ def sharpe(x: pd.Series) -> float:
 
 
 def main() -> None:
+    print(f"PANEL: {'FULL (live monitoring, proxy-funded tail)' if FULL_PANEL else f'frozen <= {PANEL_END} (judgment window)'}")
     p = load()
     close, qv, fund = p["close"], p["quote_volume"], p["fund"]
     ret = close.pct_change(fill_method=None)
