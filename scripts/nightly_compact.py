@@ -30,6 +30,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
+_sys_p = str(Path(__file__).resolve().parent)
+import sys as _sys
+_sys.path.insert(0, _sys_p)
+from gz_recover import iter_jsonl
 
 ROOT = Path(__file__).resolve().parents[1]
 RAW = ROOT / "data" / "raw" / "polymarket"
@@ -43,14 +47,7 @@ def log(m: str) -> None:
 
 
 def read_gz(f: Path):
-    try:
-        for line in gzip.open(f, "rt"):
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
-                continue
-    except (EOFError, zlib.error, gzip.BadGzipFile, OSError):
-        return
+    yield from iter_jsonl(f)  # recovers members past a kill-corrupted trailer
 
 
 def compact_binance(day: str) -> int:

@@ -20,6 +20,9 @@ import re
 import zlib
 from datetime import datetime, timezone
 from pathlib import Path
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+from gz_recover import iter_jsonl
 
 import numpy as np
 import pandas as pd
@@ -34,16 +37,9 @@ MONTHS = {m: i + 1 for i, m in enumerate(
 def last_line(pattern: str, src: str, base: Path) -> dict | None:
     out = None
     for f in sorted(base.glob(pattern)):
-        try:
-            for line in gzip.open(f, "rt"):
-                try:
-                    d = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if d["src"] == src:
-                    out = d
-        except (EOFError, zlib.error):
-            continue
+        for d in iter_jsonl(f):
+            if d.get("src") == src:
+                out = d
     return out
 
 
@@ -121,12 +117,7 @@ def brti_spot(currency: str = "BTC") -> float | None:
         return None
     rows = []
     for f in files[-2:]:
-      try:
-        for line in gzip.open(f, "rt"):
-            try:
-                d = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+        for d in iter_jsonl(f):
             if d["src"] == "coinbase":
                 m = d["msg"]
                 prod = m.get("prod") or "BTC-USD"  # legacy rows were BTC
@@ -142,8 +133,6 @@ def brti_spot(currency: str = "BTC") -> float | None:
                 elif currency == "BTC":  # legacy list rows were BTC
                     for tr in m:
                         rows.append((d["t_local"], float(tr[0]), float(tr[1])))
-      except (EOFError, zlib.error):
-        pass
     if not rows:
         return None
     tmax = rows[-1][0]
@@ -160,17 +149,9 @@ def last_surfaces() -> dict:
     the ETH extension; untagged legacy records count as BTC)."""
     out = {}
     for f in sorted((RAW / "deribit").glob("deribit_*.jsonl.gz"))[-3:]:
-        try:
-            for line in gzip.open(f, "rt"):
-                try:
-                    d = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if d["src"] == "deribit_surface":
-                    cur = d["msg"].get("currency", "BTC")
-                    out[cur] = d
-        except (EOFError, zlib.error):
-            continue
+        for d in iter_jsonl(f):
+            if d.get("src") == "deribit_surface":
+                out[d["msg"].get("currency", "BTC")] = d
     return out
 
 
