@@ -170,6 +170,9 @@ def main(sink=None) -> None:
         if age > 900:
             print(f"{cur} surface stale ({age/60:.1f}min) -> dropped",
                   flush=True)
+            if sink is not None:  # sink-visible marker: "stale-skipped",
+                sink.write("devscan_stale", {"cur": cur,  # not "didn't run"
+                                             "age_s": ages[cur]})
             del surfaces[cur]
     spots = {}
     for cur, der in surfaces.items():
