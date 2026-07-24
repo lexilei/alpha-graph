@@ -1,14 +1,21 @@
 """Robust reader for append-mode gzip logs corrupted by mid-write kills.
 
-Our recorders write with gzip.open(path, "at"): each flush is a concatenated
-gzip MEMBER. When a process is killed mid-write, that member gets a bad
-trailer, and standard readers (gzip.open, zcat) stop at the first CRC error —
-silently dropping every member appended AFTER it, though the bytes are on
-disk. Two session-teardown kills made this a real, recurring data-loss path.
+Our recorders write with gzip.open(path, "at"): each hourly file holds one
+or more concatenated gzip MEMBERS (one per open; sync-flushed continuously).
+Standard readers (gzip.open, zcat) lose data two ways:
+  1. kill mid-write -> member with a bad/absent trailer; standard readers
+     stop at the first CRC error, silently dropping every member appended
+     after it, though the bytes are on disk.
+  2. the in-progress member of a live file has no trailer yet, though its
+     sync-flushed content is recoverable.
 
-iter_jsonl() splits the file on the gzip magic (1f 8b) and decompresses each
-member independently, skipping only the corrupt ones. Drop-in replacement for
-the per-script `read_gz` guards.
+iter_members() walks the file with zlib.decompressobj: members are
+decompressed incrementally in chunks (so a bad trailer still yields
+everything up to the break), and member boundaries come from unused_data —
+never from scanning for the 1f 8b magic, which occurs by chance inside
+compressed data (~once per 64KB) and would split a valid member in half,
+losing the whole file. Only after a hard decode error does it scan forward
+for the next plausible member start.
 """
 
 from __future__ import annotations
@@ -17,20 +24,36 @@ import json
 import zlib
 from pathlib import Path
 
+_CHUNK = 1 << 16
+
 
 def iter_members(raw: bytes):
-    """Yield each gzip member's decompressed bytes, skipping corrupt ones."""
-    i = 0
-    n = len(raw)
+    """Yield each gzip member's decompressed bytes, best-effort on corruption."""
+    i, n = 0, len(raw)
     while i < n:
+        o = zlib.decompressobj(wbits=31)
+        out, fed, err = [], i, False
+        while fed < n and not o.eof:
+            try:
+                out.append(o.decompress(raw[fed:fed + _CHUNK]))
+            except (zlib.error, OSError):
+                err = True
+                break
+            fed = min(fed + _CHUNK, n)
+        data = b"".join(out)
+        if data:
+            yield data
+        if not err and o.eof:
+            nxt = fed - len(o.unused_data)
+            if nxt > i:
+                i = nxt
+                continue
+        # hard error or truncated tail: scan for the next member candidate.
+        # A false-positive magic here just fails to decode and we scan again,
+        # so this converges on the next real member (or EOF) without dupes.
         j = raw.find(b"\x1f\x8b", i + 2)
         if j == -1:
-            j = n
-        chunk = raw[i:j]
-        try:
-            yield zlib.decompress(chunk, wbits=31)
-        except (zlib.error, OSError):
-            pass  # corrupt member (kill boundary) — skip, keep the rest
+            return
         i = j
 
 
@@ -48,6 +71,8 @@ if __name__ == "__main__":
     import sys
     from collections import Counter
     c = Counter()
+    n = 0
     for d in iter_jsonl(Path(sys.argv[1])):
+        n += 1
         c[d.get("src", "?")] += 1
-    print(dict(c))
+    print(n, "records", dict(c))
