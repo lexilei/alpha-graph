@@ -269,11 +269,16 @@ def paper_trade() -> None:
         quotes[sym] = (bid, ask, (bid + ask) / 2)
     unpriceable = [s2 for s2 in state["positions"] if s2 not in quotes]
     if unpriceable:
-        log(f"WARN: held positions with no quote (excluded from NAV): "
-            f"{unpriceable}")
+        log(f"WARN: held positions with no quote (marked at last known "
+            f"price): {unpriceable}")
     for sym, pos in state["positions"].items():
         if sym in quotes:
+            pos["last_mark"] = quotes[sym][2]
             nav += pos["qty"] * quotes[sym][2]
+        elif pos.get("last_mark") is not None:
+            # delisted/bookless symbol: carry at last mark rather than
+            # silently vanishing from NAV
+            nav += pos["qty"] * pos["last_mark"]
     trades, fees, slip = [], 0.0, 0.0
     for sym, prod in mapped.items():
         if sym not in quotes:
