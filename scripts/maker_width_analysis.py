@@ -98,8 +98,10 @@ def main() -> None:
         ms = mids.get(tok)
         if not ms:
             continue
-        mt = np.array([x[0] for x in ms])
-        mv = np.array([x[1] for x in ms])
+        order = np.argsort([x[0] for x in ms])  # file order is NOT time
+        # order: real t_local inversions exist (NTP steps, restart appends)
+        mt = np.array([x[0] for x in ms])[order]
+        mv = np.array([x[1] for x in ms])[order]
         idx = np.searchsorted(mt, g.t.values) - 1
         ok = idx >= 0
         d_ = np.abs(g.price.values[ok] - mv[idx[ok]])
@@ -122,14 +124,21 @@ def main() -> None:
     b["g100"] = b.t // 100_000
     g = b.groupby("g100").px.last()
     grid = np.arange(g.index.min(), g.index.max() + 1)
-    p100 = g.reindex(grid).ffill()
-    lr = np.log(p100).diff()
-    sigma_1s = float(lr.rolling(10).sum().std())
-    print(f"\nBTC 1s vol (this sample): {sigma_1s*1e4:.2f}bp")
+    raw100 = g.reindex(grid)          # NaN where no trade in the bin
+    real = raw100.notna()             # 15% of bins; the rest are ffill
+    p100 = raw100.ffill()
+    logp = np.log(p100)
+    # audit: computing tails on the ffilled grid floods the distribution
+    # with fabricated zeros and DEFLATES q99 2-4x (width curve too narrow).
+    # Require REAL prints at both endpoints of every differenced move.
+    mv1s = logp.diff(10)[real & real.shift(10)]  # true 1s moves, both
+    sigma_1s = float(mv1s.std())                 # endpoints real
+    print(f"\nBTC 1s vol (this sample, real-endpoint bins): "
+          f"{sigma_1s*1e4:.2f}bp")
     tails = {}
     for name, L in LATENCIES_S.items():
         k = max(1, int(L * 10))
-        mv = np.log(p100).diff(k).abs().dropna()
+        mv = logp.diff(k)[real & real.shift(k)].abs().dropna()
         tails[name] = float(mv.quantile(0.99))
         print(f"  q99 |move| over {name}: {tails[name]*1e4:.2f}bp")
 
