@@ -24,10 +24,6 @@ BASE = "https://www.deribit.com/api/v2/public"
 OUT = rec.OUT.parent / "deribit"
 
 
-class DSink(rec.Sink):
-    def write(self, src, msg):
-        rec.OUT = OUT
-        super().write(src, msg)
 
 
 def _get(path: str):
@@ -41,7 +37,7 @@ def main() -> None:
     stop = None
     if "--probe" in sys.argv:
         stop = time.time() + float(sys.argv[sys.argv.index("--probe") + 1])
-    sink = DSink("deribit")
+    sink = rec.Sink("deribit", out=OUT)
     n = 0
     while stop is None or time.time() < stop:
         t0 = time.time()
