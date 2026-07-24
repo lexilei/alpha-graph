@@ -114,6 +114,14 @@ def _on_term(signum, frame):  # noqa: ARG001
             os.killpg(p.pid, signal.SIGTERM)  # whole job group, no orphans
         except (ProcessLookupError, PermissionError):
             pass
+        deadline = time.time() + 5
+        while time.time() < deadline and p.poll() is None:
+            time.sleep(0.2)
+        if p.poll() is None:  # job ignored TERM: escalate before we release
+            try:                       # the spec, or a restarted runner
+                os.killpg(p.pid, signal.SIGKILL)  # would run job 2 alongside
+            except (ProcessLookupError, PermissionError):
+                pass
     if spec is not None and spec.exists():
         try:
             move_unique(spec, DONE, "INTERRUPTED_")
@@ -133,6 +141,8 @@ def run_job(spec: Path) -> None:
     t0 = time.time()
     rc = -1
     try:
+        _current["spec"] = claimed  # BEFORE Popen: a SIGTERM in the gap
+        # must see the spec, else the job orphans and archives as DONE
         with open(logf_path, "a") as lf:
             p = subprocess.Popen(
                 ["caffeinate", "-ims", "nice", "-n", "19", "bash",
@@ -141,7 +151,7 @@ def run_job(spec: Path) -> None:
                 start_new_session=True,  # own group: killable as a unit
                 cwd=str(Q))  # deterministic cwd (watchdog starts us from
             # scripts/): specs must cd or use absolute paths
-            _current["proc"], _current["spec"] = p, claimed
+            _current["proc"] = p
             rc = p.wait()
     except Exception as e:  # noqa: BLE001
         log(f"RUN ERROR {spec.name}: {str(e)[:150]}")
