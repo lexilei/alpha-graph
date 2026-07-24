@@ -39,8 +39,11 @@ SERIES_KEY = "btc-updown"  # BTC only: full 3-coin recording is ~11 GB/day
 
 
 class Sink:
-    def __init__(self, name: str):
+    def __init__(self, name: str, out: Path | None = None):
+        # per-instance dir: subclass hacks that mutated the module-global
+        # OUT would cross-file records in any process mixing sink kinds
         self.name, self.fh, self.hour = name, None, None
+        self.out = out or OUT
 
     def write(self, src: str, msg) -> None:
         now = time.time()
@@ -48,8 +51,8 @@ class Sink:
         if hour != self.hour:
             if self.fh:
                 self.fh.close()
-            OUT.mkdir(parents=True, exist_ok=True)
-            path = OUT / f"{self.name}_{time.strftime('%Y%m%d_%H', time.gmtime(now))}.jsonl.gz"
+            self.out.mkdir(parents=True, exist_ok=True)
+            path = self.out / f"{self.name}_{time.strftime('%Y%m%d_%H', time.gmtime(now))}.jsonl.gz"
             self.fh = gzip.open(path, "at")
             self.hour = hour
         self.fh.write(json.dumps(
@@ -132,12 +135,19 @@ async def poly_loop(sink: Sink, stop: float | None) -> None:
 
 
 async def binance_loop(sink: Sink, stop: float | None) -> None:
+    last_flush = 0.0
     while stop is None or time.time() < stop:
         try:
             async with websockets.connect(BINANCE_WS, ping_interval=15) as ws:
                 while stop is None or time.time() < stop:
                     raw = await asyncio.wait_for(ws.recv(), timeout=30)
                     sink.write("binance", json.loads(raw))
+                    # the hot loop never reaches the outer flush; without a
+                    # periodic sync point a kill loses the buffered tail and
+                    # leaves the member unrecoverable past it
+                    if time.time() - last_flush > 5.0:
+                        sink.flush()
+                        last_flush = time.time()
         except Exception as e:  # noqa: BLE001
             sink.write("binance_err", str(e))
             await asyncio.sleep(3)
