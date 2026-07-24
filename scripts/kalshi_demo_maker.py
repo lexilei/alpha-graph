@@ -96,6 +96,8 @@ def main() -> None:
     # 30-cycle (~5min) median of equity, never an instantaneous read
     eq_hist: list[float] = []
     flag_dir = rec.OUT.parent.parent / "logs" / "launchd"
+    flag_dir.mkdir(parents=True, exist_ok=True)
+    base_f = flag_dir / "maker_baseline.txt"  # "<day> <start_bal>"
     print("demo maker start", flush=True)
 
     n = 0
@@ -111,12 +113,28 @@ def main() -> None:
             # portfolio_value is in CENTS (no _dollars twin in the payload)
             equity = bal + float(bal_resp.get("portfolio_value", 0) or 0) / 100.0
             eq_hist = (eq_hist + [equity])[-30:]
-            eq_med = sorted(eq_hist)[len(eq_hist) // 2]
+            # lower median: robust to settlement spikes AND conservative
+            # (leans toward stopping) on even-length windows
+            eq_med = sorted(eq_hist)[(len(eq_hist) - 1) // 2]
             today = datetime.now(timezone.utc).date()
-            if start_bal is None:
-                start_bal = equity
             if today != stop_day:  # reset the DAILY loss baseline at UTC roll
                 stop_day, start_bal = today, eq_med
+                base_f.write_text(f"{today} {start_bal}")
+            if start_bal is None:
+                # baseline must survive restarts, else every restart re-arms
+                # a fresh $25 budget (daily loss becomes restarts x $25); and
+                # a first-cycle instantaneous read can latch a settlement
+                # spike/zero. Adopt today's persisted baseline, else warm up
+                # ~100s and set it from the median.
+                try:
+                    day_s, bal_s = base_f.read_text().split()
+                except (OSError, ValueError):
+                    day_s = ""
+                if day_s == str(today):
+                    start_bal = float(bal_s)
+                elif len(eq_hist) >= 10:
+                    start_bal = eq_med
+                    base_f.write_text(f"{today} {start_bal}")
             stop_flag = flag_dir / f"maker_stop_{today}.flag"
             if stop_flag.exists():
                 # halted for the day; the flag survives watchdog restarts so
@@ -126,7 +144,8 @@ def main() -> None:
                 n += 1
                 time.sleep(45)
                 continue
-            breached = eq_med < start_bal - DAILY_LOSS_STOP
+            breached = (start_bal is not None
+                        and eq_med < start_bal - DAILY_LOSS_STOP)
             if breached and not stop_armed:
                 stop_armed = True
                 sink.write("stop_armed", {"equity": equity, "eq_med": eq_med,
@@ -154,6 +173,7 @@ def main() -> None:
                       f"failed {n_fail}; halted until next UTC day",
                       flush=True)
                 sink.flush()
+                n += 1
                 continue
 
             pos = {p["ticker"]: float(p.get("position_fp") or p.get("position", 0))
@@ -268,8 +288,15 @@ def main() -> None:
                 time.sleep(1.0)  # let cancels land before re-quoting: avoids
                 # post-only crossing our own in-flight canceled orders
             # collateral budget: placing what cash can't back just 400-spams
-            # insufficient_balance (10k+ rejects on the first low-cash run)
-            budget = bal * 0.9
+            # insufficient_balance (10k+ rejects on the first low-cash run).
+            # balance_dollars is GROSS cash (verified: constant as orders
+            # rest), so first subtract collateral already committed by the
+            # resting orders we are keeping this cycle.
+            reserved = sum(
+                (v[1] * SIZE if side == "bid" else (1.0 - v[1]) * SIZE)
+                for (t_, side), v in live.items()
+                if v is not None and v[1] is not None)
+            budget = bal * 0.9 - reserved
             n_skip_budget = n_skip_clamp = 0
             for tick, tgt in targets.items():
                 fresh = None
