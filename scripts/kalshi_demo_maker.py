@@ -62,9 +62,14 @@ def spot_now() -> float:
 
 
 class Vol:
-    def __init__(self, halflife_s: float = 300.0):
-        self.hl = halflife_s
+    """Two-speed EWMA variance. Audit: a single 300s-halflife estimator
+    lagged a real spike 4.6x for minutes. The slow leg centers fv (stable);
+    the fast leg drives the width so quotes widen INTO a spike."""
+
+    def __init__(self, halflife_s: float = 300.0, fast_s: float = 30.0):
+        self.hl, self.fast_hl = halflife_s, fast_s
         self.var = None
+        self.fvar = None
         self.last = None
         self.t = None
 
@@ -74,11 +79,19 @@ class Vol:
             r2 = math.log(px / self.last) ** 2 / dt  # per-second variance
             a = 1 - 0.5 ** (dt / self.hl)
             self.var = r2 if self.var is None else (1 - a) * self.var + a * r2
+            af = 1 - 0.5 ** (dt / self.fast_hl)
+            self.fvar = r2 if self.fvar is None else (1 - af) * self.fvar + af * r2
         self.last, self.t = px, t
 
     @property
     def sigma_1s(self) -> float:
-        return math.sqrt(self.var) if self.var else 3e-4
+        s = math.sqrt(self.var) if self.var else 3e-4
+        return max(s, 3e-5)  # floor: quiet-period collapse quoted too tight
+
+    @property
+    def sigma_fast(self) -> float:
+        s = math.sqrt(self.fvar) if self.fvar else 3e-4
+        return max(s, self.sigma_1s)  # width driver: never below the slow leg
 
 
 def main() -> None:
@@ -95,6 +108,7 @@ def main() -> None:
     # minutes at a time, so the stop AND the daily baseline both use a
     # 30-cycle (~5min) median of equity, never an instantaneous read
     eq_hist: list[float] = []
+    prev_S: float | None = None
     flag_dir = rec.OUT.parent.parent / "logs" / "launchd"
     flag_dir.mkdir(parents=True, exist_ok=True)
     base_f = flag_dir / "maker_baseline.txt"  # "<day> <start_bal>"
@@ -111,6 +125,17 @@ def main() -> None:
         t0 = time.time()
         try:
             S = spot_now()
+            if prev_S is not None and abs(S / prev_S - 1) > 0.03:
+                # one glitched/stale print must not poison fv and sigma;
+                # accept it next cycle if it persists (real crash = fine to
+                # sit out one cycle)
+                sink.write("spot_glitch", {"prev": prev_S, "now": S})
+                sink.flush()
+                prev_S = S
+                n += 1
+                time.sleep(max(0.0, CYCLE_S - (time.time() - t0)))
+                continue
+            prev_S = S
             vol.update(S, t0)
             sig = vol.sigma_1s
 
@@ -122,8 +147,12 @@ def main() -> None:
             # lower median: robust to settlement spikes AND conservative
             # (leans toward stopping) on even-length windows
             eq_med = sorted(eq_hist)[(len(eq_hist) - 1) // 2]
-            today = datetime.now(timezone.utc).date()
-            if today != stop_day:  # reset the DAILY loss baseline at UTC roll
+            now_utc = datetime.now(timezone.utc)
+            today = now_utc.date()
+            # roll the baseline only after 00:05: the roll instant coincides
+            # with daily settlement, whose portfolio_value distortions can
+            # outlast the 30-cycle median window (audit rank-3)
+            if today != stop_day and now_utc.minute >= 5:
                 stop_day = today
                 if len(eq_hist) >= 10:
                     start_bal = eq_med
@@ -204,10 +233,20 @@ def main() -> None:
             long_capped = net_total > 3 * INV_CAP
             short_capped = net_total < -3 * INV_CAP
 
+            # audit CRITICAL: open markets exceed one page and Kalshi puts
+            # the near-money near-expiry strikes on page 2 — without cursor
+            # pagination the maker silently quoted NOTHING for hours
             mkts = []
             for series in ("KXBTC", "KXBTCD"):
-                mkts += k.get(f"/markets?series_ticker={series}"
-                              "&status=open&limit=200")["markets"]
+                cursor = ""
+                for _page in range(6):
+                    resp = k.get(f"/markets?series_ticker={series}"
+                                 f"&status=open&limit=200"
+                                 + (f"&cursor={cursor}" if cursor else ""))
+                    mkts += resp.get("markets", [])
+                    cursor = resp.get("cursor") or ""
+                    if not cursor:
+                        break
             now = time.time()
             cands = []
             for m in mkts:
@@ -230,9 +269,14 @@ def main() -> None:
                 cands.append((abs(fv - 0.5), m, fv, tau))
             cands.sort(key=lambda x: x[0])
             targets = {}
+            sig_f = vol.sigma_fast
             for _, m, fv, tau in cands[:MAX_STRIKES]:
                 st = sig * math.sqrt(tau)
-                delta = min(0.25, PHI0 / st * 3 * sig * math.sqrt(CYCLE_S))
+                # audit: with one sigma the width was 3.784/sqrt(tau) — the
+                # sigmas CANCELLED and quotes never widened into a spike.
+                # Sensitivity uses the slow leg, the expected move the fast
+                # leg, so delta scales with sigma_fast/sigma_slow.
+                delta = min(0.25, PHI0 / st * 3 * sig_f * math.sqrt(CYCLE_S))
                 inv = pos.get(m["ticker"], 0.0)
                 # clamp to the live book: post-only join-or-behind, never cross
                 try:
@@ -244,6 +288,10 @@ def main() -> None:
                     book_ask = 1.0 - float(nb[-1][0]) if nb else None
                 except Exception:  # noqa: BLE001
                     continue  # no book read -> do not quote blind this cycle
+                if book_bid is None and book_ask is None:
+                    # empty book = no clamp possible: never rest naked fv+-d
+                    # (half the near-money demo brackets; audit rank-1c)
+                    continue
                 q = {}
                 if inv < INV_CAP and not long_capped:
                     b = max(0.01, round(fv - delta, 2))
