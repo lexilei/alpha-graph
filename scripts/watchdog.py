@@ -62,8 +62,9 @@ def pids_of(script_token: str) -> list[int]:
     # `python <token> --probe` still matches — avoid running those while the
     # managed copy is stale.
     out = subprocess.run(
-        ["pgrep", "-f", rf"python[0-9.]* (\S*/)?{script_token}( |$)"],
-        capture_output=True, text=True)
+        ["pgrep", "-f", rf"python[0-9.]* ([^ ]*/)?{script_token}( |$)"],
+        capture_output=True, text=True)  # POSIX ERE: \S is Perl-only and
+    # silently never matched path-prefixed argv (live start-storm caught)
     me = os.getpid()
     return [int(p) for p in out.stdout.split() if int(p) != me]
 
