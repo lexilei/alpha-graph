@@ -295,7 +295,8 @@ def paper_trade() -> None:
         state["cash"] -= dq * px + fee
         fees += fee
         slip += abs(dq) * (px - mid) if dq > 0 else abs(dq) * (mid - px)
-        state["positions"][sym] = {"qty": tgt_qty, "avg": px}
+        state["positions"][sym] = {"qty": tgt_qty, "avg": px,
+                                   "last_mark": mid}
         trades.append({"sym": sym, "dq": round(dq, 6), "px": px,
                        "notional": round(dq * px, 2)})
     # drop zeroed positions not in targets
@@ -306,9 +307,12 @@ def paper_trade() -> None:
             px = bid if pos["qty"] > 0 else ask
             state["cash"] += pos["qty"] * px
             state["cash"] -= abs(pos["qty"]) * px * TAKER_FEE
+    # reported NAV must carry bookless positions at last_mark too — the
+    # first fix only patched the sizing NAV, so the ledger still dropped them
     nav2 = state["cash"] + sum(
-        pos["qty"] * quotes[s][2] for s, pos in state["positions"].items()
-        if s in quotes)
+        pos["qty"] * (quotes[s][2] if s in quotes else pos["last_mark"])
+        for s, pos in state["positions"].items()
+        if s in quotes or pos.get("last_mark") is not None)
     state_f.parent.mkdir(parents=True, exist_ok=True)
     state_f.write_text(json.dumps(state, indent=1))
     ledger_write({"event": "rebalance", "asof": tgt["asof"],
