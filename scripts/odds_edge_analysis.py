@@ -29,18 +29,13 @@ POLY_TAKER_FEE = 0.01  # since 2026 Q1
 
 
 def load(src_filter: set[str]):
+    # gz_recover: the plain reader silently dropped every member after a
+    # kill-corrupted one, not just the truncated tail
+    from gz_recover import iter_jsonl
     for f in sorted(RAW.glob("odds_*.jsonl.gz")):
-        try:
-            with gzip.open(f, "rt") as fh:
-                for line in fh:
-                    try:
-                        d = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if d["src"] in src_filter:
-                        yield d
-        except (EOFError, zlib.error):
-            continue  # file truncated by a mid-write kill; keep what parsed
+        for d in iter_jsonl(f):
+            if d["src"] in src_filter:
+                yield d
 
 
 def devig(outcomes: list[dict]) -> dict[str, float] | None:
