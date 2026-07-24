@@ -33,6 +33,7 @@ JOBS = {
     "deribit_kalshi_scan": ("deribit_kalshi_scan.py --loop 120", None, 0),
     "kalshi_demo_maker": ("kalshi_demo_maker.py", None, 0),
     "perp_paper": ("perp_paper.py loop", None, 0),
+    "nightly_compact": ("nightly_compact.py loop", None, 0),
 }
 RAW = ROOT / "data" / "raw"
 
