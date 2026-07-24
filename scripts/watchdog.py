@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+import re
 import signal
 import subprocess
 import time
@@ -62,9 +63,12 @@ def pids_of(script_token: str) -> list[int]:
     # `python <token> --probe` still matches — avoid running those while the
     # managed copy is stale.
     out = subprocess.run(
-        ["pgrep", "-f", rf"python[0-9.]* ([^ ]*/)?{script_token}( |$)"],
+        ["pgrep", "-f",
+         rf"python[0-9.]* ([^ ]*/)?{re.escape(script_token)}( |$)"],
         capture_output=True, text=True)  # POSIX ERE: \S is Perl-only and
-    # silently never matched path-prefixed argv (live start-storm caught)
+    # silently never matched path-prefixed argv (live start-storm caught);
+    # tokens are escaped so a future name with regex metachars can't
+    # false-match or storm
     me = os.getpid()
     return [int(p) for p in out.stdout.split() if int(p) != me]
 
