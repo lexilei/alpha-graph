@@ -94,7 +94,14 @@ def compact_coverage(day: str) -> dict:
 def run_compact(day: str | None = None) -> None:
     COMPACT.mkdir(parents=True, exist_ok=True)
     if day is None:
-        day = (datetime.now(timezone.utc) - timedelta(hours=6)).strftime("%Y%m%d")
+        # compact yesterday (final) AND today-so-far (refreshed next run);
+        # the old now-6h rule picked TODAY at the 06:30 loop time, so a
+        # completed day was never compacted in full.
+        now = datetime.now(timezone.utc)
+        for d in ((now - timedelta(days=1)).strftime("%Y%m%d"),
+                  now.strftime("%Y%m%d")):
+            run_compact(d)
+        return
     log(f"compacting {day}")
     n = compact_binance(day)
     log(f"  binance spot: {n:,} rows")
