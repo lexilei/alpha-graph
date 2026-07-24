@@ -114,10 +114,16 @@ async def poly_loop(sink: Sink, stop: float | None) -> None:
                 await asyncio.sleep(DISCOVER_SEC)
                 continue
             deadline = time.time() + DISCOVER_SEC
+            last_flush = time.time()
             while time.time() < deadline and (stop is None or time.time() < stop):
                 try:
                     raw = await asyncio.wait_for(ws.recv(), timeout=5)
                     sink.write("poly", json.loads(raw))
+                    # same 5s sync point binance/brti got: without it a kill
+                    # loses up to 30s of the busiest stream we record
+                    if time.time() - last_flush > 5.0:
+                        sink.flush()
+                        last_flush = time.time()
                 except asyncio.TimeoutError:
                     pass
         except Exception as e:  # noqa: BLE001
