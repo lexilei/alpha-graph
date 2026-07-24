@@ -35,13 +35,6 @@ RESERVE = 60
 GAME_RE = re.compile(r"^mlb-\w+-\w+-(\d{4}-\d{2}-\d{2})$")
 
 
-class OddsSink(rec.Sink):
-    def __init__(self, name: str):
-        super().__init__(name)
-
-    def write(self, src, msg):  # redirect to odds dir
-        rec.OUT = ODDS_DIR  # Sink.write uses rec.OUT at call time
-        super().write(src, msg)
 
 
 def _get(url: str, headers: dict | None = None):
@@ -104,7 +97,7 @@ def main() -> None:
     cycles = None
     if "--probe" in sys.argv:
         cycles = int(sys.argv[sys.argv.index("--probe") + 1])
-    sink = OddsSink("odds")
+    sink = rec.Sink("odds", out=ODDS_DIR)
     n = 0
     while cycles is None or n < cycles:
         t0 = time.time()
