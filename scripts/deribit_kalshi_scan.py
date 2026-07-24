@@ -161,6 +161,16 @@ SERIES_CUR = {"KXBTC": "BTC", "KXBTCD": "BTC", "KXETH": "ETH", "KXETHD": "ETH"}
 def main(sink=None) -> None:
     surfaces = last_surfaces()
     now = datetime.now(timezone.utc)
+    # a stale surface must not price anything: an hours-old smile is
+    # indistinguishable from a fresh one downstream unless tagged/dropped
+    ages = {}
+    for cur in list(surfaces):
+        age = now.timestamp() - surfaces[cur]["t_local"] / 1e6
+        ages[cur] = round(age, 1)
+        if age > 900:
+            print(f"{cur} surface stale ({age/60:.1f}min) -> dropped",
+                  flush=True)
+            del surfaces[cur]
     spots = {}
     for cur, der in surfaces.items():
         anchor = brti_spot(cur)
@@ -256,7 +266,9 @@ def main(sink=None) -> None:
         n_sig_total += n_sig
         if sink is not None:
             sink.write("devscan", {"settle": str(target), "cur": lcur,
-                                   "spot": spot, "rows": out})
+                                   "spot": spot,
+                                   "surface_age_s": ages.get(lcur),
+                                   "rows": out})
         else:
             print(f"\n== settle {target} {lcur} (tau {tau_t*365*24:.1f}h, deribit "
                   f"exp {exp0.strftime('%d%b %H:%M')}): {len(df)} strikes, "
