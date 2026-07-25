@@ -2352,7 +2352,6 @@ def main() -> None:
     parser.add_argument("--identity-registry")
     parser.add_argument("--jump-approvals")
     parser.add_argument("--price-defect-approvals")
-    parser.add_argument("--price-defect-approvals")
     parser.add_argument("--output")
     parser.add_argument("--start", default="2011-04-06")
     parser.add_argument("--end")

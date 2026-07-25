@@ -370,6 +370,21 @@ def test_stale_pregenerated_export_is_refused():
         NasdaqBulkClient("secret", json_getter=fresh_at(stale)).wait_for_export(part)
 
 
+def test_both_command_line_parsers_build():
+    """A duplicated add_argument only explodes when main() runs, and nothing
+    else in this suite ever calls it — a full green run shipped a QA binary
+    that could not start."""
+    import subprocess
+    import sys
+
+    for module in ("alpha_graph.data.sharadar", "alpha_graph.data.sharadar_qa"):
+        done = subprocess.run(
+            [sys.executable, "-m", module, "--help"],
+            capture_output=True, text=True,
+        )
+        assert done.returncode == 0, f"{module} --help failed: {done.stderr[-400:]}"
+
+
 def test_plan_enforces_initial_per_table_limit():
     tickers = [f"T{i:04d}" for i in range(101)]
     with pytest.raises(ValueError, match="exceeds the initial"):
