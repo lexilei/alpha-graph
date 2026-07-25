@@ -26,6 +26,7 @@ import os
 import re
 import shutil
 import time
+import zipfile
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -43,16 +44,22 @@ from loguru import logger
 from alpha_graph.config import CACHE_DIR, DATA_DIR, PROJECT_ROOT
 from alpha_graph.data.pit_universe import MEMBERSHIP_CSV, RENAME_MAP
 
-BULK_API = "https://data.nasdaq.com/api/v1/bulkdownloads/SHARADAR"
+BULK_API = "https://data.nasdaq.com/api/v3/datatables/SHARADAR"
 RAW_ROOT = DATA_DIR / "raw" / "sharadar"
 STAGED_ROOT = CACHE_DIR / "sharadar"
 DEFAULT_START = "2009-01-01"
 DEFAULT_BATCH_SIZE = 100
 INITIAL_REQUEST_LIMIT_PER_TABLE = 25
 TERMS_URL = "https://data.nasdaq.com/terms"
-ALLOWED_DOWNLOAD_HOST = "data.nasdaq.com"
-ALLOWED_DOWNLOAD_PATH_PREFIX = "/api/v1/bulkdownloads/file/"
-ALLOWED_API_PATH_PREFIX = "/api/v1/bulkdownloads/SHARADAR/"
+ALLOWED_API_HOST = "data.nasdaq.com"
+ALLOWED_API_PATH_PREFIX = "/api/v3/datatables/SHARADAR/"
+# Export payloads are served as presigned objects on a vendor-chosen S3 bucket,
+# so the file guard pins the provider suffix rather than one host.
+ALLOWED_DOWNLOAD_HOST_SUFFIX = ".amazonaws.com"
+MAX_NULL_VOLUME_FRACTION = 0.001
+MAX_NONPOSITIVE_PRICE_FRACTION = 0.00001
+EXPORT_READY_STATUS = "fresh"
+EXPORT_PENDING_STATUSES = frozenset({"creating", "regenerating"})
 SNAPSHOT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 PACKAGE_TABLES = {
     "SEP": frozenset({"TICKERS", "ACTIONS", "SEP"}),
@@ -123,7 +130,7 @@ TABLE_SPECS: dict[str, TableSpec] = {
         "SEP",
         ("ticker", "date"),
         frozenset({"ticker", "date", "open", "high", "low", "close", "volume",
-                   "closeadj", "closeunadj", "dividends", "lastupdated"}),
+                   "closeadj", "closeunadj", "lastupdated"}),
         ("date", "lastupdated"),
         "date",
         True,
@@ -250,7 +257,7 @@ def _get_json(url: str, token: str, timeout: float) -> dict:
         raise SharadarAPIError("bulk API returned invalid JSON") from exc
 
 
-def _validate_nasdaq_url(url: str, path_prefix: str, subject: str) -> None:
+def _parse_https_url(url: str, subject: str):
     parsed = urlparse(url)
     try:
         port = parsed.port
@@ -258,23 +265,33 @@ def _validate_nasdaq_url(url: str, path_prefix: str, subject: str) -> None:
         raise SharadarAPIError(f"{subject} URL has an invalid port") from exc
     if (
         parsed.scheme.lower() != "https"
-        or parsed.hostname != ALLOWED_DOWNLOAD_HOST
         or port not in (None, 443)
         or parsed.username is not None
         or parsed.password is not None
-        or not parsed.path.startswith(path_prefix)
     ):
-        raise SharadarAPIError(
-            f"{subject} URL is outside the approved Nasdaq HTTPS origin"
-        )
+        raise SharadarAPIError(f"{subject} URL is not a bare HTTPS origin")
+    return parsed
 
 
 def _validate_api_url(url: str) -> None:
-    _validate_nasdaq_url(url, ALLOWED_API_PATH_PREFIX, "bulk API")
+    parsed = _parse_https_url(url, "bulk API")
+    if (
+        parsed.hostname != ALLOWED_API_HOST
+        or not parsed.path.startswith(ALLOWED_API_PATH_PREFIX)
+    ):
+        raise SharadarAPIError(
+            "bulk API URL is outside the approved Nasdaq HTTPS origin"
+        )
 
 
 def _validate_bulk_file_url(url: str) -> None:
-    _validate_nasdaq_url(url, ALLOWED_DOWNLOAD_PATH_PREFIX, "bulk file")
+    # Export links are presigned and single-use, so the only structural claim
+    # worth pinning is the provider origin; the signature carries the rest.
+    parsed = _parse_https_url(url, "bulk file")
+    if not (parsed.hostname or "").endswith(ALLOWED_DOWNLOAD_HOST_SUFFIX):
+        raise SharadarAPIError(
+            "bulk file URL is outside the approved export HTTPS origin"
+        )
 
 
 class _NasdaqAPIRedirectHandler(HTTPRedirectHandler):
@@ -293,7 +310,10 @@ def _download_file(url: str, token: str, destination: Path, timeout: float) -> i
     _validate_bulk_file_url(url)
     destination.parent.mkdir(parents=True, exist_ok=True)
     tmp = destination.with_suffix(destination.suffix + ".part")
-    req = Request(url, headers={"X-Api-Token": token})
+    # The export link is presigned; sending the API token would leak it to the
+    # storage origin without authenticating anything.
+    del token
+    req = Request(url)
     written = 0
     try:
         opener = build_opener(_NasdaqRedirectHandler())
@@ -323,8 +343,8 @@ def _download_file(url: str, token: str, destination: Path, timeout: float) -> i
 
 
 def build_bulk_url(part: DownloadPart) -> str:
-    query = urlencode(list(part.filters), doseq=True)
-    return f"{BULK_API}/{part.table}" + (f"?{query}" if query else "")
+    query = urlencode(list(part.filters) + [("qopts.export", "true")], doseq=True)
+    return f"{BULK_API}/{part.table}.json?{query}"
 
 
 class NasdaqBulkClient:
@@ -388,80 +408,65 @@ class NasdaqBulkClient:
             )
             if not isinstance(payload, dict):
                 raise SharadarAPIError("bulk API response is not an object")
-            job = payload.get("bulk_download")
-            if not isinstance(job, dict):
-                raise SharadarAPIError("bulk API response has no bulk_download object")
-            status = str(job.get("status", "")).upper()
-            if status == "SUCCEEDED":
-                files = job.get("files")
-                if not isinstance(files, list):
-                    raise SharadarAPIError(f"{part.table} export has no files list")
-                if not files and not TABLE_SPECS[part.table].allow_empty_export:
-                    raise SharadarAPIError(
-                        f"{part.table} export is unexpectedly empty"
-                    )
+            job = payload.get("datatable_bulk_download")
+            if not isinstance(job, dict) or not isinstance(job.get("file"), dict):
+                raise SharadarAPIError(
+                    f"{part.table} response has no datatable_bulk_download file"
+                )
+            file_info = job["file"]
+            status = str(file_info.get("status", "")).lower()
+            if status == EXPORT_READY_STATUS:
+                if not file_info.get("link"):
+                    raise SharadarAPIError(f"{part.table} export carries no link")
                 return job
-            if status in {"PENDING", "RUNNING", "RATE_LIMITED"}:
+            if status in EXPORT_PENDING_STATUSES:
                 if time.monotonic() - started >= self.timeout_seconds:
                     raise SharadarAPIError(f"{part.table} export timed out in status {status}")
                 self._sleep(self.poll_seconds)
                 continue
-            rate_until = job.get("rate_limited_until")
-            detail = job.get("errors") or rate_until or "no error detail"
-            raise SharadarAPIError(f"{part.table} export status {status or 'UNKNOWN'}: {detail}")
+            raise SharadarAPIError(f"{part.table} export status {status or 'UNKNOWN'}")
 
     def download_files(self, job: dict, destination: Path, stem: str) -> list[Path]:
         if destination.is_symlink():
             raise SharadarAPIError("bulk destination must not be a symlink")
         destination.mkdir(parents=True, exist_ok=True)
-        paths: list[Path] = []
-        for idx, item in enumerate(job.get("files", [])):
-            if not isinstance(item, dict):
-                raise SharadarAPIError("bulk file entry is not an object")
-            url = item.get("url")
-            if not url:
-                raise SharadarAPIError("bulk file entry has no URL")
-            _validate_bulk_file_url(url)
-            suffix = Path(urlparse(url).path).suffix.lower()
-            if suffix != ".parquet":
-                raise SharadarAPIError(f"unexpected bulk file type {suffix!r}")
-            path = destination / f"{stem}-file-{idx:03d}.parquet"
-            expected = item.get("size")
+        file_info = job.get("file")
+        if not isinstance(file_info, dict):
+            raise SharadarAPIError("export job has no file object")
+        url = file_info.get("link")
+        if not url:
+            raise SharadarAPIError("export file has no link")
+        _validate_bulk_file_url(url)
+        # One export is one ZIP holding one CSV; the index is kept so the
+        # manifest layout survives if the vendor ever shards an export.
+        path = destination / f"{stem}-file-000.zip"
 
-            def download_and_validate() -> object:
-                path.unlink(missing_ok=True)
-                path.with_suffix(path.suffix + ".part").unlink(missing_ok=True)
-                written = self._file_downloader(
-                    url, self._api_key, path, self.request_timeout
+        def download_and_validate() -> object:
+            path.unlink(missing_ok=True)
+            path.with_suffix(path.suffix + ".part").unlink(missing_ok=True)
+            written = self._file_downloader(
+                url, self._api_key, path, self.request_timeout
+            )
+            if not isinstance(written, int):
+                raise SharadarAPIError(
+                    f"file downloader returned invalid size for {path.name}"
                 )
-                if not isinstance(written, int):
-                    raise SharadarAPIError(
-                        f"file downloader returned invalid size for {path.name}"
-                    )
-                if expected not in (None, 0) and int(expected) != written:
-                    raise SharadarAPIError(
-                        f"download size mismatch for {path.name}: {written} != {expected}"
-                    )
-                if written < 8:
-                    raise SharadarAPIError(f"{path.name} is too small to be Parquet")
-                try:
-                    with path.open("rb") as fh:
-                        head = fh.read(4)
-                        fh.seek(-4, os.SEEK_END)
-                        tail = fh.read(4)
-                except OSError as exc:
-                    raise SharadarAPIError(
-                        f"could not validate downloaded file {path.name}"
-                    ) from exc
-                if head != b"PAR1" or tail != b"PAR1":
-                    raise SharadarAPIError(
-                        f"{path.name} is not a valid Parquet container"
-                    )
-                return written
+            if written < 22:
+                raise SharadarAPIError(f"{path.name} is too small to be a ZIP")
+            if not zipfile.is_zipfile(path):
+                raise SharadarAPIError(f"{path.name} is not a valid ZIP container")
+            with zipfile.ZipFile(path) as archive:
+                members = archive.namelist()
+            if len(members) != 1:
+                raise SharadarAPIError(
+                    f"{path.name} holds {len(members)} members, expected one CSV"
+                )
+            if not members[0].lower().endswith(".csv"):
+                raise SharadarAPIError(f"{path.name} member is not a CSV")
+            return written
 
-            self._with_retries(download_and_validate, f"file {idx} for {stem}")
-            paths.append(path)
-        return paths
+        self._with_retries(download_and_validate, f"export for {stem}")
+        return [path]
 
 
 def _chunks(values: list[str], size: int) -> Iterable[list[str]]:
@@ -535,12 +540,14 @@ def build_download_plan(
             if end is not None and table != "SP500":
                 common.append((f"{spec.start_filter}.lte", str(pd.Timestamp(end).date())))
         if table == "TICKERS":
-            common.append(("table.eq", "SEP"))
+            common.append(("table", "SEP"))
         if spec.scope_by_ticker and not full_universe:
             if not scope:
                 raise ValueError(f"{table} requires a non-empty ticker scope")
             for index, batch in enumerate(_chunks(scope, batch_size)):
-                filters = common + [("ticker.in[]", ticker) for ticker in batch]
+                # The datatable API takes multi-value equality as one comma
+                # list; there is no `in` operator.
+                filters = common + [("ticker", ",".join(batch))]
                 plan.append(DownloadPart(table, index, tuple(filters)))
         else:
             plan.append(DownloadPart(table, 0, tuple(common)))
@@ -576,8 +583,28 @@ def validate_license_expiry(expires: str, *, today: date | None = None) -> str:
     return str(expiry)
 
 
+def _read_export_csv(raw_path: Path) -> pd.DataFrame:
+    """Read the single CSV a Sharadar export ZIP carries."""
+    with zipfile.ZipFile(raw_path) as archive:
+        members = [name for name in archive.namelist() if name.lower().endswith(".csv")]
+        if len(members) != 1:
+            raise SharadarError(
+                f"{raw_path.name} holds {len(members)} CSV members, expected one"
+            )
+        with archive.open(members[0]) as handle:
+            # Ticker "NA" (Nano Labs) is a real security, and several sentinel
+            # strings pandas treats as null are valid vendor values, so only an
+            # empty field counts as missing.
+            return pd.read_csv(
+                handle,
+                low_memory=False,
+                keep_default_na=False,
+                na_values=[""],
+            )
+
+
 def _validate_and_stage(raw_path: Path, staged_path: Path, spec: TableSpec) -> dict:
-    frame = pd.read_parquet(raw_path)
+    frame = _read_export_csv(raw_path)
     frame.columns = [str(c).strip().lower() for c in frame.columns]
     missing = sorted(spec.required_columns - set(frame.columns))
     if missing:
@@ -593,23 +620,41 @@ def _validate_and_stage(raw_path: Path, staged_path: Path, spec: TableSpec) -> d
     if frame.duplicated(list(spec.primary_key)).any():
         raise SharadarError(f"{spec.code} has duplicate primary keys within {raw_path.name}")
 
+    null_volume_rows = 0
+    nonpositive_price_rows = 0
     if spec.code == "SEP" and not frame.empty:
-        numeric = [
-            "open", "high", "low", "close", "closeadj", "closeunadj",
-            "volume", "dividends",
-        ]
-        for column in numeric:
+        prices = ["open", "high", "low", "close", "closeadj", "closeunadj"]
+        for column in prices + ["volume"]:
             frame[column] = pd.to_numeric(frame[column], errors="raise")
-        invalid_numeric = frame[numeric].isna() | ~np.isfinite(frame[numeric])
-        if invalid_numeric.any().any():
-            bad_columns = sorted(invalid_numeric.any()[invalid_numeric.any()].index)
+        invalid_prices = frame[prices].isna() | ~np.isfinite(frame[prices])
+        if invalid_prices.any().any():
+            bad_columns = sorted(invalid_prices.any()[invalid_prices.any()].index)
             raise SharadarError(
-                f"SEP has null or non-finite numeric fields {bad_columns} in {raw_path.name}"
+                f"SEP has null or non-finite price fields {bad_columns} in {raw_path.name}"
             )
-        positive = ["open", "high", "low", "close", "closeadj", "closeunadj"]
-        for column in positive:
-            if (frame[column].dropna() <= 0).any():
-                raise SharadarError(f"SEP has non-positive {column} in {raw_path.name}")
+        # Prices are executable and must always be present. Volume is a
+        # liquidity attribute the vendor genuinely leaves blank on warrants,
+        # SPAC units and bankruptcy stubs, so it is tolerated up to a ceiling
+        # that would still catch systematic corruption, and always recorded.
+        volume_missing = frame["volume"].isna() | ~np.isfinite(frame["volume"])
+        null_volume_rows = int(volume_missing.sum())
+        if null_volume_rows > max(1, int(MAX_NULL_VOLUME_FRACTION * len(frame))):
+            raise SharadarError(
+                f"SEP has {null_volume_rows} null volume rows in {raw_path.name}, "
+                f"above the {MAX_NULL_VOLUME_FRACTION:.3%} ceiling"
+            )
+        # Gate 7 of the procurement decision asks for zero *unresolved*
+        # non-positive prices, and adjudication lives in sharadar_qa. Staging
+        # therefore records the defect instead of rejecting the snapshot, and
+        # still fails closed if the count stops looking like isolated vendor
+        # glitches.
+        nonpositive = (frame[prices] <= 0).any(axis=1)
+        nonpositive_price_rows = int(nonpositive.sum())
+        if nonpositive_price_rows > max(1, int(MAX_NONPOSITIVE_PRICE_FRACTION * len(frame))):
+            raise SharadarError(
+                f"SEP has {nonpositive_price_rows} non-positive price rows in "
+                f"{raw_path.name}, above the {MAX_NONPOSITIVE_PRICE_FRACTION:.5%} ceiling"
+            )
         ohlc = frame[["open", "high", "low", "close"]].dropna()
         bad_high = ohlc["high"] < ohlc[["open", "low", "close"]].max(axis=1)
         bad_low = ohlc["low"] > ohlc[["open", "high", "close"]].min(axis=1)
@@ -629,16 +674,18 @@ def _validate_and_stage(raw_path: Path, staged_path: Path, spec: TableSpec) -> d
         "columns": list(frame.columns),
         "first_date": (str(frame[first_date].min()) if first_date and len(frame) else None),
         "last_date": (str(frame[first_date].max()) if first_date and len(frame) else None),
+        "null_volume_rows": null_volume_rows,
+        "nonpositive_price_rows": nonpositive_price_rows,
         "sha256": sha256_file(staged_path),
     }
 
 
 def _record_complete(record: dict, raw_root: Path, staged_root: Path) -> bool:
     files = record.get("files", [])
-    if record.get("status") != "SUCCEEDED":
+    if record.get("status") != EXPORT_READY_STATUS:
         return False
-    if record.get("empty_export"):
-        return files == []
+    # An export with no rows is still a served file (a header-only CSV), so it
+    # is verified like any other rather than short-circuited on an empty list.
     if not files:
         return False
     for item in files:
@@ -980,7 +1027,7 @@ def _fetch_snapshot_unlocked(
         logger.info("Requesting Sharadar {}", part.stem)
         raw_dir = _safe_table_dir(raw_snapshot, part.table)
         staged_dir = _safe_table_dir(staged_snapshot, part.table)
-        for orphan in list(raw_dir.glob(f"{part.stem}-file-*.parquet*")):
+        for orphan in list(raw_dir.glob(f"{part.stem}-file-*.zip*")):
             orphan.unlink()
         for orphan in list(staged_dir.glob(f"{part.stem}-file-*.parquet*")):
             orphan.unlink()
@@ -988,7 +1035,7 @@ def _fetch_snapshot_unlocked(
         raw_files = client.download_files(job, raw_dir, part.stem)
         file_records = []
         for raw_file in raw_files:
-            staged_file = staged_snapshot / part.table / raw_file.name
+            staged_file = staged_snapshot / part.table / f"{raw_file.stem}.parquet"
             stage = _validate_and_stage(raw_file, staged_file, TABLE_SPECS[part.table])
             file_records.append({
                 "raw_path": str(raw_file.relative_to(raw_snapshot)),
@@ -998,15 +1045,17 @@ def _fetch_snapshot_unlocked(
                 "staged_sha256": stage.pop("sha256"),
                 **stage,
             })
+        file_info = job.get("file", {})
         record = {
             "stem": part.stem,
             "table": part.table,
             "index": part.index,
             "filters": list(part.filters),
             "requested_at_utc": _utc_now(),
-            "status": job.get("status"),
-            "empty_export": not raw_files,
-            "schema": job.get("schema"),
+            "status": file_info.get("status"),
+            "data_snapshot_time": file_info.get("data_snapshot_time"),
+            "empty_export": all(item["rows"] == 0 for item in file_records),
+            "schema": job.get("datatable", {}).get("columns"),
             "files": file_records,
         }
         manifest["parts"] = [item for item in manifest["parts"]

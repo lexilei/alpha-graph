@@ -6,7 +6,9 @@ import json
 import hashlib
 import fcntl
 import shutil
+import zipfile
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -62,7 +64,6 @@ def _sep_frame() -> pd.DataFrame:
         "volume": [1000, 1200],
         "closeadj": [9.8, 10.1],
         "closeunadj": [10.5, 10.8],
-        "dividends": [0.0, 0.0],
         "lastupdated": pd.to_datetime(["2020-01-04", "2020-01-04"]),
         "future_vendor_column": [1, 2],
     })
@@ -90,6 +91,25 @@ def _actions_frame() -> pd.DataFrame:
     })
 
 
+EXPORT_LINK = (
+    "https://vendor-export.s3.amazonaws.com/export/SHARADAR_SEP.zip"
+    "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=deadbeef"
+)
+
+
+def _export_job(link: str = EXPORT_LINK, status: str = "fresh") -> dict:
+    """The shape the v3 datatable export endpoint actually returns."""
+    return {"datatable_bulk_download": {"file": {"link": link, "status": status}}}
+
+
+def _write_export_zip(frame: pd.DataFrame, destination: Path) -> int:
+    """Write the ZIP-wrapped CSV the vendor serves for an export."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(f"{destination.stem}.csv", frame.to_csv(index=False))
+    return destination.stat().st_size
+
+
 def _write_complete_snapshot(raw_snapshot, staged_snapshot, tables):
     raw_snapshot.mkdir(parents=True, exist_ok=True)
     planned = []
@@ -103,11 +123,11 @@ def _write_complete_snapshot(raw_snapshot, staged_snapshot, tables):
             "filters": [],
             "digest": part.digest,
         })
-        raw_path = raw_snapshot / table / f"{part.stem}-file-000.parquet"
-        staged_path = staged_snapshot / table / raw_path.name
+        raw_path = raw_snapshot / table / f"{part.stem}-file-000.zip"
+        staged_path = staged_snapshot / table / f"{part.stem}-file-000.parquet"
         raw_path.parent.mkdir(parents=True, exist_ok=True)
         staged_path.parent.mkdir(parents=True, exist_ok=True)
-        frame.to_parquet(raw_path, index=False)
+        _write_export_zip(frame, raw_path)
         frame.to_parquet(staged_path, index=False)
         records.append({
             "stem": part.stem,
@@ -115,7 +135,7 @@ def _write_complete_snapshot(raw_snapshot, staged_snapshot, tables):
             "index": 0,
             "filters": [],
             "requested_at_utc": "2020-01-01T00:00:00+00:00",
-            "status": "SUCCEEDED",
+            "status": "fresh",
             "empty_export": False,
             "schema": {"fixture": 1},
             "files": [{
@@ -174,7 +194,9 @@ def test_plan_is_deterministic_scoped_and_secret_free():
     assert [p.table for p in plan].count("TICKERS") == 1
     assert [p.table for p in plan].count("SP500") == 1
     sep = next(p for p in plan if p.table == "SEP")
-    assert sum(key == "ticker.in[]" for key, _ in sep.filters) == 40
+    ticker_filters = [value for key, value in sep.filters if key == "ticker"]
+    assert len(ticker_filters) == 1
+    assert len(ticker_filters[0].split(",")) == 40
     assert "api_key" not in build_bulk_url(sep).lower()
     summary = plan_summary(plan)
     assert summary["requests_by_table"] == {"SEP": 3, "SP500": 1, "TICKERS": 1}
@@ -190,7 +212,7 @@ def test_full_universe_plan_drops_ticker_scope_and_rejects_a_mixed_scope():
     assert [p.table for p in plan].count("SEP") == 1
     assert [p.table for p in plan].count("ACTIONS") == 1
     for part in plan:
-        assert all(key != "ticker.in[]" for key, _ in part.filters)
+        assert all(key != "ticker" for key, _ in part.filters)
     sep = next(p for p in plan if p.table == "SEP")
     assert sep.filters == (("date.gte", "2011-01-01"),)
     scoped = build_download_plan(["SEP"], tickers=["AAA"], start="2011-01-01")
@@ -200,6 +222,29 @@ def test_full_universe_plan_drops_ticker_scope_and_rejects_a_mixed_scope():
         build_download_plan(["SEP"], tickers=["AAA"], full_universe=True)
     with pytest.raises(ValueError, match="non-empty ticker scope"):
         build_download_plan(["SEP"])
+
+
+def test_bulk_url_matches_the_served_datatable_export_contract():
+    """Pin the transport shape verified against a live SFA key on 2026-07-25.
+
+    Every earlier test in this module drives injected fakes, so none of them
+    could see that the module was calling a v1 endpoint that answers 401 with
+    operators the API rejects. This one asserts the URL itself.
+    """
+    url = build_bulk_url(DownloadPart("SEP", 0, (("date.gte", "2009-01-01"),)))
+    assert url.startswith("https://data.nasdaq.com/api/v3/datatables/SHARADAR/SEP.json?")
+    assert "qopts.export=true" in url
+    assert "date.gte=2009-01-01" in url
+
+    tickers = build_bulk_url(DownloadPart("SEP", 0, (("ticker", "AAPL,MSFT"),)))
+    assert "ticker=AAPL%2CMSFT" in tickers
+    # The served API supports only lt/lte/gt/gte as operator suffixes; equality
+    # and multi-value are bare parameters.
+    for rejected in (".eq=", ".in%5B%5D=", ".in[]="):
+        assert rejected not in tickers
+
+    plan = build_download_plan(["TICKERS"], full_universe=True)
+    assert ("table", "SEP") in plan[0].filters
 
 
 def test_plan_enforces_initial_per_table_limit():
@@ -230,18 +275,15 @@ def test_scope_tickers_preserves_class_syntax_variants(tmp_path):
 
 def test_bulk_client_polls_and_uses_header_token_only(tmp_path):
     calls = []
-    statuses = iter(["PENDING", "RUNNING", "SUCCEEDED"])
+    statuses = iter(["creating", "regenerating", "fresh"])
 
     def get_json(url, token, timeout):
         calls.append(("json", url, token, timeout))
-        status = next(statuses)
-        files = [{"url": "https://data.nasdaq.com/api/v1/bulkdownloads/file/x.parquet",
-                  "size": 0}] if status == "SUCCEEDED" else []
-        return {"bulk_download": {"status": status, "files": files}}
+        return _export_job(status=next(statuses))
 
     def download(url, token, destination, timeout):
         calls.append(("file", url, token, timeout))
-        _sep_frame().to_parquet(destination, index=False)
+        _write_export_zip(_sep_frame(), destination)
         return destination.stat().st_size
 
     client = NasdaqBulkClient(
@@ -261,10 +303,17 @@ def test_bulk_client_polls_and_uses_header_token_only(tmp_path):
 
 def test_bulk_client_terminal_failure():
     def failed(url, token, timeout):
-        return {"bulk_download": {"status": "FAILED", "files": [], "errors": "bad filter"}}
+        return _export_job(status="deleted")
 
     client = NasdaqBulkClient("secret", json_getter=failed)
-    with pytest.raises(SharadarAPIError, match="bad filter"):
+    with pytest.raises(SharadarAPIError, match="export status deleted"):
+        client.wait_for_export(DownloadPart("SEP", 0, ()))
+
+    def linkless(url, token, timeout):
+        return {"datatable_bulk_download": {"file": {"status": "fresh"}}}
+
+    client = NasdaqBulkClient("secret", json_getter=linkless)
+    with pytest.raises(SharadarAPIError, match="carries no link"):
         client.wait_for_export(DownloadPart("SEP", 0, ()))
 
 
@@ -277,9 +326,15 @@ def test_bulk_client_rejects_untrusted_file_url(tmp_path):
         return 0
 
     client = NasdaqBulkClient("secret", file_downloader=download)
-    with pytest.raises(SharadarAPIError, match="approved Nasdaq HTTPS origin"):
+    with pytest.raises(SharadarAPIError, match="not a bare HTTPS origin"):
         client.download_files(
-            {"files": [{"url": "http://attacker.invalid/x.parquet"}]},
+            _export_job("http://attacker.invalid/x.zip")["datatable_bulk_download"],
+            tmp_path,
+            "unsafe",
+        )
+    with pytest.raises(SharadarAPIError, match="approved export HTTPS origin"):
+        client.download_files(
+            _export_job("https://attacker.invalid/x.zip")["datatable_bulk_download"],
             tmp_path,
             "unsafe",
         )
@@ -295,11 +350,9 @@ def test_api_redirect_and_required_empty_exports_fail_closed():
 
     client = NasdaqBulkClient(
         "secret",
-        json_getter=lambda url, token, timeout: {
-            "bulk_download": {"status": "SUCCEEDED", "files": []}
-        },
+        json_getter=lambda url, token, timeout: {"datatable_bulk_download": {}},
     )
-    with pytest.raises(SharadarAPIError, match="unexpectedly empty"):
+    with pytest.raises(SharadarAPIError, match="no datatable_bulk_download file"):
         client.wait_for_export(DownloadPart("SEP", 0, ()))
 
 
@@ -310,9 +363,9 @@ def test_download_retries_integrity_validation(tmp_path):
         nonlocal calls
         calls += 1
         if calls == 1:
-            destination.write_bytes(b"not-parquet")
+            destination.write_bytes(b"not-a-zip-container")
         else:
-            _sep_frame().to_parquet(destination, index=False)
+            _write_export_zip(_sep_frame(), destination)
         return destination.stat().st_size
 
     client = NasdaqBulkClient(
@@ -322,37 +375,36 @@ def test_download_retries_integrity_validation(tmp_path):
         retry_base_seconds=0,
         sleep=lambda _: None,
     )
-    paths = client.download_files({"files": [{
-        "url": "https://data.nasdaq.com/api/v1/bulkdownloads/file/x.parquet",
-        "size": 0,
-    }]}, tmp_path, "retry")
+    paths = client.download_files(
+        _export_job()["datatable_bulk_download"], tmp_path, "retry"
+    )
     assert calls == 2
     assert len(paths) == 1
 
 
 def test_stage_preserves_price_bases_and_allows_extra_columns(tmp_path):
-    raw = tmp_path / "raw.parquet"
+    raw = tmp_path / "raw.zip"
     staged = tmp_path / "staged.parquet"
-    _sep_frame().to_parquet(raw, index=False)
+    _write_export_zip(_sep_frame(), raw)
     result = _validate_and_stage(raw, staged, TABLE_SPECS["SEP"])
     out = pd.read_parquet(staged)
     assert result["rows"] == 2
     assert {"close", "closeadj", "closeunadj", "future_vendor_column"} <= set(out.columns)
 
     duplicate = pd.concat([_sep_frame(), _sep_frame().iloc[[0]]], ignore_index=True)
-    duplicate.to_parquet(raw, index=False)
+    _write_export_zip(duplicate, raw)
     with pytest.raises(SharadarError, match="duplicate primary keys"):
         _validate_and_stage(raw, staged, TABLE_SPECS["SEP"])
 
-    _sep_frame().drop(columns="dividends").to_parquet(raw, index=False)
-    with pytest.raises(SharadarError, match="dividends"):
+    _write_export_zip(_sep_frame().drop(columns="closeunadj"), raw)
+    with pytest.raises(SharadarError, match="closeunadj"):
         _validate_and_stage(raw, staged, TABLE_SPECS["SEP"])
 
 
 def test_actions_allows_null_counterparty_fields(tmp_path):
-    raw = tmp_path / "actions.parquet"
+    raw = tmp_path / "actions.zip"
     staged = tmp_path / "staged.parquet"
-    _actions_frame().to_parquet(raw, index=False)
+    _write_export_zip(_actions_frame(), raw)
     result = _validate_and_stage(raw, staged, TABLE_SPECS["ACTIONS"])
     assert result["rows"] == 1
 
@@ -360,21 +412,16 @@ def test_actions_allows_null_counterparty_fields(tmp_path):
 def test_fetch_snapshot_is_resumable_and_manifest_has_no_secret(tmp_path):
     raw_root = tmp_path / "raw"
     staged_root = tmp_path / "staged"
-    part = DownloadPart("SEP", 0, (("ticker.in[]", "AAA"),))
+    part = DownloadPart("SEP", 0, (("ticker", "AAA"),))
     calls = {"jobs": 0, "files": 0}
 
     def get_json(url, token, timeout):
         calls["jobs"] += 1
-        return {"bulk_download": {
-            "status": "SUCCEEDED",
-            "files": [{"url": "https://data.nasdaq.com/api/v1/bulkdownloads/file/x.parquet",
-                       "size": 0}],
-            "schema": {"version": 1},
-        }}
+        return _export_job()
 
     def download(url, token, destination, timeout):
         calls["files"] += 1
-        _sep_frame().to_parquet(destination, index=False)
+        _write_export_zip(_sep_frame(), destination)
         return destination.stat().st_size
 
     client = NasdaqBulkClient("never-store-me", json_getter=get_json, file_downloader=download)
@@ -401,7 +448,7 @@ def test_fetch_snapshot_is_resumable_and_manifest_has_no_secret(tmp_path):
     )
     assert calls == {"jobs": 1, "files": 1}
 
-    extension = DownloadPart("SEP", 1, (("ticker.in[]", "BBB"),))
+    extension = DownloadPart("SEP", 1, (("ticker", "BBB"),))
     with pytest.raises(SharadarError, match="plan is immutable"):
         fetch_snapshot(
             client,
@@ -419,23 +466,17 @@ def test_fetch_snapshot_is_resumable_and_manifest_has_no_secret(tmp_path):
 
 
 def test_interrupted_snapshot_plan_cannot_be_replaced(tmp_path):
-    first = DownloadPart("SEP", 0, (("ticker.in[]", "AAA"),))
-    second = DownloadPart("SEP", 1, (("ticker.in[]", "BBB"),))
-    replacement = DownloadPart("SEP", 1, (("ticker.in[]", "CCC"),))
+    first = DownloadPart("SEP", 0, (("ticker", "AAA"),))
+    second = DownloadPart("SEP", 1, (("ticker", "BBB"),))
+    replacement = DownloadPart("SEP", 1, (("ticker", "CCC"),))
 
     def get_json(url, token, timeout):
         if "BBB" in url:
             raise SharadarAPIError("terminal fixture", status_code=400)
-        return {"bulk_download": {
-            "status": "SUCCEEDED",
-            "files": [{
-                "url": "https://data.nasdaq.com/api/v1/bulkdownloads/file/x.parquet",
-                "size": 0,
-            }],
-        }}
+        return _export_job()
 
     def download(url, token, destination, timeout):
-        _sep_frame().to_parquet(destination, index=False)
+        _write_export_zip(_sep_frame(), destination)
         return destination.stat().st_size
 
     client = NasdaqBulkClient("secret", json_getter=get_json, file_downloader=download)
@@ -458,11 +499,14 @@ def test_interrupted_snapshot_plan_cannot_be_replaced(tmp_path):
 
 
 def test_empty_export_completes_and_tampering_fails_closed(tmp_path):
+    def download_header_only(url, token, destination, timeout):
+        _write_export_zip(_actions_frame().iloc[0:0], destination)
+        return destination.stat().st_size
+
     client = NasdaqBulkClient(
         "secret",
-        json_getter=lambda url, token, timeout: {
-            "bulk_download": {"status": "SUCCEEDED", "files": []}
-        },
+        json_getter=lambda url, token, timeout: _export_job(),
+        file_downloader=download_header_only,
     )
     manifest_path = fetch_snapshot(
         client,
@@ -485,7 +529,7 @@ def test_empty_export_completes_and_tampering_fails_closed(tmp_path):
         tmp_path / "staged" / "tampered",
         {"SEP": _sep_frame()},
     )
-    raw_file = next((tmp_path / "raw" / "tampered").rglob("*.parquet"))
+    raw_file = next((tmp_path / "raw" / "tampered").rglob("*.zip"))
     raw_file.write_bytes(raw_file.read_bytes() + b"tamper")
     with pytest.raises(SharadarError, match="checksum verification failed"):
         verify_snapshot_manifest(
@@ -555,11 +599,14 @@ def test_snapshot_symlinks_and_concurrent_lock_fail_closed(tmp_path):
             fetch_snapshot(
                 client, [DownloadPart("SEP", 0, ())], snapshot="locked", **kwargs
             )
+    def download_header_only(url, token, destination, timeout):
+        _write_export_zip(_actions_frame().iloc[0:0], destination)
+        return destination.stat().st_size
+
     empty_client = NasdaqBulkClient(
         "secret",
-        json_getter=lambda url, token, timeout: {
-            "bulk_download": {"status": "SUCCEEDED", "files": []}
-        },
+        json_getter=lambda url, token, timeout: _export_job(),
+        file_downloader=download_header_only,
     )
     manifest = fetch_snapshot(
         empty_client,
@@ -684,23 +731,17 @@ def test_purge_completes_from_journal_when_raw_is_gone(tmp_path):
 
 
 def test_license_json_recreated_on_in_progress_resume(tmp_path):
-    first = DownloadPart("SEP", 0, (("ticker.in[]", "AAA"),))
-    second = DownloadPart("SEP", 1, (("ticker.in[]", "BBB"),))
+    first = DownloadPart("SEP", 0, (("ticker", "AAA"),))
+    second = DownloadPart("SEP", 1, (("ticker", "BBB"),))
     fail_second = {"flag": True}
 
     def get_json(url, token, timeout):
         if "BBB" in url and fail_second["flag"]:
             raise SharadarAPIError("terminal fixture", status_code=400)
-        return {"bulk_download": {
-            "status": "SUCCEEDED",
-            "files": [{
-                "url": "https://data.nasdaq.com/api/v1/bulkdownloads/file/x.parquet",
-                "size": 0,
-            }],
-        }}
+        return _export_job()
 
     def download(url, token, destination, timeout):
-        _sep_frame().to_parquet(destination, index=False)
+        _write_export_zip(_sep_frame(), destination)
         return destination.stat().st_size
 
     client = NasdaqBulkClient("secret", json_getter=get_json, file_downloader=download)
