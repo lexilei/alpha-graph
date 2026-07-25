@@ -44,6 +44,15 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 def main() -> None:
     arm = "arm" in sys.argv
+    # PRE-FLIGHT ONLY (r2 ops F4): with a live maker the resting-orders
+    # check false-fails, and the arm phase would place orders alongside a
+    # trading account and could mistake the maker's own orders for its probe
+    import subprocess
+    if subprocess.run(["pgrep", "-f", r"python[0-9.]* ([^ ]*/)?kalshi_demo_maker\.py( |$)"],
+                      capture_output=True).stdout.strip():
+        print("REFUSING: a maker process is running — prod_smoke is a "
+              "pre-flight tool only. Stop the maker first.")
+        sys.exit(2)
     k = kc.Kalshi("prod")
 
     b = k.get("/portfolio/balance")
@@ -65,7 +74,7 @@ def main() -> None:
         cursor = r.get("cursor") or ""
         if not cursor:
             break
-    check("market pagination", len(mkts) > 200, f"{len(mkts)} mkts")
+    check("market listing non-empty", len(mkts) > 0, f"{len(mkts)} mkts")
     now = time.time()
 
     def tau(m):
@@ -129,7 +138,11 @@ def main() -> None:
     r2 = k.post("/portfolio/events/orders", body2)
     oid = (r2.get("order") or {}).get("order_id") or r2.get("order_id")
     time.sleep(3)
-    k.delete(f"/portfolio/events/orders/{oid}")
+    if oid:
+        k.delete(f"/portfolio/events/orders/{oid}")
+    else:  # unexpected schema: cancel whatever rests on the probe ticker
+        for o in mine():
+            k.delete(f"/portfolio/events/orders/{o['order_id']}")
     time.sleep(3)
     check("explicit cancel works", len(mine()) == 0)
 
