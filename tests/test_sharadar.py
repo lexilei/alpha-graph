@@ -276,15 +276,25 @@ def test_required_tables_still_fail_closed_when_an_export_has_no_rows(tmp_path):
     assert _validate_and_stage(raw, staged, TABLE_SPECS["ACTIONS"])["rows"] == 0
 
 
-def test_digit_codes_keep_their_leading_zeros(tmp_path):
-    """CSV has no dtypes: SIC 0100 must not be inferred into the number 100."""
+def test_digit_identifiers_stay_text(tmp_path):
+    """CSV carries no dtypes, so a column of digit codes gets inferred numeric.
+
+    Two distinct harms, both real in the vendor file: `siccode` came through as
+    float64, so an identifier read as 6552.0 and would not join a SIC reference
+    table; and 2,568 of 21,905 `cusips` values begin with "0", which numeric
+    inference would truncate outright. `cusips` escaped only because 59% of the
+    column contains letters — a narrower export would not be so lucky.
+    """
     raw = tmp_path / "tickers.zip"
     staged = tmp_path / "staged.parquet"
     frame = _ticker_frame()
-    frame["siccode"] = ["0100", "6552", "0742"]
+    frame["siccode"] = ["100", "6552", "742"]
+    frame["cusips"] = ["01234567 8", "037833100", "594918104"]
     _write_export_zip(frame, raw)
     _validate_and_stage(raw, staged, TABLE_SPECS["TICKERS"])
-    assert sorted(pd.read_parquet(staged)["siccode"]) == ["0100", "0742", "6552"]
+    out = pd.read_parquet(staged)
+    assert sorted(out["siccode"]) == ["100", "6552", "742"]
+    assert "01234567 8" in set(out["cusips"])
 
 
 def test_ticker_na_survives_csv_parsing():
