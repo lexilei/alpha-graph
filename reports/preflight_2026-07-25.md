@@ -23,16 +23,23 @@
   sink 热路径 ENOSPC 防护
 - smoke 脚本只读阶段已实测生产 8/8 通过
 
-## GO 序列(用户回 "go" 后,按序执行)
+## GO 序列(夜审 r2 运维镜头验证版:**先改文件,后杀进程**——
+## 否则 watchdog 的 300s 扫描会在间隙用旧文件复活 demo,切换静默失败)
 
-1. `.venv/bin/python scripts/prod_smoke.py arm` — 生产实弹冒烟(~2 美分):
-   1c 远虚值单 → t+45s 确认挂着 → t+140s 确认**自毁**(生产 dead-man 实证,
-   全部无人值守安全性的基石)→ 第二张单显式撤单成功。任何 FAIL → 停,不发车。
-2. 停 demo maker(watchdog token 冲突,两者互斥);确认 `ps` 无 maker 进程。
-3. `maker_env.txt` 写入 `prod`;确认无生产基线/旗标残留(命名空间下天然干净)。
-4. 启动 maker(watchdog 拉起或手动);**首个 maker_cycle 必须显示
-   baseline ≈ $49.5**。若显示 ~$960 → 立即停,环境隔离失败(панель 4 硬门)。
-5. 通报用户:发车确认 + 首周期读数。
+0. 状态核对:env=demo、恰好 1 个 maker 进程、watchdog 活着。
+1. 生产实弹冒烟——**已于 07-25 06:4x 提前通过**(dead-man t+140s 自毁 +
+   撤单实证,failures=0,~2 美分)。smoke 仅限发车前运行(prod maker 活着
+   时会误判+下真单,已加防呆)。
+2. **先改文件**(原子写):`printf prod > maker_env.txt.tmp && mv -f …`;
+   cat 确认恰为 `prod`。此刻起任何 maker 启动都是 prod;在跑的 demo 不受影响。
+3. 归档死文件:`mv data/logs/launchd/maker_baseline.txt{,.old}`(旧未隔离基线)。
+4. **后杀进程**:`kill -TERM <maker_pid>`;demo 挂单 120s 内自毁。
+5. **让 watchdog 单点复活**(≤300s,不手动补启;maker 现已加 flock 单例,
+   但首选 watchdog 路径)。
+6. 验证三连:`pgrep` 恰好 1 个 pid;启动行 `env=prod stop=$15`;
+   `makerprod_*.jsonl.gz` 新文件出现。**首个 maker_cycle baseline ≈ $49.5**
+   (~$960 = 隔离失败,立即停)。暖机 ~100s 不下单,是最后确认窗口。
+7. 通报用户:发车确认 + 首周期读数,进入首小时清单。
 
 ## 首小时清单(панель 4)
 
