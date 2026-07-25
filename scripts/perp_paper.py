@@ -48,6 +48,10 @@ PAPER = ROOT / "data" / "paper"
 spec = importlib.util.spec_from_file_location("scan", ROOT / "scripts" / "crypto_factor_scan.py")
 scan = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(scan)
+# LIVE trading must always see the full panel. scan's PANEL_END freeze is
+# research-only, but it leaked through this import and the 07-25 00:10
+# rebalance traded on signals frozen at 06-30.
+scan.FULL_PANEL = True
 spec2 = importlib.util.spec_from_file_location("fb", ROOT / "scripts" / "fetch_binance_perp.py")
 fb = importlib.util.module_from_spec(spec2)
 spec2.loader.exec_module(fb)
@@ -200,6 +204,14 @@ def compute_targets(tradable_bases: set | None = None) -> dict:
     # proxy can extend the index past the latest klines)
     valid_rows = uni.sum(axis=1)
     anchor = valid_rows[valid_rows >= 20].index[-1]
+    # signal-age circuit breaker: vision-lag makes 1-3d normal; anything
+    # older means a broken loader (e.g. the PANEL_END leak) — refuse to
+    # trade rather than silently rebalance on ancient ranks
+    age_d = (pd.Timestamp.now(tz="UTC").normalize().tz_localize(None)
+             - anchor).days
+    if age_d > 5:
+        raise RuntimeError(f"signal anchor {anchor.date()} is {age_d}d "
+                           "stale — refusing to trade")
     weights, rets = {}, {}
     for s in SLEEVES:
         sig = sigs[s].where(uni)
