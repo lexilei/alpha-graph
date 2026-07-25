@@ -83,6 +83,10 @@ REQUIRED_JUMP_APPROVAL_COLUMNS = {
     "observed_sha256",
     "tickers_sha256",
 }
+# Price-row validity is about prices. SEP carries no dividends column at all
+# (distributions live in ACTIONS), and volume is a liquidity attribute the
+# vendor leaves blank on warrants and bankruptcy stubs, so neither belongs in
+# a test of whether a day has a usable price.
 PRICE_NUMERIC_COLUMNS = (
     "open",
     "high",
@@ -90,8 +94,6 @@ PRICE_NUMERIC_COLUMNS = (
     "close",
     "closeadj",
     "closeunadj",
-    "volume",
-    "dividends",
 )
 POLICY_INPUT_KEYS = (
     "thresholds",
@@ -1680,6 +1682,11 @@ def _audit_snapshot_unlocked(
         (~(numeric_prices.notna().all(axis=1)
            & np.isfinite(numeric_prices).all(axis=1))).sum()
     )
+    # Gate 7 of the procurement decision requires zero *unresolved* non-positive
+    # prices. Ingestion tolerates a bounded count so a handful of vendor
+    # glitches cannot reject a whole snapshot, which means this is the only
+    # place the requirement is actually enforced.
+    nonpositive_price_rows = int((numeric_prices <= 0).any(axis=1).sum())
     target_crosswalk = crosswalk.copy()
     target_crosswalk["vendor_id"] = target_crosswalk.apply(
         lambda row: (
@@ -1817,6 +1824,14 @@ def _audit_snapshot_unlocked(
             "severity": "high",
             "subject": "SEP",
             "detail": f"{invalid_price_rows} rows have null or non-finite price fields",
+        })
+    if nonpositive_price_rows:
+        issues_list.append({
+            "gate": "nonpositive_price",
+            "severity": "high",
+            "subject": "SEP",
+            "detail": f"{nonpositive_price_rows} rows carry a non-positive price "
+                      "field; each needs adjudication before the snapshot is used",
         })
     if len(sep_quarantine) > thresholds["sep_quarantined_rows_max"]:
         issues_list.append({
@@ -2031,6 +2046,7 @@ def _audit_snapshot_unlocked(
             "calendar_end_gap_days": calendar_end_gap,
             "calendar_max_internal_gap_days": calendar_internal_gap,
             "invalid_numeric_rows": invalid_price_rows,
+            "nonpositive_price_rows": nonpositive_price_rows,
         },
         "sep_row_resolution": {
             "rows": int(len(prices)),

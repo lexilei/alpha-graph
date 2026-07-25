@@ -261,6 +261,30 @@ def test_full_universe_defaults_to_the_unbounded_pregenerated_export():
         build_download_plan(["SEP"], full_universe=True, start=None, end="2020-01-01")
 
 
+def test_required_tables_still_fail_closed_when_an_export_has_no_rows(tmp_path):
+    """The v1 API signalled emptiness with zero files; the v3 export always
+    serves a file, so the guard has to read row counts or it disappears."""
+    raw = tmp_path / "empty.zip"
+    staged = tmp_path / "staged.parquet"
+    _write_export_zip(_sep_frame().iloc[0:0], raw)
+    with pytest.raises(SharadarError, match="unexpectedly empty"):
+        _validate_and_stage(raw, staged, TABLE_SPECS["SEP"])
+
+    _write_export_zip(_actions_frame().iloc[0:0], raw)
+    assert _validate_and_stage(raw, staged, TABLE_SPECS["ACTIONS"])["rows"] == 0
+
+
+def test_digit_codes_keep_their_leading_zeros(tmp_path):
+    """CSV has no dtypes: SIC 0100 must not be inferred into the number 100."""
+    raw = tmp_path / "tickers.zip"
+    staged = tmp_path / "staged.parquet"
+    frame = _ticker_frame()
+    frame["siccode"] = ["0100", "6552", "0742"]
+    _write_export_zip(frame, raw)
+    _validate_and_stage(raw, staged, TABLE_SPECS["TICKERS"])
+    assert sorted(pd.read_parquet(staged)["siccode"]) == ["0100", "0742", "6552"]
+
+
 def test_plan_enforces_initial_per_table_limit():
     tickers = [f"T{i:04d}" for i in range(101)]
     with pytest.raises(ValueError, match="exceeds the initial"):

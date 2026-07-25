@@ -96,6 +96,9 @@ class TableSpec:
     scope_by_ticker: bool
     nullable_primary_key: frozenset[str] = frozenset()
     allow_empty_export: bool = False
+    # Codes that are digits but not quantities. CSV has no dtypes, so pandas
+    # would infer these as numbers and silently drop leading zeros.
+    text_columns: frozenset[str] = frozenset()
 
 
 TABLE_SPECS: dict[str, TableSpec] = {
@@ -107,6 +110,7 @@ TABLE_SPECS: dict[str, TableSpec] = {
         ("firstpricedate", "lastpricedate", "lastupdated"),
         None,
         False,
+        text_columns=frozenset({"siccode"}),
     ),
     "SP500": TableSpec(
         "SP500",
@@ -348,7 +352,12 @@ def build_bulk_url(part: DownloadPart) -> str:
 
 
 class NasdaqBulkClient:
-    """Small client for the current async Parquet bulk-download API."""
+    """Small client for the datatable export API.
+
+    An export is requested with ``qopts.export=true``, polled until the vendor
+    reports it ``fresh``, then fetched from a presigned link as a ZIP holding
+    one CSV.
+    """
 
     def __init__(
         self,
@@ -590,7 +599,7 @@ def validate_license_expiry(expires: str, *, today: date | None = None) -> str:
     return str(expiry)
 
 
-def _read_export_csv(raw_path: Path) -> pd.DataFrame:
+def _read_export_csv(raw_path: Path, spec: TableSpec) -> pd.DataFrame:
     """Read the single CSV a Sharadar export ZIP carries."""
     with zipfile.ZipFile(raw_path) as archive:
         members = [name for name in archive.namelist() if name.lower().endswith(".csv")]
@@ -607,15 +616,21 @@ def _read_export_csv(raw_path: Path) -> pd.DataFrame:
                 low_memory=False,
                 keep_default_na=False,
                 na_values=[""],
+                dtype={column: "string" for column in spec.text_columns},
             )
 
 
 def _validate_and_stage(raw_path: Path, staged_path: Path, spec: TableSpec) -> dict:
-    frame = _read_export_csv(raw_path)
+    frame = _read_export_csv(raw_path, spec)
     frame.columns = [str(c).strip().lower() for c in frame.columns]
     missing = sorted(spec.required_columns - set(frame.columns))
     if missing:
         raise SharadarError(f"{spec.code} missing required columns: {missing}")
+    # Under the v1 API an empty export meant zero files; the v3 export always
+    # serves a file, so emptiness is now a row count. Without this the guard
+    # that a required table came back with no rows would be gone entirely.
+    if frame.empty and not spec.allow_empty_export:
+        raise SharadarError(f"{spec.code} export is unexpectedly empty in {raw_path.name}")
     for column in spec.date_columns:
         if column in frame.columns:
             frame[column] = pd.to_datetime(frame[column], errors="raise")
@@ -650,11 +665,10 @@ def _validate_and_stage(raw_path: Path, staged_path: Path, spec: TableSpec) -> d
                 f"SEP has {null_volume_rows} null volume rows in {raw_path.name}, "
                 f"above the {MAX_NULL_VOLUME_FRACTION:.3%} ceiling"
             )
-        # Gate 7 of the procurement decision asks for zero *unresolved*
-        # non-positive prices, and adjudication lives in sharadar_qa. Staging
-        # therefore records the defect instead of rejecting the snapshot, and
-        # still fails closed if the count stops looking like isolated vendor
-        # glitches.
+        # Staging records the defect and bounds it rather than rejecting a whole
+        # snapshot over a handful of vendor glitches; the `nonpositive_price`
+        # gate in sharadar_qa is what actually refuses to pass the snapshot
+        # until every one of them is adjudicated.
         nonpositive = (frame[prices] <= 0).any(axis=1)
         nonpositive_price_rows = int(nonpositive.sum())
         if nonpositive_price_rows > max(1, int(MAX_NONPOSITIVE_PRICE_FRACTION * len(frame))):
