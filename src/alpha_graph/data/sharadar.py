@@ -60,6 +60,10 @@ ALLOWED_DOWNLOAD_HOST_SUFFIX = ".s3.amazonaws.com"
 # attacker-controlled origin. The vendor serves exports from one bucket family.
 ALLOWED_DOWNLOAD_BUCKET_PREFIX = "aws-gis-link-"
 MAX_NULL_VOLUME_FRACTION = 0.001
+# "fresh" only asserts the vendor is not currently rebuilding the export, so a
+# pre-generated file can be arbitrarily stale. A point-in-time panel needs the
+# vendor's own snapshot time bounded, not just its build state.
+MAX_EXPORT_AGE_HOURS = 48.0
 MAX_NONPOSITIVE_PRICE_FRACTION = 0.00001
 EXPORT_READY_STATUS = "fresh"
 EXPORT_PENDING_STATUSES = frozenset({"creating", "regenerating"})
@@ -353,6 +357,24 @@ def _download_file(url: str, token: str, destination: Path, timeout: float) -> i
     return written
 
 
+def _check_export_age(table: str, data_snapshot_time: object) -> None:
+    """Refuse an export the vendor built too long ago to be current."""
+    if data_snapshot_time in (None, ""):
+        logger.warning(
+            "Sharadar {} export reports no data_snapshot_time; age unverified", table
+        )
+        return
+    stamped = pd.Timestamp(str(data_snapshot_time))
+    if stamped.tz is None:
+        stamped = stamped.tz_localize("UTC")
+    age_hours = (pd.Timestamp.now(tz="UTC") - stamped).total_seconds() / 3600.0
+    if age_hours > MAX_EXPORT_AGE_HOURS:
+        raise SharadarAPIError(
+            f"{table} export was built {age_hours:.1f}h ago, above the "
+            f"{MAX_EXPORT_AGE_HOURS:.0f}h ceiling"
+        )
+
+
 def build_bulk_url(part: DownloadPart) -> str:
     query = urlencode(list(part.filters) + [("qopts.export", "true")], doseq=True)
     return f"{BULK_API}/{part.table}.json?{query}"
@@ -371,7 +393,10 @@ class NasdaqBulkClient:
         api_key: str,
         *,
         poll_seconds: float = 30.0,
-        timeout_seconds: float = 900.0,
+        # A narrowing filter makes the vendor build the export on demand, which
+        # for SEP-sized tables took longer than the old 15-minute ceiling and
+        # left a snapshot permanently stuck at IN_PROGRESS.
+        timeout_seconds: float = 3600.0,
         request_timeout: float = 120.0,
         json_getter: JsonGetter = _get_json,
         file_downloader: FileDownloader = _download_file,
@@ -434,10 +459,16 @@ class NasdaqBulkClient:
             if status == EXPORT_READY_STATUS:
                 if not file_info.get("link"):
                     raise SharadarAPIError(f"{part.table} export carries no link")
+                _check_export_age(part.table, file_info.get("data_snapshot_time"))
                 return job
             if status in EXPORT_PENDING_STATUSES:
-                if time.monotonic() - started >= self.timeout_seconds:
+                waited = time.monotonic() - started
+                if waited >= self.timeout_seconds:
                     raise SharadarAPIError(f"{part.table} export timed out in status {status}")
+                logger.info(
+                    "Sharadar {} export is {} ({:.0f}s waited); filtered exports are "
+                    "built on demand", part.table, status, waited,
+                )
                 self._sleep(self.poll_seconds)
                 continue
             raise SharadarAPIError(f"{part.table} export status {status or 'UNKNOWN'}")

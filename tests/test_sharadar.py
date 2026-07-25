@@ -340,6 +340,26 @@ def test_export_link_must_come_from_the_vendor_bucket():
             _validate_bulk_file_url(rejected)
 
 
+def test_stale_pregenerated_export_is_refused():
+    """"fresh" only means "not currently rebuilding", so a pre-generated file
+    can be arbitrarily old; a PIT panel needs the vendor's own stamp bounded."""
+    recent = str(pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=1))
+    stale = str(pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=200))
+
+    def fresh_at(stamp):
+        def get_json(url, token, timeout):
+            job = _export_job()
+            job["datatable_bulk_download"]["file"]["data_snapshot_time"] = stamp
+            return job
+        return get_json
+
+    part = DownloadPart("SEP", 0, ())
+    NasdaqBulkClient("secret", json_getter=fresh_at(recent)).wait_for_export(part)
+    NasdaqBulkClient("secret", json_getter=fresh_at(None)).wait_for_export(part)
+    with pytest.raises(SharadarAPIError, match="above the .*h ceiling"):
+        NasdaqBulkClient("secret", json_getter=fresh_at(stale)).wait_for_export(part)
+
+
 def test_plan_enforces_initial_per_table_limit():
     tickers = [f"T{i:04d}" for i in range(101)]
     with pytest.raises(ValueError, match="exceeds the initial"):
