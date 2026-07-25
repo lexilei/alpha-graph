@@ -247,6 +247,20 @@ def test_bulk_url_matches_the_served_datatable_export_contract():
     assert ("table", "SEP") in plan[0].filters
 
 
+def test_full_universe_defaults_to_the_unbounded_pregenerated_export():
+    """A narrowing filter makes the vendor build a fresh export; SEP-sized
+    tables then outrun any client timeout, so the whole-universe plan asks for
+    the pre-generated whole table instead."""
+    plan = build_download_plan(["SP500", "SEP"], full_universe=True, start=None)
+    assert all(part.filters == () for part in plan)
+
+    bounded = build_download_plan(["SEP"], full_universe=True, start="2009-01-01")
+    assert bounded[0].filters == (("date.gte", "2009-01-01"),)
+
+    with pytest.raises(ValueError, match="end requires a start"):
+        build_download_plan(["SEP"], full_universe=True, start=None, end="2020-01-01")
+
+
 def test_plan_enforces_initial_per_table_limit():
     tickers = [f"T{i:04d}" for i in range(101)]
     with pytest.raises(ValueError, match="exceeds the initial"):

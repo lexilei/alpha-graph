@@ -507,7 +507,7 @@ def build_download_plan(
     *,
     tickers: Iterable[str] = (),
     full_universe: bool = False,
-    start: str = DEFAULT_START,
+    start: str | None = DEFAULT_START,
     end: str | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> list[DownloadPart]:
@@ -522,9 +522,12 @@ def build_download_plan(
         raise ValueError("batch_size must be >= 1")
     if full_universe and any(str(t).strip() for t in tickers):
         raise ValueError("full_universe cannot be combined with a ticker scope")
-    pd.Timestamp(start)
-    if end is not None and pd.Timestamp(end) < pd.Timestamp(start):
-        raise ValueError("end must be on or after start")
+    if start is None and end is not None:
+        raise ValueError("end requires a start")
+    if start is not None:
+        pd.Timestamp(start)
+        if end is not None and pd.Timestamp(end) < pd.Timestamp(start):
+            raise ValueError("end must be on or after start")
     scope = sorted({str(t).strip().upper() for t in tickers if str(t).strip()})
     plan: list[DownloadPart] = []
     for raw_table in tables:
@@ -533,7 +536,11 @@ def build_download_plan(
             raise ValueError(f"unsupported Sharadar table {table!r}")
         spec = TABLE_SPECS[table]
         common: list[tuple[str, str]] = []
-        if spec.start_filter:
+        # An unbounded request matches the vendor's pre-generated whole-table
+        # export and returns "fresh" at once; any narrowing filter makes the
+        # vendor build a fresh one, which for SEP-sized tables outruns any
+        # sane client timeout.
+        if spec.start_filter and start is not None:
             common.append((f"{spec.start_filter}.gte", str(pd.Timestamp(start).date())))
             # SP500 is reconstructed backward from current rows, so events
             # after the local audit end must remain in the export.
@@ -1113,16 +1120,23 @@ def fetch_snapshot(
 def _profile_plan(args: argparse.Namespace) -> list[DownloadPart]:
     tables = tuple(args.tables) if args.tables else PROFILES[args.profile]
     full_universe = args.universe == "all"
+    # A whole-universe pull wants the whole history too, and leaving the date
+    # bound off is what makes the vendor serve its pre-generated export.
+    start = args.start if args.start is not None else (
+        None if full_universe else DEFAULT_START
+    )
     needs_scope = (
         not full_universe
         and any(TABLE_SPECS[t.upper()].scope_by_ticker for t in tables)
     )
-    tickers = load_scope_tickers(Path(args.membership), start=args.start) if needs_scope else []
+    tickers = load_scope_tickers(
+        Path(args.membership), start=start or DEFAULT_START
+    ) if needs_scope else []
     return build_download_plan(
         tables,
         tickers=tickers,
         full_universe=full_universe,
-        start=args.start,
+        start=start,
         end=args.end,
         batch_size=args.batch_size,
     )
@@ -1131,7 +1145,12 @@ def _profile_plan(args: argparse.Namespace) -> list[DownloadPart]:
 def _add_plan_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--profile", choices=sorted(PROFILES), default="validation")
     parser.add_argument("--tables", nargs="+", choices=sorted(TABLE_SPECS))
-    parser.add_argument("--start", default=DEFAULT_START)
+    parser.add_argument(
+        "--start",
+        default=None,
+        help=f"date lower bound (default {DEFAULT_START}; omitted for --universe all, "
+             "which requests the vendor's pre-generated whole-table export)",
+    )
     parser.add_argument("--end")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--membership", default=str(MEMBERSHIP_CSV))
