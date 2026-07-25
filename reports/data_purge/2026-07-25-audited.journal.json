@@ -1,0 +1,61 @@
+{
+  "completed_at_utc": "2026-07-25T22:37:12.728477+00:00",
+  "created_at_utc": "2026-07-25T22:37:12.725236+00:00",
+  "deleted_inventory": [
+    {
+      "bytes": 1920014,
+      "kind": "staged",
+      "relative_path": "TICKERS/tickers-000-98b1eec744ba-file-000.parquet"
+    },
+    {
+      "bytes": 171272,
+      "kind": "staged",
+      "relative_path": "SP500/sp500-000-a8b2ccb3e9a8-file-000.parquet"
+    },
+    {
+      "bytes": 5773872,
+      "kind": "staged",
+      "relative_path": "ACTIONS/actions-000-cf3c6af1cc55-file-000.parquet"
+    },
+    {
+      "bytes": 6742,
+      "kind": "raw",
+      "relative_path": "manifest.json"
+    },
+    {
+      "bytes": 280,
+      "kind": "raw",
+      "relative_path": "license.json"
+    },
+    {
+      "bytes": 1699173,
+      "kind": "raw",
+      "relative_path": "TICKERS/tickers-000-98b1eec744ba-file-000.zip"
+    },
+    {
+      "bytes": 251773,
+      "kind": "raw",
+      "relative_path": "SP500/sp500-000-a8b2ccb3e9a8-file-000.zip"
+    },
+    {
+      "bytes": 9837458,
+      "kind": "raw",
+      "relative_path": "ACTIONS/actions-000-cf3c6af1cc55-file-000.zip"
+    }
+  ],
+  "manifest_sha256_before_purge": "e8cbd120ee73fe4987685374f443c8c6a9136e910a6804c5df93d2b78137d14d",
+  "phases": {
+    "qa": "DELETED",
+    "raw": "DELETED",
+    "staged": "DELETED"
+  },
+  "schema_version": 1,
+  "snapshot": "2026-07-25-audited",
+  "status": "COMPLETE",
+  "storage_roots": {
+    "qa": "/Users/leizhihan/Lex/data/alpha-graph/qa/sharadar",
+    "raw": "/Users/leizhihan/Lex/data/alpha-graph/raw/sharadar",
+    "staged": "/Users/leizhihan/Lex/data/alpha-graph/cache/sharadar"
+  },
+  "updated_at_utc": "2026-07-25T22:37:12.728155+00:00"
+}

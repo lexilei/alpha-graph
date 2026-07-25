@@ -1,0 +1,121 @@
+{
+  "completed_at_utc": "2026-07-25T22:37:29.530030+00:00",
+  "created_at_utc": "2026-07-25T22:37:29.467667+00:00",
+  "deleted_inventory": [
+    {
+      "bytes": 221385823,
+      "kind": "staged",
+      "relative_path": "SF2/sf2-000-7be0f4f84f7b-file-000.parquet"
+    },
+    {
+      "bytes": 906759191,
+      "kind": "staged",
+      "relative_path": "SEP/sep-000-32652d46695d-file-000.parquet"
+    },
+    {
+      "bytes": 192001716,
+      "kind": "staged",
+      "relative_path": "SF3/sf3-000-9fb79c78411c-file-000.parquet"
+    },
+    {
+      "bytes": 594423286,
+      "kind": "staged",
+      "relative_path": "DAILY/daily-000-50690a5bfbf1-file-000.parquet"
+    },
+    {
+      "bytes": 1920014,
+      "kind": "staged",
+      "relative_path": "TICKERS/tickers-000-98b1eec744ba-file-000.parquet"
+    },
+    {
+      "bytes": 171272,
+      "kind": "staged",
+      "relative_path": "SP500/sp500-000-e9959bdb47e9-file-000.parquet"
+    },
+    {
+      "bytes": 5773872,
+      "kind": "staged",
+      "relative_path": "ACTIONS/actions-000-b80e26178c3b-file-000.parquet"
+    },
+    {
+      "bytes": 737217953,
+      "kind": "staged",
+      "relative_path": "SF1/sf1-000-f1285802414b-file-000.parquet"
+    },
+    {
+      "bytes": 7323920,
+      "kind": "staged",
+      "relative_path": "EVENTS/events-000-15aa3fcf558a-file-000.parquet"
+    },
+    {
+      "bytes": 15661,
+      "kind": "raw",
+      "relative_path": "manifest.json"
+    },
+    {
+      "bytes": 277,
+      "kind": "raw",
+      "relative_path": "license.json"
+    },
+    {
+      "bytes": 253722545,
+      "kind": "raw",
+      "relative_path": "SF2/sf2-000-7be0f4f84f7b-file-000.zip"
+    },
+    {
+      "bytes": 997959791,
+      "kind": "raw",
+      "relative_path": "SEP/sep-000-32652d46695d-file-000.zip"
+    },
+    {
+      "bytes": 311765299,
+      "kind": "raw",
+      "relative_path": "SF3/sf3-000-9fb79c78411c-file-000.zip"
+    },
+    {
+      "bytes": 766613829,
+      "kind": "raw",
+      "relative_path": "DAILY/daily-000-50690a5bfbf1-file-000.zip"
+    },
+    {
+      "bytes": 1699173,
+      "kind": "raw",
+      "relative_path": "TICKERS/tickers-000-98b1eec744ba-file-000.zip"
+    },
+    {
+      "bytes": 251773,
+      "kind": "raw",
+      "relative_path": "SP500/sp500-000-e9959bdb47e9-file-000.zip"
+    },
+    {
+      "bytes": 9837458,
+      "kind": "raw",
+      "relative_path": "ACTIONS/actions-000-b80e26178c3b-file-000.zip"
+    },
+    {
+      "bytes": 652685907,
+      "kind": "raw",
+      "relative_path": "SF1/sf1-000-f1285802414b-file-000.zip"
+    },
+    {
+      "bytes": 11585482,
+      "kind": "raw",
+      "relative_path": "EVENTS/events-000-15aa3fcf558a-file-000.zip"
+    }
+  ],
+  "manifest_sha256_before_purge": "1ce57d1500f0e4a204d5647ddd82bdf633e375c3d7ff1b9b312842725ddb1bc5",
+  "phases": {
+    "qa": "DELETED",
+    "raw": "DELETED",
+    "staged": "DELETED"
+  },
+  "schema_version": 1,
+  "snapshot": "2026-07-25-full",
+  "status": "COMPLETE",
+  "storage_roots": {
+    "qa": "/Users/leizhihan/Lex/data/alpha-graph/qa/sharadar",
+    "raw": "/Users/leizhihan/Lex/data/alpha-graph/raw/sharadar",
+    "staged": "/Users/leizhihan/Lex/data/alpha-graph/cache/sharadar"
+  },
+  "updated_at_utc": "2026-07-25T22:37:29.529584+00:00"
+}
