@@ -55,7 +55,7 @@ BAND = 0.05   # strike band vs spot; nearest N picked below
 # would silently revert prod->demo on the first restart (panel review B1).
 # All durable state (baseline/stop-flag/sink) is namespaced per env so a
 # demo baseline ($962) can never disarm the prod ($49) loss stop (B2).
-_ENV_F = rec.OUT.parent.parent.parent / "private" / "maker_env.txt"
+_ENV_F = rec.OUT.parent.parent / "private" / "maker_env.txt"
 try:
     ENV = _ENV_F.read_text().strip().lower()
 except OSError:
