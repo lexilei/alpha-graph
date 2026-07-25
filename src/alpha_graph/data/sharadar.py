@@ -501,12 +501,22 @@ def build_download_plan(
     tables: Iterable[str],
     *,
     tickers: Iterable[str] = (),
+    full_universe: bool = False,
     start: str = DEFAULT_START,
     end: str | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> list[DownloadPart]:
+    """Build the part list. ``full_universe`` exports every listed ticker.
+
+    The default scopes ticker-keyed tables to ``tickers`` (the S&P membership
+    spine), which fixes survivorship inside that panel. ``full_universe``
+    instead exports the whole vendor cross-section, which is what moves the
+    research habitat off large caps; the two are mutually exclusive.
+    """
     if batch_size < 1:
         raise ValueError("batch_size must be >= 1")
+    if full_universe and any(str(t).strip() for t in tickers):
+        raise ValueError("full_universe cannot be combined with a ticker scope")
     pd.Timestamp(start)
     if end is not None and pd.Timestamp(end) < pd.Timestamp(start):
         raise ValueError("end must be on or after start")
@@ -526,7 +536,7 @@ def build_download_plan(
                 common.append((f"{spec.start_filter}.lte", str(pd.Timestamp(end).date())))
         if table == "TICKERS":
             common.append(("table.eq", "SEP"))
-        if spec.scope_by_ticker:
+        if spec.scope_by_ticker and not full_universe:
             if not scope:
                 raise ValueError(f"{table} requires a non-empty ticker scope")
             for index, batch in enumerate(_chunks(scope, batch_size)):
@@ -1053,11 +1063,16 @@ def fetch_snapshot(
 
 def _profile_plan(args: argparse.Namespace) -> list[DownloadPart]:
     tables = tuple(args.tables) if args.tables else PROFILES[args.profile]
-    needs_scope = any(TABLE_SPECS[t.upper()].scope_by_ticker for t in tables)
+    full_universe = args.universe == "all"
+    needs_scope = (
+        not full_universe
+        and any(TABLE_SPECS[t.upper()].scope_by_ticker for t in tables)
+    )
     tickers = load_scope_tickers(Path(args.membership), start=args.start) if needs_scope else []
     return build_download_plan(
         tables,
         tickers=tickers,
+        full_universe=full_universe,
         start=args.start,
         end=args.end,
         batch_size=args.batch_size,
@@ -1071,6 +1086,13 @@ def _add_plan_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--end")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--membership", default=str(MEMBERSHIP_CSV))
+    parser.add_argument(
+        "--universe",
+        choices=("sp500", "all"),
+        default="sp500",
+        help="sp500 scopes ticker-keyed tables to the membership spine; "
+             "all exports the whole vendor cross-section",
+    )
 
 
 def _purge_snapshot_data_unlocked(

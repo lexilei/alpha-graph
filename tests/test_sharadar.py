@@ -181,6 +181,27 @@ def test_plan_is_deterministic_scoped_and_secret_free():
     assert summary == plan_summary(plan)
 
 
+def test_full_universe_plan_drops_ticker_scope_and_rejects_a_mixed_scope():
+    plan = build_download_plan(
+        ["TICKERS", "SP500", "ACTIONS", "SEP"],
+        full_universe=True,
+        start="2011-01-01",
+    )
+    assert [p.table for p in plan].count("SEP") == 1
+    assert [p.table for p in plan].count("ACTIONS") == 1
+    for part in plan:
+        assert all(key != "ticker.in[]" for key, _ in part.filters)
+    sep = next(p for p in plan if p.table == "SEP")
+    assert sep.filters == (("date.gte", "2011-01-01"),)
+    scoped = build_download_plan(["SEP"], tickers=["AAA"], start="2011-01-01")
+    assert scoped[0].digest != sep.digest
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        build_download_plan(["SEP"], tickers=["AAA"], full_universe=True)
+    with pytest.raises(ValueError, match="non-empty ticker scope"):
+        build_download_plan(["SEP"])
+
+
 def test_plan_enforces_initial_per_table_limit():
     tickers = [f"T{i:04d}" for i in range(101)]
     with pytest.raises(ValueError, match="exceeds the initial"):
