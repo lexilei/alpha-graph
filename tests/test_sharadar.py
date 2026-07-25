@@ -14,6 +14,8 @@ import pandas as pd
 import pytest
 
 from alpha_graph.data.sharadar import (
+    _read_export_csv,
+    _validate_bulk_file_url,
     DownloadPart,
     NasdaqBulkClient,
     SharadarAPIError,
@@ -92,7 +94,7 @@ def _actions_frame() -> pd.DataFrame:
 
 
 EXPORT_LINK = (
-    "https://vendor-export.s3.amazonaws.com/export/SHARADAR_SEP.zip"
+    "https://aws-gis-link-pro-us-east-1-datahub.s3.amazonaws.com/export/SHARADAR_SEP.zip"
     "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=deadbeef"
 )
 
@@ -285,6 +287,59 @@ def test_digit_codes_keep_their_leading_zeros(tmp_path):
     assert sorted(pd.read_parquet(staged)["siccode"]) == ["0100", "0742", "6552"]
 
 
+def test_ticker_na_survives_csv_parsing():
+    """Nano Labs trades as "NA". pandas' default na_values turns that into a
+    null primary key, so the export reader must not use them."""
+    frame = _ticker_frame()
+    frame.loc[0, "ticker"] = "NA"
+    import io, zipfile as _zip
+    buffer = io.BytesIO()
+    with _zip.ZipFile(buffer, "w") as archive:
+        archive.writestr("t.csv", frame.to_csv(index=False))
+    path = Path(__file__).parent / "_na_probe.zip"
+    path.write_bytes(buffer.getvalue())
+    try:
+        out = _read_export_csv(path, TABLE_SPECS["TICKERS"])
+        assert "NA" in set(out["ticker"])
+        assert out["ticker"].isna().sum() == 0
+    finally:
+        path.unlink()
+
+
+def test_tolerance_ceilings_have_no_free_row_on_small_frames(tmp_path):
+    """The ceilings are fractions. A `max(1, ...)` floor would have silently
+    granted one bad row per part, and the scoped plan has dozens of parts."""
+    raw = tmp_path / "sep.zip"
+    staged = tmp_path / "staged.parquet"
+    frame = _sep_frame()
+    frame.loc[0, "closeunadj"] = 0.0
+    _write_export_zip(frame, raw)
+    with pytest.raises(SharadarError, match="non-positive price rows"):
+        _validate_and_stage(raw, staged, TABLE_SPECS["SEP"])
+
+    frame = _sep_frame()
+    frame["volume"] = frame["volume"].astype(object)
+    frame.loc[0, "volume"] = None
+    _write_export_zip(frame, raw)
+    with pytest.raises(SharadarError, match="null volume rows"):
+        _validate_and_stage(raw, staged, TABLE_SPECS["SEP"])
+
+
+def test_export_link_must_come_from_the_vendor_bucket():
+    """A presigned signature authenticates the object, not the host, and any
+    AWS customer can register a bucket."""
+    _validate_bulk_file_url(
+        "https://aws-gis-link-pro-us-east-1-datahub.s3.amazonaws.com/e/x.zip?X-Amz-Signature=a"
+    )
+    for rejected in (
+        "https://evil-bucket.s3.amazonaws.com/payload.zip",
+        "https://anyone.execute-api.us-east-1.amazonaws.com/x.zip",
+        "https://aws-gis-link-pro.s3.amazonaws.com.attacker.invalid/x.zip",
+    ):
+        with pytest.raises(SharadarAPIError, match="approved export HTTPS origin"):
+            _validate_bulk_file_url(rejected)
+
+
 def test_plan_enforces_initial_per_table_limit():
     tickers = [f"T{i:04d}" for i in range(101)]
     with pytest.raises(ValueError, match="exceeds the initial"):
@@ -379,7 +434,7 @@ def test_bulk_client_rejects_untrusted_file_url(tmp_path):
     assert not called
 
 
-def test_api_redirect_and_required_empty_exports_fail_closed():
+def test_api_redirect_and_malformed_export_response_fail_closed():
     handler = _NasdaqAPIRedirectHandler()
     with pytest.raises(SharadarAPIError, match="approved Nasdaq HTTPS origin"):
         handler.redirect_request(

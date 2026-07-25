@@ -83,6 +83,14 @@ REQUIRED_JUMP_APPROVAL_COLUMNS = {
     "observed_sha256",
     "tickers_sha256",
 }
+REQUIRED_PRICE_DEFECT_APPROVAL_COLUMNS = {
+    "defect_id",
+    "status",
+    "evidence",
+    "snapshot",
+    "observed_sha256",
+    "sep_sha256",
+}
 # Price-row validity is about prices. SEP carries no dividends column at all
 # (distributions live in ACTIONS), and volume is a liquidity attribute the
 # vendor leaves blank on warrants and bankruptcy stubs, so neither belongs in
@@ -103,6 +111,7 @@ POLICY_INPUT_KEYS = (
     "membership_approvals",
     "identity_registry",
     "jump_approvals",
+    "price_defect_approvals",
 )
 
 
@@ -1316,6 +1325,93 @@ def verify_price_jumps(
     return out
 
 
+def price_defects(prices: pd.DataFrame) -> pd.DataFrame:
+    """Enumerate SEP rows the vendor served with an unusable price or volume.
+
+    Ingestion bounds these counts instead of rejecting a whole snapshot over a
+    handful of vendor glitches, so this is where they become individually
+    visible and adjudicable.
+    """
+    numeric = prices[list(PRICE_NUMERIC_COLUMNS)].apply(pd.to_numeric, errors="coerce")
+    rows = []
+    for column in PRICE_NUMERIC_COLUMNS:
+        hit = numeric[column] <= 0
+        for index in numeric.index[hit.fillna(False)]:
+            rows.append({
+                "ticker": _ticker_norm(prices.at[index, "ticker"]),
+                "date": str(pd.Timestamp(prices.at[index, "date"]).date()),
+                "column": column,
+                "kind": "nonpositive",
+                "value": float(numeric.at[index, column]),
+            })
+    if "volume" in prices.columns:
+        volume = pd.to_numeric(prices["volume"], errors="coerce")
+        blank = volume.isna() | ~np.isfinite(volume)
+        for index in volume.index[blank]:
+            rows.append({
+                "ticker": _ticker_norm(prices.at[index, "ticker"]),
+                "date": str(pd.Timestamp(prices.at[index, "date"]).date()),
+                "column": "volume",
+                "kind": "null_volume",
+                "value": float("nan"),
+            })
+    frame = pd.DataFrame(
+        rows, columns=["ticker", "date", "column", "kind", "value"]
+    )
+    return frame.sort_values(["ticker", "date", "column"]).reset_index(drop=True)
+
+
+def price_defect_review(
+    defects: pd.DataFrame,
+    approvals_path: Path | None,
+    *,
+    snapshot: str,
+    sep_sha256: str,
+) -> pd.DataFrame:
+    """Mark each price defect approved or not, bound to this exact snapshot."""
+    approvals = pd.DataFrame(columns=sorted(REQUIRED_PRICE_DEFECT_APPROVAL_COLUMNS))
+    if approvals_path is not None:
+        approvals = pd.read_csv(approvals_path, dtype=str, keep_default_na=False)
+        missing = REQUIRED_PRICE_DEFECT_APPROVAL_COLUMNS - set(approvals.columns)
+        if missing:
+            raise SharadarError(
+                f"price-defect approvals missing columns: {sorted(missing)}"
+            )
+        if approvals["defect_id"].duplicated().any():
+            raise SharadarError("price-defect approvals contain duplicate defect_id values")
+    approval_map = (
+        approvals.set_index("defect_id").to_dict("index") if len(approvals) else {}
+    )
+    out = defects.copy()
+    defect_ids, hashes, statuses = [], [], []
+    for row in out.itertuples(index=False):
+        observed = {
+            "ticker": str(row.ticker),
+            "date": str(row.date),
+            "column": str(row.column),
+            "kind": str(row.kind),
+            "value": None if pd.isna(row.value) else float(row.value),
+        }
+        serialized = json.dumps(observed, sort_keys=True, separators=(",", ":"))
+        observed_sha = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        defect_id = f"{observed['ticker']}:{observed['date']}:{observed['column']}"
+        approval = approval_map.get(defect_id, {})
+        approved = (
+            str(approval.get("status", "")).lower() == "approved"
+            and _nonblank(approval.get("evidence"))
+            and str(approval.get("snapshot", "")) == snapshot
+            and str(approval.get("observed_sha256", "")) == observed_sha
+            and str(approval.get("sep_sha256", "")) == sep_sha256
+        )
+        defect_ids.append(defect_id)
+        hashes.append(observed_sha)
+        statuses.append("approved" if approved else "unapproved")
+    out["defect_id"] = defect_ids
+    out["observed_sha256"] = hashes
+    out["status"] = statuses
+    return out
+
+
 def price_jump_review(
     jumps: pd.DataFrame,
     approvals_path: Path | None,
@@ -1521,6 +1617,7 @@ def _audit_snapshot_unlocked(
     membership_approvals_path: Path | None = None,
     identity_registry_path: Path | None = None,
     jump_approvals_path: Path | None = None,
+    price_defect_approvals_path: Path | None = None,
     output_dir: Path | None = None,
     start: str = "2011-04-06",
     end: str | None = None,
@@ -1547,6 +1644,7 @@ def _audit_snapshot_unlocked(
         "membership_approvals": membership_approvals_path,
         "identity_registry": identity_registry_path,
         "jump_approvals": jump_approvals_path,
+        "price_defect_approvals": price_defect_approvals_path,
     }
     input_sha256 = {
         key: (sha256_file(path) if path is not None else None)
@@ -1685,8 +1783,17 @@ def _audit_snapshot_unlocked(
     # Gate 7 of the procurement decision requires zero *unresolved* non-positive
     # prices. Ingestion tolerates a bounded count so a handful of vendor
     # glitches cannot reject a whole snapshot, which means this is the only
-    # place the requirement is actually enforced.
-    nonpositive_price_rows = int((numeric_prices <= 0).any(axis=1).sum())
+    # place the requirement is actually enforced — and, like the other
+    # adjudicated gates, it has to offer a way to resolve them.
+    defects = price_defect_review(
+        price_defects(prices),
+        price_defect_approvals_path,
+        snapshot=snapshot,
+        sep_sha256=staged_tables_sha256["SEP"],
+    )
+    unapproved_defects = defects[defects["status"] != "approved"]
+    nonpositive_price_rows = int((defects["kind"] == "nonpositive").sum())
+    null_volume_rows = int((defects["kind"] == "null_volume").sum())
     target_crosswalk = crosswalk.copy()
     target_crosswalk["vendor_id"] = target_crosswalk.apply(
         lambda row: (
@@ -1825,13 +1932,14 @@ def _audit_snapshot_unlocked(
             "subject": "SEP",
             "detail": f"{invalid_price_rows} rows have null or non-finite price fields",
         })
-    if nonpositive_price_rows:
+    if len(unapproved_defects):
+        kinds = sorted(set(unapproved_defects["kind"]))
         issues_list.append({
-            "gate": "nonpositive_price",
+            "gate": "price_defect_review",
             "severity": "high",
             "subject": "SEP",
-            "detail": f"{nonpositive_price_rows} rows carry a non-positive price "
-                      "field; each needs adjudication before the snapshot is used",
+            "detail": f"{len(unapproved_defects)} price defects ({', '.join(kinds)}) "
+                      "lack a snapshot-bound approval",
         })
     if len(sep_quarantine) > thresholds["sep_quarantined_rows_max"]:
         issues_list.append({
@@ -2047,6 +2155,8 @@ def _audit_snapshot_unlocked(
             "calendar_max_internal_gap_days": calendar_internal_gap,
             "invalid_numeric_rows": invalid_price_rows,
             "nonpositive_price_rows": nonpositive_price_rows,
+            "null_volume_rows": null_volume_rows,
+            "unapproved_price_defects": int(len(unapproved_defects)),
         },
         "sep_row_resolution": {
             "rows": int(len(prices)),
@@ -2155,6 +2265,7 @@ def _audit_snapshot_unlocked(
         (panel_identities, "panel_identity_crosswalk.parquet"),
         (identity_registry, "identity_registry_review.parquet"),
         (alias_overlaps, "alias_window_overlaps.parquet"),
+        (defects, "price_defects.parquet"),
         (price_jumps, "unexplained_price_jumps.parquet"),
         (price_jump_audit, "all_large_price_jumps.parquet"),
         (by_year, "coverage_by_year.parquet"),
@@ -2192,6 +2303,7 @@ def audit_snapshot(
     membership_approvals_path: Path | None = None,
     identity_registry_path: Path | None = None,
     jump_approvals_path: Path | None = None,
+    price_defect_approvals_path: Path | None = None,
     output_dir: Path | None = None,
     start: str = "2011-04-06",
     end: str | None = None,
@@ -2219,6 +2331,7 @@ def audit_snapshot(
             membership_approvals_path=membership_approvals_path,
             identity_registry_path=identity_registry_path,
             jump_approvals_path=jump_approvals_path,
+            price_defect_approvals_path=price_defect_approvals_path,
             output_dir=output_dir,
             start=start,
             end=end,
@@ -2238,6 +2351,8 @@ def main() -> None:
     parser.add_argument("--membership-approvals")
     parser.add_argument("--identity-registry")
     parser.add_argument("--jump-approvals")
+    parser.add_argument("--price-defect-approvals")
+    parser.add_argument("--price-defect-approvals")
     parser.add_argument("--output")
     parser.add_argument("--start", default="2011-04-06")
     parser.add_argument("--end")
@@ -2258,6 +2373,9 @@ def main() -> None:
         ),
         jump_approvals_path=(
             Path(args.jump_approvals) if args.jump_approvals else None
+        ),
+        price_defect_approvals_path=(
+            Path(args.price_defect_approvals) if args.price_defect_approvals else None
         ),
         output_dir=Path(args.output) if args.output else None,
         start=args.start,

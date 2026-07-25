@@ -71,9 +71,10 @@ EXTENDED`). Code keys factors by name; the C/B labels are for reference.
 
 ### Paid-data staging
 
-No commercial dataset has been purchased. The approved procurement path is
-documented in `reports/delisted_data_decision.md`. Its unauthenticated download
-plan can be inspected without a subscription:
+One month of Sharadar SFA (2026-07-25 to 2026-08-25) was purchased under the
+procurement decision in `reports/delisted_data_decision.md`; the licence
+requires the supplied Data to be deleted at expiry. The download plan can be
+inspected without a subscription:
 
 ```bash
 python -m alpha_graph.data.sharadar plan --profile validation --start 2009-01-01
@@ -81,8 +82,9 @@ python -m alpha_graph.data.sharadar plan --profile validation --start 2009-01-01
 
 `fetch` requires both `NASDAQ_DATA_LINK_API_KEY` and an explicit
 `--license-expires` date, after which `purge` deletes the snapshot. Raw and
-schema-validated Parquet snapshots remain isolated under `data/raw/sharadar/`
-and `data/cache/sharadar/`; they never overwrite `market_data.parquet`. Blind
+staged snapshots remain isolated under `data/raw/sharadar/`
+and `data/cache/sharadar/` — ZIP/CSV as served under `data/raw`, schema-validated
+Parquet under `data/cache`; they never overwrite `market_data.parquet`. Blind
 identity and coverage QA runs with:
 
 ```bash

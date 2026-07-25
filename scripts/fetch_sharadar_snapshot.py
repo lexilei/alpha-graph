@@ -1,11 +1,16 @@
 """Download whole Sharadar tables through the v3 datatable export API.
 
-``alpha_graph.data.sharadar`` targets an ``/api/v1/bulkdownloads`` endpoint that
-answers 401 for a live SFA key, and its filter and file-format assumptions do
-not match the served API either. That module still owns the audited snapshot
-manifest and QA gates, so it is being repaired separately; this script exists to
-secure the raw vendor files inside the paid window, which is the part that
-cannot be recreated after the licence lapses.
+Written on 2026-07-25 to secure the raw vendor files while
+``alpha_graph.data.sharadar`` was still calling a dead ``/api/v1/bulkdownloads``
+endpoint. That module has since been repaired and is the supported path: it
+produces the hash-verified snapshot and staged Parquet the QA gates consume,
+which this script does not. Prefer ``python -m alpha_graph.data.sharadar fetch``.
+
+This script remains only because the snapshot it already wrote is on disk in its
+own layout, and because it can pull tables the module has no TableSpec for
+(notably SFP fund prices). Its output is NOT a v2 snapshot: the audited module's
+``purge`` and ``verify_snapshot_manifest`` cannot read it, so use ``--purge``
+here to delete it when the licence lapses.
 
 Verified transport (2026-07-25, live SFA key):
 
@@ -40,6 +45,8 @@ from pathlib import Path
 
 BASE = "https://data.nasdaq.com/api/v3/datatables/SHARADAR"
 API_HOST = "data.nasdaq.com"
+DOWNLOAD_HOST_SUFFIX = ".s3.amazonaws.com"
+DOWNLOAD_BUCKET_PREFIX = "aws-gis-link-"
 KEY_FILE = Path(__file__).resolve().parent.parent / "data" / "private" / "nasdaq_api_key.txt"
 RAW_ROOT = Path(__file__).resolve().parent.parent / "data" / "raw" / "sharadar"
 
@@ -129,8 +136,15 @@ def _wait_for_link(table: str, token: str) -> dict:
 def _download(link: str, destination: Path) -> int:
     """Stream a presigned export to disk. The link carries its own auth."""
     parsed = urllib.parse.urlparse(link)
-    if parsed.scheme != "https":
-        raise FetchError("export link is not HTTPS")
+    host = parsed.hostname or ""
+    # The presigned signature authenticates the vendor's object, not the host,
+    # and any AWS customer can register a bucket.
+    if (
+        parsed.scheme != "https"
+        or not host.endswith(DOWNLOAD_HOST_SUFFIX)
+        or not host.startswith(DOWNLOAD_BUCKET_PREFIX)
+    ):
+        raise FetchError(f"refusing an export link outside the vendor bucket: {host!r}")
     partial = destination.with_suffix(destination.suffix + ".part")
     partial.unlink(missing_ok=True)
     try:
@@ -220,6 +234,9 @@ def fetch_snapshot(snapshot: str, license_expires: str, tables: tuple[str, ...])
             and recorded.get("status") == "COMPLETE"
             and destination.exists()
             and destination.stat().st_size == recorded.get("bytes")
+            # Same-length in-place corruption resumes as complete if only the
+            # size is checked, so the recorded digest is the real test.
+            and _sha256(destination) == recorded.get("sha256")
         ):
             _log(f"{table}: already complete, skipping")
             continue
@@ -250,23 +267,71 @@ def fetch_snapshot(snapshot: str, license_expires: str, tables: tuple[str, ...])
         _log(f"{table}: recorded {entry['csv_bytes'] / 1e6:.1f} MB CSV, "
              f"{len(entry['columns'])} columns")
 
-    manifest["completed_at_utc"] = datetime.now(timezone.utc).isoformat()
+    if set(TABLES) <= {t for t, e in entries.items() if e.get("status") == "COMPLETE"}:
+        manifest["completed_at_utc"] = datetime.now(timezone.utc).isoformat()
     _atomic_write_json(manifest_path, manifest)
     return manifest_path
 
 
+def purge_snapshot(snapshot: str) -> Path:
+    """Delete this script's snapshot and certify it.
+
+    The audited module's `purge` reads a v2 manifest with storage roots and
+    cannot touch what this script wrote, so the licence-expiry deletion has to
+    live here.
+    """
+    snapshot_dir = RAW_ROOT / snapshot
+    if not snapshot_dir.is_dir():
+        raise FetchError(f"no snapshot directory {snapshot_dir}")
+    manifest_path = snapshot_dir / "manifest.json"
+    manifest = _load_manifest(manifest_path)
+    if manifest.get("schema_version") != 1:
+        raise FetchError(
+            f"{manifest_path} is not a v1 snapshot; use the module's purge instead"
+        )
+    inventory = []
+    for path in sorted(snapshot_dir.iterdir()):
+        if path.is_symlink() or not path.is_file():
+            raise FetchError(f"refusing to purge unexpected entry {path}")
+        inventory.append({"name": path.name, "bytes": path.stat().st_size})
+    certificate = {
+        "snapshot": snapshot,
+        "schema_version": manifest.get("schema_version"),
+        "license_expires": manifest.get("license_expires"),
+        "purged_at_utc": datetime.now(timezone.utc).isoformat(),
+        "deleted": inventory,
+    }
+    for path in sorted(snapshot_dir.iterdir()):
+        path.unlink()
+    snapshot_dir.rmdir()
+    certificate_dir = Path(__file__).resolve().parent.parent / "reports" / "data_purge"
+    certificate_dir.mkdir(parents=True, exist_ok=True)
+    certificate_path = certificate_dir / f"{snapshot}.v1.purge.json"
+    _atomic_write_json(certificate_path, certificate)
+    _log(f"purged {len(inventory)} files; certificate at {certificate_path}")
+    return certificate_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--license-expires", required=True,
-                        help="subscription end date, YYYY-MM-DD")
+    parser.add_argument("--license-expires",
+                        help="subscription end date, YYYY-MM-DD (required to fetch)")
+    parser.add_argument("--purge", action="store_true",
+                        help="delete the snapshot and write a purge certificate")
     parser.add_argument("--snapshot",
                         default=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
     parser.add_argument("--tables", nargs="+", default=list(TABLES))
     args = parser.parse_args()
 
+    if args.purge:
+        print(purge_snapshot(args.snapshot))
+        return
+
     unknown = sorted(set(args.tables) - set(TABLES))
     if unknown:
         raise SystemExit(f"unknown tables: {unknown}")
+    if not args.license_expires:
+        raise SystemExit("--license-expires is required to fetch")
 
     manifest = fetch_snapshot(args.snapshot, args.license_expires, tuple(args.tables))
     _log(f"manifest written to {manifest}")

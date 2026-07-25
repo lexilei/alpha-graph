@@ -55,7 +55,10 @@ ALLOWED_API_HOST = "data.nasdaq.com"
 ALLOWED_API_PATH_PREFIX = "/api/v3/datatables/SHARADAR/"
 # Export payloads are served as presigned objects on a vendor-chosen S3 bucket,
 # so the file guard pins the provider suffix rather than one host.
-ALLOWED_DOWNLOAD_HOST_SUFFIX = ".amazonaws.com"
+ALLOWED_DOWNLOAD_HOST_SUFFIX = ".s3.amazonaws.com"
+# Any AWS customer can register a bucket, so the suffix alone would admit an
+# attacker-controlled origin. The vendor serves exports from one bucket family.
+ALLOWED_DOWNLOAD_BUCKET_PREFIX = "aws-gis-link-"
 MAX_NULL_VOLUME_FRACTION = 0.001
 MAX_NONPOSITIVE_PRICE_FRACTION = 0.00001
 EXPORT_READY_STATUS = "fresh"
@@ -110,7 +113,7 @@ TABLE_SPECS: dict[str, TableSpec] = {
         ("firstpricedate", "lastpricedate", "lastupdated"),
         None,
         False,
-        text_columns=frozenset({"siccode"}),
+        text_columns=frozenset({"siccode", "cusips", "figi", "relatedtickers"}),
     ),
     "SP500": TableSpec(
         "SP500",
@@ -289,10 +292,14 @@ def _validate_api_url(url: str) -> None:
 
 
 def _validate_bulk_file_url(url: str) -> None:
-    # Export links are presigned and single-use, so the only structural claim
-    # worth pinning is the provider origin; the signature carries the rest.
+    # The presigned signature authenticates the vendor's object, not the host
+    # we connect to, so the bucket itself has to be pinned.
     parsed = _parse_https_url(url, "bulk file")
-    if not (parsed.hostname or "").endswith(ALLOWED_DOWNLOAD_HOST_SUFFIX):
+    host = parsed.hostname or ""
+    bucket = host[: -len(ALLOWED_DOWNLOAD_HOST_SUFFIX)]
+    if not host.endswith(ALLOWED_DOWNLOAD_HOST_SUFFIX) or not bucket.startswith(
+        ALLOWED_DOWNLOAD_BUCKET_PREFIX
+    ):
         raise SharadarAPIError(
             "bulk file URL is outside the approved export HTTPS origin"
         )
@@ -446,8 +453,6 @@ class NasdaqBulkClient:
         if not url:
             raise SharadarAPIError("export file has no link")
         _validate_bulk_file_url(url)
-        # One export is one ZIP holding one CSV; the index is kept so the
-        # manifest layout survives if the vendor ever shards an export.
         path = destination / f"{stem}-file-000.zip"
 
         def download_and_validate() -> object:
@@ -660,10 +665,11 @@ def _validate_and_stage(raw_path: Path, staged_path: Path, spec: TableSpec) -> d
         # that would still catch systematic corruption, and always recorded.
         volume_missing = frame["volume"].isna() | ~np.isfinite(frame["volume"])
         null_volume_rows = int(volume_missing.sum())
-        if null_volume_rows > max(1, int(MAX_NULL_VOLUME_FRACTION * len(frame))):
+        volume_ceiling = int(MAX_NULL_VOLUME_FRACTION * len(frame))
+        if null_volume_rows > volume_ceiling:
             raise SharadarError(
                 f"SEP has {null_volume_rows} null volume rows in {raw_path.name}, "
-                f"above the {MAX_NULL_VOLUME_FRACTION:.3%} ceiling"
+                f"above the ceiling of {volume_ceiling}"
             )
         # Staging records the defect and bounds it rather than rejecting a whole
         # snapshot over a handful of vendor glitches; the `nonpositive_price`
@@ -671,10 +677,11 @@ def _validate_and_stage(raw_path: Path, staged_path: Path, spec: TableSpec) -> d
         # until every one of them is adjudicated.
         nonpositive = (frame[prices] <= 0).any(axis=1)
         nonpositive_price_rows = int(nonpositive.sum())
-        if nonpositive_price_rows > max(1, int(MAX_NONPOSITIVE_PRICE_FRACTION * len(frame))):
+        price_ceiling = int(MAX_NONPOSITIVE_PRICE_FRACTION * len(frame))
+        if nonpositive_price_rows > price_ceiling:
             raise SharadarError(
                 f"SEP has {nonpositive_price_rows} non-positive price rows in "
-                f"{raw_path.name}, above the {MAX_NONPOSITIVE_PRICE_FRACTION:.5%} ceiling"
+                f"{raw_path.name}, above the ceiling of {price_ceiling}"
             )
         ohlc = frame[["open", "high", "low", "close"]].dropna()
         bad_high = ohlc["high"] < ohlc[["open", "low", "close"]].max(axis=1)
@@ -1073,10 +1080,12 @@ def _fetch_snapshot_unlocked(
             "index": part.index,
             "filters": list(part.filters),
             "requested_at_utc": _utc_now(),
-            "status": file_info.get("status"),
+            # Normalized: _record_complete compares this against a lowercase
+            # constant, so storing the vendor's casing would make every
+            # completed part read as incomplete forever.
+            "status": str(file_info.get("status", "")).lower(),
             "data_snapshot_time": file_info.get("data_snapshot_time"),
             "empty_export": all(item["rows"] == 0 for item in file_records),
-            "schema": job.get("datatable", {}).get("columns"),
             "files": file_records,
         }
         manifest["parts"] = [item for item in manifest["parts"]
