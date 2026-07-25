@@ -28,7 +28,7 @@ import json
 import calendar
 import math
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import time
 import urllib.request
 import uuid
@@ -58,16 +58,17 @@ BAND = 0.05   # strike band vs spot; nearest N picked below
 _ENV_F = rec.OUT.parent.parent / "private" / "maker_env.txt"
 try:
     ENV = _ENV_F.read_text().strip().lower()
-except OSError:
-    ENV = "demo"
+except (OSError, ValueError):  # ValueError: non-UTF-8 file must fail safe
+    ENV = "demo"               # to demo, not crash-loop at import (r2 LOW)
 if ENV not in ("demo", "prod"):
     ENV = "demo"
 PROD = ENV == "prod"
 DAILY_LOSS_STOP = 15.0 if PROD else 25.0  # prod: ~30% of the $49.53 bankroll
 MAX_STRIKES = 5 if PROD else 12  # $44 budget can't two-side 12 strikes;
 # 5 keeps every quoted strike deterministically two-sided (panel 4)
-NET_CAP = 25 if PROD else 3 * INV_CAP  # prod: worst-case settlement loss on
-# max net inventory stays under the daily stop (panel 2 precondition 3)
+NET_CAP = 20 if PROD else 3 * INV_CAP  # prod: with the HARD projection in
+# the placement loop, worst reachable net ~= NET_CAP + in-flight SIZE, so
+# (20+5) x $0.60 = $15 = the stop; the old soft cap overshot ~2x (r2 F1)
 SINK_NAME = "makerprod" if PROD else "demomaker"
 
 
@@ -129,11 +130,26 @@ def main() -> None:
     max_cycles = None
     if "--cycles" in sys.argv:
         max_cycles = int(sys.argv[sys.argv.index("--cycles") + 1])
+    # flock singleton (r2 ops F2): the maker was the only long-lived process
+    # without one — a watchdog false-negative plus a manual start meant two
+    # makers double-quoting one account and interleaving one gzip sink
+    import fcntl
+    lock_dir = rec.OUT.parent.parent / "logs" / "launchd"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_f = open(lock_dir / f"maker_{ENV}.lock", "a")
+    try:
+        fcntl.flock(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print(f"another {ENV} maker holds the lock; exiting", flush=True)
+        return
     k = kc.Kalshi(ENV)
     sink = rec.Sink(SINK_NAME)
     vol = Vol()
     start_bal = None  # set from full equity (cash+positions) on first cycle
-    stop_day = datetime.now(timezone.utc).date()
+    # minus 5min: a process STARTING inside the 00:00-00:05 pre-roll window
+    # must treat "today" as yesterday, or it bypasses the held stop flag and
+    # warms its baseline off settlement-distorted equity (r2 logic MED-3)
+    stop_day = (datetime.now(timezone.utc) - timedelta(minutes=5)).date()
     stop_armed = False  # loss stop fires only on two consecutive breaches
     # settlement makes portfolio_value spike toward $1-marks or read 0 for
     # minutes at a time, so the stop AND the daily baseline both use a
@@ -150,6 +166,58 @@ def main() -> None:
         tmp = path.with_suffix(".tmp")  # atomic: a torn write would defeat
         tmp.write_text(f"{day} {val}")  # the durability this file exists for
         tmp.replace(path)
+
+    # fill telemetry (nightly r2 data F1 + logic MED-1): the in-memory-only
+    # dedup dropped every fill that landed during a restart gap, and on a
+    # FRESH account the first real batch was mis-classified as history. A
+    # durable per-env watermark (max recorded created_time) fixes both; a
+    # restart may re-record the single boundary fill (dup > loss; offline
+    # dedupe by trade_id).
+    fillmark_f = flag_dir / f"maker_fillmark_{ENV}.txt"
+    try:
+        fill_wm = fillmark_f.read_text().strip()
+    except OSError:
+        fill_wm = None  # first-ever session: snapshot on the first poll
+
+    def _write_fillmark():
+        tmp = fillmark_f.with_suffix(".tmp")
+        tmp.write_text(fill_wm or "")
+        tmp.replace(fillmark_f)
+
+    def record_fills(base_ctx: dict, tgt_map: dict | None = None) -> None:
+        nonlocal fill_wm
+        try:
+            fl = k.get("/portfolio/fills?limit=100").get("fills", [])
+        except Exception:  # noqa: BLE001
+            return
+        if fill_wm is None:
+            # first successful poll EVER (empty or not): everything present
+            # is pre-session history — snapshot the watermark, record none
+            fill_wm = max((f_.get("created_time") or "" for f_ in fl),
+                          default="")
+            _write_fillmark()
+            return
+        new_max = fill_wm
+        for f_ in fl:
+            ct = f_.get("created_time") or ""
+            if ct < fill_wm:
+                continue  # strictly older than the watermark: history
+            fid = str(f_.get("trade_id") or f_.get("fill_id")
+                      or str(f_.get("order_id", "")) + ct)
+            if fid in seen_fills:
+                continue
+            seen_fills[fid] = True
+            ctx_t = (tgt_map or {}).get(f_.get("ticker")) or {}
+            sink.write("fill", {"raw": f_, "ctx": {
+                **base_ctx, "fv": ctx_t.get("fv"),
+                "our_bid": ctx_t.get("bid"), "our_ask": ctx_t.get("ask")}})
+            if ct > new_max:
+                new_max = ct
+        if new_max != fill_wm:
+            fill_wm = new_max
+            _write_fillmark()
+        while len(seen_fills) > 5000:
+            seen_fills.pop(next(iter(seen_fills)))
 
     print(f"maker start env={ENV} stop=${DAILY_LOSS_STOP} "
           f"strikes={MAX_STRIKES} net_cap={NET_CAP}", flush=True)
@@ -215,6 +283,9 @@ def main() -> None:
                 # halted for the day; the flag survives watchdog restarts so
                 # a restart cannot silently defeat the stop. Auto-resumes at
                 # the next UTC roll (new flag name) with a fresh baseline.
+                # Fills are still polled: the fills that CAUSED the stop are
+                # the most diagnostic records of all (r2 data F2).
+                record_fills({"halted": True}, last_targets)
                 sink.flush()
                 n += 1
                 time.sleep(45)
@@ -237,8 +308,12 @@ def main() -> None:
                         k.delete(f"/portfolio/events/orders/{o['order_id']}")
                     except Exception:  # noqa: BLE001
                         n_fail += 1
-                stop_flag.write_text(
-                    f"eq_med {eq_med:.2f} baseline {start_bal:.2f}\n")
+                try:
+                    stop_flag.write_text(
+                        f"eq_med {eq_med:.2f} baseline {start_bal:.2f}\n")
+                except OSError:
+                    pass  # disk-full: halting still holds via per-cycle
+                    # breach re-entry; only restart persistence is lost
                 sink.write("maker_stop", {"balance": bal, "equity": equity,
                                           "eq_med": eq_med,
                                           "baseline": start_bal,
@@ -412,11 +487,26 @@ def main() -> None:
                 for (t_, side), v in live.items()
                 if v is not None and v[1] is not None)
             budget = bal * 0.9 - reserved
-            n_skip_budget = n_skip_clamp = 0
+            # HARD net-inventory projection (nightly r2 money F1): the old
+            # per-cycle-start check let one adverse cycle overshoot NET_CAP
+            # ~2x (25 fresh contracts on 5 strikes) — settlement loss past
+            # the stop. Count every kept resting order and every new order
+            # as if it fills; never project past the cap.
+            net_proj = net_total
+            for (t_, side), v in live.items():
+                if v is not None:
+                    net_proj += SIZE if side == "bid" else -SIZE
+            n_skip_budget = n_skip_clamp = n_skip_net = 0
             for tick, tgt in targets.items():
                 fresh = None
                 for side in ("bid", "ask"):
                     if side not in tgt or live.get((tick, side)):
+                        continue
+                    if side == "bid" and net_proj + SIZE > NET_CAP:
+                        n_skip_net += 1
+                        continue
+                    if side == "ask" and net_proj - SIZE < -NET_CAP:
+                        n_skip_net += 1
                         continue
                     # v2 API: side bid=buy yes, ask=sell yes; price is yes price
                     price = tgt[side]
@@ -461,44 +551,21 @@ def main() -> None:
                             # nothing resting beyond 120s
                             "expiration_time": int(time.time()) + 120})
                         budget -= cost
+                        net_proj += SIZE if side == "bid" else -SIZE
                     except Exception as e:  # noqa: BLE001
                         sink.write("order_err", {"ticker": tick, "side": side,
                                                  "err": str(e)[:200]})
-            # fill telemetry (panel 2): /portfolio/fills is the only source
-            # that sees sub-cycle fills — the toxic subset position-diffing
-            # structurally misses. Raw exchange record (incl. fee/is_taker
-            # fields) + decision context, from fill #1.
-            try:
-                fl = k.get("/portfolio/fills?limit=100").get("fills", [])
-            except Exception:  # noqa: BLE001
-                fl = []
-            bootstrap = (not seen_fills) and bool(fl)
-            for f_ in fl:
-                fid = str(f_.get("trade_id") or f_.get("fill_id")
-                          or str(f_.get("order_id", "")) + str(f_.get("created_time")))
-                if fid in seen_fills:
-                    continue
-                seen_fills[fid] = True
-                if bootstrap:
-                    continue  # pre-session history: mark seen, don't record
-                ctx_t = (targets.get(f_.get("ticker"))
-                         or last_targets.get(f_.get("ticker")) or {})
-                sink.write("fill", {
-                    "raw": f_,
-                    "ctx": {"spot": S, "sigma": sig, "sigma_fast": sig_f,
-                            "fv": ctx_t.get("fv"),
-                            "our_bid": ctx_t.get("bid"),
-                            "our_ask": ctx_t.get("ask"),
-                            "net_before": net_total,
-                            "n_open": len(open_orders)}})
-            while len(seen_fills) > 5000:
-                seen_fills.pop(next(iter(seen_fills)))
+            record_fills({"spot": S, "sigma": sig, "sigma_fast": sig_f,
+                          "net_before": net_total,
+                          "n_open": len(open_orders)},
+                         {**last_targets, **targets})
             last_targets = targets
             sink.write("maker_cycle", {
                 "spot": S, "sigma_1s": sig, "balance": bal,
                 "equity": round(equity, 2), "eq_med": round(eq_med, 2),
                 "baseline": round(start_bal, 2) if start_bal is not None else None,
                 "skip_budget": n_skip_budget, "skip_clamp": n_skip_clamp,
+                "skip_net": n_skip_net,
                 "targets": {t: {kk: round(v, 4) if isinstance(v, float) else v
                                 for kk, v in d.items()}
                             for t, d in targets.items()},
