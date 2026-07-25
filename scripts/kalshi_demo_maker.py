@@ -48,17 +48,48 @@ CYCLE_S = 10.0
 STICKY = 0.02
 SIZE = 5
 INV_CAP = 50
-DAILY_LOSS_STOP = 25.0
 BAND = 0.05   # strike band vs spot; nearest N picked below
-MAX_STRIKES = 12
+
+# environment is FILE-driven (data/private/maker_env.txt: "demo"|"prod"),
+# never argv: the watchdog relaunches with bare argv, and an argv switch
+# would silently revert prod->demo on the first restart (panel review B1).
+# All durable state (baseline/stop-flag/sink) is namespaced per env so a
+# demo baseline ($962) can never disarm the prod ($49) loss stop (B2).
+_ENV_F = rec.OUT.parent.parent.parent / "private" / "maker_env.txt"
+try:
+    ENV = _ENV_F.read_text().strip().lower()
+except OSError:
+    ENV = "demo"
+if ENV not in ("demo", "prod"):
+    ENV = "demo"
+PROD = ENV == "prod"
+DAILY_LOSS_STOP = 15.0 if PROD else 25.0  # prod: ~30% of the $49.53 bankroll
+MAX_STRIKES = 5 if PROD else 12  # $44 budget can't two-side 12 strikes;
+# 5 keeps every quoted strike deterministically two-sided (panel 4)
+NET_CAP = 25 if PROD else 3 * INV_CAP  # prod: worst-case settlement loss on
+# max net inventory stays under the daily stop (panel 2 precondition 3)
+SINK_NAME = "makerprod" if PROD else "demomaker"
 
 
-def spot_now() -> float:
+def spot_now() -> tuple[float, float]:
+    """(last price, print age seconds). The ticker's own timestamp was
+    fetched-and-ignored before — a stuck feed passed the jump guard from
+    cycle 2 on and anchored fv to a stale price (panel 6 drill)."""
     req = urllib.request.Request(
         "https://api.exchange.coinbase.com/products/BTC-USD/ticker",
         headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=10) as r:
-        return float(json.load(r)["price"])
+        tk = json.load(r)
+    age = 0.0
+    t = tk.get("time")
+    if t:
+        try:
+            ts = datetime.strptime(t[:19], "%Y-%m-%dT%H:%M:%S").replace(
+                tzinfo=timezone.utc).timestamp()
+            age = max(0.0, time.time() - ts)
+        except ValueError:
+            pass
+    return float(tk["price"]), age
 
 
 class Vol:
@@ -98,8 +129,8 @@ def main() -> None:
     max_cycles = None
     if "--cycles" in sys.argv:
         max_cycles = int(sys.argv[sys.argv.index("--cycles") + 1])
-    k = kc.Kalshi("demo")
-    sink = rec.Sink("demomaker")
+    k = kc.Kalshi(ENV)
+    sink = rec.Sink(SINK_NAME)
     vol = Vol()
     start_bal = None  # set from full equity (cash+positions) on first cycle
     stop_day = datetime.now(timezone.utc).date()
@@ -108,34 +139,27 @@ def main() -> None:
     # minutes at a time, so the stop AND the daily baseline both use a
     # 30-cycle (~5min) median of equity, never an instantaneous read
     eq_hist: list[float] = []
+    seen_fills: dict[str, bool] = {}
+    last_targets: dict = {}
     prev_S: float | None = None
     flag_dir = rec.OUT.parent.parent / "logs" / "launchd"
     flag_dir.mkdir(parents=True, exist_ok=True)
-    base_f = flag_dir / "maker_baseline.txt"  # "<day> <start_bal>"
+    base_f = flag_dir / f"maker_baseline_{ENV}.txt"  # "<day> <start_bal>"
 
     def _write_baseline(path, day, val):
         tmp = path.with_suffix(".tmp")  # atomic: a torn write would defeat
         tmp.write_text(f"{day} {val}")  # the durability this file exists for
         tmp.replace(path)
 
-    print("demo maker start", flush=True)
+    print(f"maker start env={ENV} stop=${DAILY_LOSS_STOP} "
+          f"strikes={MAX_STRIKES} net_cap={NET_CAP}", flush=True)
 
     n = 0
     while max_cycles is None or n < max_cycles:
         t0 = time.time()
         try:
-            S = spot_now()
-            # a glitched/stale print must not poison fv and sigma — but it
-            # must skip only QUOTING, never the loss-stop below (fix-review
-            # M2: the first version of this guard bypassed both)
-            glitch = prev_S is not None and abs(S / prev_S - 1) > 0.03
-            if glitch:
-                sink.write("spot_glitch", {"prev": prev_S, "now": S})
-            prev_S = S
-            if not glitch:
-                vol.update(S, t0)
-            sig = vol.sigma_1s
-
+            # equity and the loss-stop are evaluated FIRST: a spot-feed
+            # failure must skip quoting, never blind the stop (panel 6)
             bal_resp = k.get("/portfolio/balance")
             bal = float(bal_resp["balance_dollars"])
             # portfolio_value is in CENTS (no _dollars twin in the payload)
@@ -186,7 +210,7 @@ def main() -> None:
             # window yesterday's halt must keep holding under yesterday's
             # flag, not re-fire under today's and halt the whole new day
             # (fix-review M3)
-            stop_flag = flag_dir / f"maker_stop_{stop_day}.flag"
+            stop_flag = flag_dir / f"maker_stop_{ENV}_{stop_day}.flag"
             if stop_flag.exists():
                 # halted for the day; the flag survives watchdog restarts so
                 # a restart cannot silently defeat the stop. Auto-resumes at
@@ -227,6 +251,18 @@ def main() -> None:
                 n += 1
                 continue
 
+            # spot AFTER the stop: a glitched/stale/failed print skips only
+            # quoting for this cycle (fix-review M2 + panel 6 staleness)
+            S, spot_age = spot_now()
+            glitch = ((prev_S is not None and abs(S / prev_S - 1) > 0.03)
+                      or spot_age > 30)
+            if glitch:
+                sink.write("spot_glitch", {"prev": prev_S, "now": S,
+                                           "age_s": round(spot_age, 1)})
+            prev_S = S
+            if not glitch:
+                vol.update(S, t0)
+            sig = vol.sigma_1s
             if glitch:  # stop evaluated above; only quoting sits out
                 sink.flush()
                 n += 1
@@ -236,8 +272,8 @@ def main() -> None:
                    for p in k.get("/portfolio/positions").get(
                        "market_positions", [])}
             net_total = sum(pos.values())  # all markets share the BTC underlying
-            long_capped = net_total > 3 * INV_CAP
-            short_capped = net_total < -3 * INV_CAP
+            long_capped = net_total > NET_CAP
+            short_capped = net_total < -NET_CAP
 
             # audit CRITICAL: open markets exceed one page and Kalshi puts
             # the near-money near-expiry strikes on page 2 — without cursor
@@ -428,6 +464,36 @@ def main() -> None:
                     except Exception as e:  # noqa: BLE001
                         sink.write("order_err", {"ticker": tick, "side": side,
                                                  "err": str(e)[:200]})
+            # fill telemetry (panel 2): /portfolio/fills is the only source
+            # that sees sub-cycle fills — the toxic subset position-diffing
+            # structurally misses. Raw exchange record (incl. fee/is_taker
+            # fields) + decision context, from fill #1.
+            try:
+                fl = k.get("/portfolio/fills?limit=100").get("fills", [])
+            except Exception:  # noqa: BLE001
+                fl = []
+            bootstrap = (not seen_fills) and bool(fl)
+            for f_ in fl:
+                fid = str(f_.get("trade_id") or f_.get("fill_id")
+                          or str(f_.get("order_id", "")) + str(f_.get("created_time")))
+                if fid in seen_fills:
+                    continue
+                seen_fills[fid] = True
+                if bootstrap:
+                    continue  # pre-session history: mark seen, don't record
+                ctx_t = (targets.get(f_.get("ticker"))
+                         or last_targets.get(f_.get("ticker")) or {})
+                sink.write("fill", {
+                    "raw": f_,
+                    "ctx": {"spot": S, "sigma": sig, "sigma_fast": sig_f,
+                            "fv": ctx_t.get("fv"),
+                            "our_bid": ctx_t.get("bid"),
+                            "our_ask": ctx_t.get("ask"),
+                            "net_before": net_total,
+                            "n_open": len(open_orders)}})
+            while len(seen_fills) > 5000:
+                seen_fills.pop(next(iter(seen_fills)))
+            last_targets = targets
             sink.write("maker_cycle", {
                 "spot": S, "sigma_1s": sig, "balance": bal,
                 "equity": round(equity, 2), "eq_med": round(eq_med, 2),
@@ -438,8 +504,14 @@ def main() -> None:
                             for t, d in targets.items()},
                 "n_open": len(open_orders), "pos": pos})
         except Exception as e:  # noqa: BLE001
-            sink.write("maker_err", str(e)[:300])
-        sink.flush()
+            try:
+                sink.write("maker_err", str(e)[:300])
+            except OSError:
+                pass  # ENOSPC here must degrade, not crash-loop (panel 6)
+        try:
+            sink.flush()
+        except OSError:
+            pass
         n += 1
         time.sleep(max(0.0, CYCLE_S - (time.time() - t0)))
     print("maker loop ended", flush=True)
