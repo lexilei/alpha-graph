@@ -74,10 +74,24 @@ def main() -> None:
 
     live = [m for m in mkts if m.get("floor_strike") and 3600 < tau(m) < 40 * 3600]
     check("live-window markets exist", len(live) > 10, f"{len(live)}")
-    probe = max(live, key=lambda x: x["floor_strike"])  # deepest OTM
-    ob = k.get(f"/markets/{probe['ticker']}/orderbook?depth=1")
-    check("orderbook schema (orderbook_fp)", "orderbook_fp" in ob,
-          str(list(ob.keys())))
+
+    # pick a market whose YES ask is >= 3c so a 1c post-only bid cannot
+    # cross (a deep-OTM strike sits at 1c and would reject as post-only
+    # cross — that is the fee/moneyness of the strike, not a prod fault)
+    probe, best_ask = None, None
+    for m in sorted(live, key=lambda x: abs(x["floor_strike"] - 64000)):
+        ob = k.get(f"/markets/{m['ticker']}/orderbook?depth=1").get(
+            "orderbook_fp", {})
+        nb = ob.get("no_dollars") or []
+        ask = 1.0 - float(nb[-1][0]) if nb else None
+        if ask is not None and ask >= 0.03:
+            probe, best_ask = m, ask
+            break
+    check("orderbook schema + a non-crossing strike found", probe is not None,
+          f"ask={best_ask}")
+    if probe is None:
+        print(f"\nno safe strike for the 1c test; failures={failures}")
+        sys.exit(1)
     fl = k.get("/portfolio/fills?limit=10")
     check("fills endpoint readable", "fills" in fl, f"n={len(fl.get('fills', []))}")
 
