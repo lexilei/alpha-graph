@@ -9,7 +9,7 @@ Usage before purchase::
 
     python -m alpha_graph.data.sharadar plan --profile validation
 
-Usage after written license confirmation::
+Usage after purchase::
 
     python -m alpha_graph.data.sharadar fetch --profile validation \
         --package SFA --license-expires 2026-08-15
@@ -742,8 +742,6 @@ def _license_payload(manifest: dict) -> dict:
         "package": manifest["package"],
         "snapshot": manifest["snapshot"],
         "license_expires": manifest["license_expires"],
-        "written_confirmation_name": manifest["license_evidence_name"],
-        "written_confirmation_sha256": manifest["license_evidence_sha256"],
         "terms_url": manifest.get("terms_url", TERMS_URL),
         "expiry_action": (
             "Stop use and delete supplied Data unless written terms say otherwise"
@@ -819,7 +817,6 @@ def verify_snapshot_manifest(
         ("snapshot", "snapshot"),
         ("package", "package"),
         ("license_expires", "license_expires"),
-        ("license_evidence_sha256", "written_confirmation_sha256"),
     ):
         if manifest.get(manifest_key) != license_record.get(license_key):
             raise SharadarError(f"license metadata mismatch for {manifest_key}")
@@ -869,7 +866,6 @@ def _fetch_snapshot_unlocked(
     snapshot: str,
     package: str,
     license_expires: str,
-    license_evidence: Path,
     raw_root: Path = RAW_ROOT,
     staged_root: Path = STAGED_ROOT,
     qa_root: Path = DATA_DIR / "qa" / "sharadar",
@@ -886,10 +882,6 @@ def _fetch_snapshot_unlocked(
         raise ValueError("download plan must not be empty")
     if len({part.stem for part in plan}) != len(plan):
         raise ValueError("download plan contains duplicate part stems")
-    license_evidence = Path(license_evidence)
-    if not license_evidence.is_file():
-        raise ValueError("license_evidence must be an existing written confirmation file")
-    license_evidence_sha256 = sha256_file(license_evidence)
     expiry = validate_license_expiry(license_expires)
     raw_snapshot = _snapshot_path(raw_root, snapshot)
     staged_snapshot = _snapshot_path(staged_root, snapshot)
@@ -910,7 +902,6 @@ def _fetch_snapshot_unlocked(
         if (
             manifest.get("package") != package
             or manifest.get("license_expires") != expiry
-            or manifest.get("license_evidence_sha256") != license_evidence_sha256
         ):
             raise SharadarError("snapshot already exists with different license metadata")
         expected_roots = {
@@ -932,7 +923,6 @@ def _fetch_snapshot_unlocked(
                 ("snapshot", "snapshot"),
                 ("package", "package"),
                 ("license_expires", "license_expires"),
-                ("license_evidence_sha256", "written_confirmation_sha256"),
             ):
                 if manifest.get(manifest_key) != license_record.get(license_key):
                     raise SharadarError(
@@ -956,8 +946,6 @@ def _fetch_snapshot_unlocked(
             "snapshot": snapshot,
             "package": package,
             "license_expires": expiry,
-            "license_evidence_name": license_evidence.name,
-            "license_evidence_sha256": license_evidence_sha256,
             "storage_roots": {
                 "raw": str(raw_root.resolve()),
                 "staged": str(staged_root.resolve()),
@@ -1041,7 +1029,6 @@ def fetch_snapshot(
     snapshot: str,
     package: str,
     license_expires: str,
-    license_evidence: Path,
     raw_root: Path = RAW_ROOT,
     staged_root: Path = STAGED_ROOT,
     qa_root: Path = DATA_DIR / "qa" / "sharadar",
@@ -1058,7 +1045,6 @@ def fetch_snapshot(
             snapshot=snapshot,
             package=package,
             license_expires=license_expires,
-            license_evidence=license_evidence,
             raw_root=raw_root,
             staged_root=staged_root,
             qa_root=qa_root,
@@ -1224,7 +1210,6 @@ def main() -> None:
     )
     fetch_parser.add_argument("--package", choices=("SFA", "SEP"), default="SFA")
     fetch_parser.add_argument("--license-expires", required=True)
-    fetch_parser.add_argument("--license-evidence", required=True)
     fetch_parser.add_argument("--api-key-env", default="NASDAQ_DATA_LINK_API_KEY")
     purge_parser = sub.add_parser("purge", help="delete a snapshot after license expiry")
     purge_parser.add_argument("--snapshot", required=True)
@@ -1247,7 +1232,6 @@ def main() -> None:
         snapshot=args.snapshot,
         package=args.package,
         license_expires=args.license_expires,
-        license_evidence=Path(args.license_evidence),
     )
     print(manifest)
 

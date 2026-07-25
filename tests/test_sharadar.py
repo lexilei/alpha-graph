@@ -140,7 +140,6 @@ def _write_complete_snapshot(raw_snapshot, staged_snapshot, tables):
         "snapshot": raw_snapshot.name,
         "package": "SFA",
         "license_expires": "2099-01-01",
-        "license_evidence_sha256": "fixture",
         "storage_roots": {
             "raw": str(raw_snapshot.parent.resolve()),
             "staged": str(staged_snapshot.parent.resolve()),
@@ -159,7 +158,6 @@ def _write_complete_snapshot(raw_snapshot, staged_snapshot, tables):
         "snapshot": raw_snapshot.name,
         "package": "SFA",
         "license_expires": "2099-01-01",
-        "written_confirmation_sha256": "fixture",
     }))
     return path
 
@@ -342,8 +340,6 @@ def test_fetch_snapshot_is_resumable_and_manifest_has_no_secret(tmp_path):
     raw_root = tmp_path / "raw"
     staged_root = tmp_path / "staged"
     part = DownloadPart("SEP", 0, (("ticker.in[]", "AAA"),))
-    license_evidence = tmp_path / "license-confirmation.txt"
-    license_evidence.write_text("written vendor confirmation")
     calls = {"jobs": 0, "files": 0}
 
     def get_json(url, token, timeout):
@@ -367,7 +363,6 @@ def test_fetch_snapshot_is_resumable_and_manifest_has_no_secret(tmp_path):
         snapshot="unit-test",
         package="SEP",
         license_expires="2099-01-01",
-        license_evidence=license_evidence,
         raw_root=raw_root,
         staged_root=staged_root,
     )
@@ -380,7 +375,6 @@ def test_fetch_snapshot_is_resumable_and_manifest_has_no_secret(tmp_path):
         snapshot="unit-test",
         package="SEP",
         license_expires="2099-01-01",
-        license_evidence=license_evidence,
         raw_root=raw_root,
         staged_root=staged_root,
     )
@@ -394,7 +388,6 @@ def test_fetch_snapshot_is_resumable_and_manifest_has_no_secret(tmp_path):
             snapshot="unit-test",
             package="SEP",
             license_expires="2099-01-01",
-            license_evidence=license_evidence,
             raw_root=raw_root,
             staged_root=staged_root,
         )
@@ -405,8 +398,6 @@ def test_fetch_snapshot_is_resumable_and_manifest_has_no_secret(tmp_path):
 
 
 def test_interrupted_snapshot_plan_cannot_be_replaced(tmp_path):
-    evidence = tmp_path / "license.txt"
-    evidence.write_text("written confirmation")
     first = DownloadPart("SEP", 0, (("ticker.in[]", "AAA"),))
     second = DownloadPart("SEP", 1, (("ticker.in[]", "BBB"),))
     replacement = DownloadPart("SEP", 1, (("ticker.in[]", "CCC"),))
@@ -431,7 +422,6 @@ def test_interrupted_snapshot_plan_cannot_be_replaced(tmp_path):
         "snapshot": "interrupted",
         "package": "SEP",
         "license_expires": "2099-01-01",
-        "license_evidence": evidence,
         "raw_root": tmp_path / "raw",
         "staged_root": tmp_path / "staged",
     }
@@ -447,8 +437,6 @@ def test_interrupted_snapshot_plan_cannot_be_replaced(tmp_path):
 
 
 def test_empty_export_completes_and_tampering_fails_closed(tmp_path):
-    evidence = tmp_path / "license.txt"
-    evidence.write_text("written confirmation")
     client = NasdaqBulkClient(
         "secret",
         json_getter=lambda url, token, timeout: {
@@ -461,7 +449,6 @@ def test_empty_export_completes_and_tampering_fails_closed(tmp_path):
         snapshot="empty",
         package="SEP",
         license_expires="2099-01-01",
-        license_evidence=evidence,
         raw_root=tmp_path / "raw",
         staged_root=tmp_path / "staged",
     )
@@ -489,8 +476,6 @@ def test_empty_export_completes_and_tampering_fails_closed(tmp_path):
 
 
 def test_snapshot_id_and_package_entitlements_fail_closed(tmp_path):
-    evidence = tmp_path / "license.txt"
-    evidence.write_text("written confirmation")
     client = NasdaqBulkClient("secret")
     with pytest.raises(ValueError, match="single safe component"):
         fetch_snapshot(
@@ -499,7 +484,6 @@ def test_snapshot_id_and_package_entitlements_fail_closed(tmp_path):
             snapshot="/tmp/escape",
             package="SEP",
             license_expires="2099-01-01",
-            license_evidence=evidence,
             raw_root=tmp_path / "raw",
             staged_root=tmp_path / "staged",
         )
@@ -510,15 +494,12 @@ def test_snapshot_id_and_package_entitlements_fail_closed(tmp_path):
             snapshot="bad-entitlement",
             package="SEP",
             license_expires="2099-01-01",
-            license_evidence=evidence,
             raw_root=tmp_path / "raw",
             staged_root=tmp_path / "staged",
         )
 
 
 def test_snapshot_symlinks_and_concurrent_lock_fail_closed(tmp_path):
-    evidence = tmp_path / "license.txt"
-    evidence.write_text("written confirmation")
     raw_root = tmp_path / "raw"
     staged_root = tmp_path / "staged"
     raw_root.mkdir()
@@ -528,7 +509,6 @@ def test_snapshot_symlinks_and_concurrent_lock_fail_closed(tmp_path):
     kwargs = {
         "package": "SEP",
         "license_expires": "2099-01-01",
-        "license_evidence": evidence,
         "raw_root": raw_root,
         "staged_root": staged_root,
     }
@@ -683,8 +663,6 @@ def test_purge_completes_from_journal_when_raw_is_gone(tmp_path):
 
 
 def test_license_json_recreated_on_in_progress_resume(tmp_path):
-    evidence = tmp_path / "license.txt"
-    evidence.write_text("written confirmation")
     first = DownloadPart("SEP", 0, (("ticker.in[]", "AAA"),))
     second = DownloadPart("SEP", 1, (("ticker.in[]", "BBB"),))
     fail_second = {"flag": True}
@@ -709,7 +687,6 @@ def test_license_json_recreated_on_in_progress_resume(tmp_path):
         "snapshot": "resume-license",
         "package": "SEP",
         "license_expires": "2099-01-01",
-        "license_evidence": evidence,
         "raw_root": tmp_path / "raw",
         "staged_root": tmp_path / "staged",
     }
@@ -725,7 +702,6 @@ def test_license_json_recreated_on_in_progress_resume(tmp_path):
     recreated = json.loads(license_path.read_text())
     assert recreated["snapshot"] == "resume-license"
     assert recreated["package"] == "SEP"
-    assert recreated["written_confirmation_sha256"] == sha256_file(evidence)
 
     recreated["license_expires"] = "2098-01-01"
     license_path.write_text(json.dumps(recreated))

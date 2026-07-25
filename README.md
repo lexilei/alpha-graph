@@ -79,8 +79,8 @@ plan can be inspected without a subscription:
 python -m alpha_graph.data.sharadar plan --profile validation --start 2009-01-01
 ```
 
-After written license confirmation, `fetch` requires both
-`NASDAQ_DATA_LINK_API_KEY` and an explicit `--license-expires` date. Raw and
+`fetch` requires both `NASDAQ_DATA_LINK_API_KEY` and an explicit
+`--license-expires` date, after which `purge` deletes the snapshot. Raw and
 schema-validated Parquet snapshots remain isolated under `data/raw/sharadar/`
 and `data/cache/sharadar/`; they never overwrite `market_data.parquet`. Blind
 identity and coverage QA runs with:

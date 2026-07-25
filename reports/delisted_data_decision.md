@@ -5,8 +5,12 @@ Decision date: 2026-07-13. Research only. No subscription has been purchased.
 ## Decision
 
 Do not buy an annual data subscription. After the ingestion and blind-QA
-harness is complete, and only after written license confirmation, approve one
-month of Sharadar SFA Full History Personal at USD 79 as an R&D expense.
+harness is complete, approve one month of Sharadar SFA Full History Personal at
+USD 79 as an R&D expense.
+
+Amended 2026-07-25: the pre-purchase written-confirmation gate was removed by
+user decision. The one-month term is accepted as-is under the published terms;
+`--license-expires` and `purge` remain the operative controls.
 
 This is not approval to renew. Renewal requires a new factor to pass the full
 promotion gate after the recurring data fee is included. At USD 10,000 of NAV,
@@ -80,27 +84,18 @@ applied symmetrically to long and short holdings. Ordinary index removals and
 corporate transactions must use their actual next-tradable or transaction
 terms instead.
 
-## License gate
+## License terms
 
 Nasdaq Data Link terms require use to stop and supplied Data to be deleted when
-the order expires. The general terms permit some non-reversible Derived Data,
-but the exact post-expiry right and any Sharadar-specific terms require written
-confirmation. Before purchase, obtain written answers to all of the following:
-
-1. Does Personal Use permit research and automated trading solely for the
-   subscriber's own brokerage account?
-2. After cancellation, which identity mappings, aggregate QA results,
-   backtest summaries, and model parameters may be retained and used?
-3. Which raw files, normalized files, backups, and cloud copies must be
-   deleted, and on what date?
-
+the order expires; the general terms permit some non-reversible Derived Data.
+Plan the month on the assumption that raw and normalized vendor files are
+deleted at expiry: `--license-expires` pins the date into the snapshot manifest
+and `purge` performs the deletion with a certificate.
 Terms: https://data.nasdaq.com/terms
 
-If any answer is incompatible with the workflow, do not purchase. Norgate
-explicitly permits personal investment/trading, but its EULA requires Data and
-Derived Data to be deleted when the subscription lapses, so it is not a
-one-time-download workaround:
-https://norgatedata.com/subscribe/eula.php
+Norgate explicitly permits personal investment/trading, but its EULA requires
+Data and Derived Data to be deleted when the subscription lapses, so it is not
+a one-time-download workaround: https://norgatedata.com/subscribe/eula.php
 
 ## Blind acceptance gates
 
@@ -139,7 +134,7 @@ computed from the vendor data:
 1. Finish the bulk-download plan, checksum manifest, schema validation,
    identity quarantine, QA report, and license-expiry guard before activating
    a paid month.
-2. Obtain the written license answers and then activate SFA for one month.
+2. Activate SFA for one month.
 3. Download reference tables first, then the scoped historical S&P panel and
    research tables. Run identity and price QA without reading factor returns.
 4. Backfill departed-company SEC filings and acceptance timestamps in
