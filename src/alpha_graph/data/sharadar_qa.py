@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 from collections import defaultdict
 from pathlib import Path
@@ -398,6 +399,39 @@ def load_identity_overrides(
     return frame
 
 
+def _reuse_stem(ticker: str) -> str:
+    """Strip the vendor's ticker-reuse suffix: APC1 -> APC, AAC2 -> AAC."""
+    return re.sub(r"\d+$", "", str(ticker))
+
+
+def _vendor_ticker_indices(vendor_tickers: pd.DataFrame) -> tuple[dict, dict]:
+    """Two fallback lookups, both keyed the same way as the exact index.
+
+    A retired ticker that the vendor has re-keyed is invisible to an exact
+    match: the reference spine says APC, the vendor says APC1. The vendor
+    states the correspondence twice over — in the suffix convention and in the
+    `relatedtickers` field — and both are used here only to *propose*
+    candidates. Every proposal still has to survive the interval-bounds filter
+    and the single-vendor-id test below, so an accidental match becomes
+    `ambiguous`, never a silent bind.
+    """
+    suffixed = vendor_tickers[
+        vendor_tickers["ticker"].astype(str).str.match(r"^.+\d$")
+    ]
+    by_stem: dict[str, list[int]] = {}
+    for index, ticker in zip(suffixed.index, suffixed["ticker"]):
+        by_stem.setdefault(_ticker_norm(_reuse_stem(ticker)), []).append(index)
+
+    by_related: dict[str, list[int]] = {}
+    if "relatedtickers" in vendor_tickers.columns:
+        for index, related in zip(
+            vendor_tickers.index, vendor_tickers["relatedtickers"].fillna("")
+        ):
+            for alias in str(related).replace("|", " ").replace(",", " ").split():
+                by_related.setdefault(_ticker_norm(alias), []).append(index)
+    return by_stem, by_related
+
+
 def resolve_identity_intervals(
     intervals: pd.DataFrame,
     vendor_tickers: pd.DataFrame,
@@ -407,6 +441,7 @@ def resolve_identity_intervals(
 ) -> pd.DataFrame:
     overrides = overrides if overrides is not None else load_identity_overrides(None)
     by_ticker = {key: group for key, group in vendor_tickers.groupby("ticker_norm", sort=False)}
+    by_stem, by_related = _vendor_ticker_indices(vendor_tickers)
     tolerance = pd.Timedelta(days=tolerance_days)
     rows = []
     for interval in intervals.itertuples(index=False):
@@ -446,11 +481,30 @@ def resolve_identity_intervals(
             status = "pending"
 
         if status == "pending":
-            candidates = candidates[
-                candidates["bounds_complete"]
-                & (candidates["firstpricedate"] <= interval.valid_from + tolerance)
-                & (candidates["lastpricedate"] >= interval.valid_to - tolerance)
-            ]
+            def within_interval(frame: pd.DataFrame) -> pd.DataFrame:
+                return frame[
+                    frame["bounds_complete"]
+                    & (frame["firstpricedate"] <= interval.valid_from + tolerance)
+                    & (frame["lastpricedate"] >= interval.valid_to - tolerance)
+                ]
+
+            candidates = within_interval(candidates)
+            # Only fall back when the exact ticker offered nothing at all; a
+            # ticker that matched but failed its date window is a different
+            # security, not a missing alias.
+            if method == "exact_ticker_interval" and candidates.empty:
+                for fallback_method, index in (
+                    ("reuse_suffix_interval", by_stem),
+                    ("related_ticker_interval", by_related),
+                ):
+                    positions = index.get(interval.reference_ticker)
+                    if not positions:
+                        continue
+                    proposed = within_interval(vendor_tickers.loc[positions])
+                    if not proposed.empty:
+                        candidates = proposed
+                        method = fallback_method
+                        break
             ids = sorted({value for value in candidates["vendor_id"] if value})
             if len(ids) == 1:
                 status = "resolved"

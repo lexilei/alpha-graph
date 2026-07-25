@@ -385,6 +385,46 @@ def test_both_command_line_parsers_build():
         assert done.returncode == 0, f"{module} --help failed: {done.stderr[-400:]}"
 
 
+def test_identity_falls_back_to_reuse_suffix_and_related_tickers():
+    """A retired ticker the vendor re-keyed (APC -> APC1) is invisible to an
+    exact match. Both fallbacks only propose candidates; the interval bounds
+    and the single-vendor-id test still decide, so ambiguity stays ambiguous
+    and an exact match is never overridden.
+    """
+    vendor = pd.DataFrame({
+        "table": ["SEP"] * 4,
+        "permaticker": [1, 2, 3, 4],
+        "ticker": ["APC1", "ELV", "ZZZ", "DUP1"],
+        "name": ["Anadarko", "Elevance", "Zed", "Dup"],
+        "relatedtickers": ["APC", "ANTM", "", ""],
+        "firstpricedate": pd.to_datetime(
+            ["2000-01-01", "2000-01-01", "2000-01-01", "2000-01-01"]),
+        "lastpricedate": pd.to_datetime(
+            ["2020-01-01", "2030-01-01", "2030-01-01", "2030-01-01"]),
+    })
+    prepared = prepare_vendor_tickers(vendor)
+    # DUP shares its stem with a second listing so it can never resolve alone.
+    extra = prepared.iloc[[3]].copy()
+    extra["ticker"] = "DUP2"
+    extra["vendor_id"] = "5"
+    prepared = pd.concat([prepared, extra], ignore_index=True)
+
+    intervals = pd.DataFrame({
+        "reference_ticker": ["APC", "ANTM", "ZZZ", "DUP", "NOPE"],
+        "valid_from": pd.to_datetime(["2011-01-01"] * 5),
+        "valid_to": pd.to_datetime(["2019-01-01"] * 5),
+        "interval_id": [1, 2, 3, 4, 5],
+    })
+    out = resolve_identity_intervals(intervals, prepared).set_index("reference_ticker")
+
+    assert out.loc["APC", "match_status"] == "resolved"
+    assert out.loc["APC", "match_method"] == "reuse_suffix_interval"
+    assert out.loc["ANTM", "match_method"] == "related_ticker_interval"
+    assert out.loc["ZZZ", "match_method"] == "exact_ticker_interval"
+    assert out.loc["DUP", "match_status"] == "ambiguous"
+    assert out.loc["NOPE", "match_status"] == "unmatched"
+
+
 def test_plan_enforces_initial_per_table_limit():
     tickers = [f"T{i:04d}" for i in range(101)]
     with pytest.raises(ValueError, match="exceeds the initial"):
