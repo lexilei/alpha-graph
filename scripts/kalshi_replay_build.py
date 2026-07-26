@@ -33,7 +33,9 @@ Usage
 
 from __future__ import annotations
 
+import collections
 import json
+import math
 import sys
 import time
 import urllib.error
@@ -58,6 +60,9 @@ KALSHI_PUBLIC = "https://api.elections.kalshi.com/trade-api/v2"
 # the CF index; this is a proxy built from the same venues, used only to
 # cross-check the exchange's own result field.
 BRTI_SRC = ("coinbase", "kraken", "bitstamp", "gemini", "itbit", "lmax")
+# the recorder streams ETH alongside BTC on every venue; keep only BTC
+BTC_PRODUCTS = {"BTC-USD", "BTC/USD", "XBT/USD", "BTCUSD", "XBTUSD", "BTCUSDT"}
+JUMP_TOL = 0.05
 
 
 def _public_get(path: str, tries: int = 3) -> dict:
@@ -132,14 +137,34 @@ def scan_books(files) -> tuple[pd.DataFrame, dict]:
 # ----------------------------------------------------------------- scan spot
 
 def scan_spot(files) -> pd.DataFrame:
-    """1-second last-trade path across the BRTI constituent feeds."""
+    """1-second BTC price path across the BRTI constituent feeds.
+
+    Two formats live in this archive. Before 2026-07-24 05:00Z the recorder
+    subscribed to BTC alone and tagged nothing; after, it streams BTC *and*
+    ETH with a product field. So untagged payloads are BTC by construction
+    and are kept, tagged ones are kept only if the product is BTC.
+
+    Both halves matter. Without the product filter the per-second median
+    flips between ~$64,000 and ~$1,900 and the EWMA sigma lands four orders
+    of magnitude too big; with a filter that also rejects untagged prints,
+    the first two days of the window vanish silently. The venue/product mix
+    and every drop count are printed, because both failures look like
+    "it ran fine" from the outside.
+    """
     rows = []
+    mix = collections.Counter()
     for i, f in enumerate(files, 1):
         for r in iter_jsonl(f):
             src = r.get("src")
             if src not in BRTI_SRC:
                 continue
             m = r.get("msg") or {}
+            if not isinstance(m, dict):
+                continue          # a venue can ship a bare list payload
+            prod = m.get("prod") or m.get("pair") or m.get("symbol") or ""
+            mix[(src, prod or "<untagged: legacy BTC-only>")] += 1
+            if prod and prod not in BTC_PRODUCTS:
+                continue
             px = None
             if "p" in m:                              # coinbase-style
                 px = float(m["p"])
@@ -151,15 +176,48 @@ def scan_spot(files) -> pd.DataFrame:
                 px = float(m["price"])
             if px:
                 rows.append((r["t_local"] // 1_000_000, src, px))
+        for r in ():
+            pass
         if i % 20 == 0 or i == len(files):
-            print(f"  spot {i}/{len(files)} files, {len(rows):,} prints",
+            print(f"  spot {i}/{len(files)} files, {len(rows):,} BTC prints",
                   flush=True)
+    print("  venue/product mix:")
+    for (src, prod), n in mix.most_common(12):
+        kept = (not prod.startswith("<") and prod in BTC_PRODUCTS) or \
+            prod.startswith("<untagged")
+        print(f"    {'KEEP' if kept else 'drop'} {src:<10}{prod:<34}{n:>10,}")
     df = pd.DataFrame(rows, columns=["ts_s", "venue", "px"])
     if df.empty:
         return df
+    # the legacy half carries no product tag, so a sanity band is the only
+    # thing standing between an untagged non-BTC feed and a silently poisoned
+    # price path. Wide enough to be uncontroversial, narrow enough to catch
+    # a 30x unit error.
+    ref = df.px.median()
+    off = (df.px < ref / 3) | (df.px > ref * 3)
+    if off.any():
+        print(f"  dropped {int(off.sum()):,} prints outside [{ref/3:,.0f}, "
+              f"{ref*3:,.0f}] around the median {ref:,.0f}")
+        df = df[~off]
     # median across venues each second: robust to one feed printing stale
-    return (df.groupby("ts_s")["px"].median().rename("spot").reset_index()
-            .sort_values("ts_s"))
+    out = (df.groupby("ts_s")["px"].median().rename("spot").reset_index()
+           .sort_values("ts_s").reset_index(drop=True))
+    # drop residual bad prints: a second whose price is more than JUMP_TOL
+    # from a 61-second rolling median of its neighbours is not a real move
+    med = out.spot.rolling(61, center=True, min_periods=5).median()
+    bad = (out.spot / med - 1).abs() > JUMP_TOL
+    if bad.any():
+        print(f"  dropped {int(bad.sum()):,} outlier seconds "
+              f"(> {JUMP_TOL:.0%} from a 61s rolling median)")
+        out = out[~bad].reset_index(drop=True)
+    ann = out.spot.pct_change().std() * math.sqrt(365 * 24 * 3600)
+    print(f"  BTC path: {len(out):,} seconds, "
+          f"{out.spot.min():,.0f}-{out.spot.max():,.0f}, "
+          f"1s-sampled annualised vol {ann:.1%}")
+    if not 0.01 < ann < 5.0:
+        print("  WARNING: implausible realised vol -- the price path is "
+              "probably contaminated. Do NOT score a model on it.")
+    return out
 
 
 # ------------------------------------------------------------ settlement truth
@@ -318,11 +376,14 @@ def main() -> None:
     keep = [c for c in ("ticker", "close_time", "floor", "cap", "result",
                         "strike_type") if c in md.columns]
     out = books.merge(md[keep], on="ticker", how="left")
-    # pandas 2 infers datetime64[s] from these ISO strings, so pin the unit
-    # before taking the integer view -- otherwise the epoch comes out in
-    # seconds and every tau is off by a factor of 1000
-    out["close_ts_ms"] = (pd.to_datetime(out.close_time, utc=True, errors="coerce")
-                          .astype("datetime64[ms]").astype("int64"))
+    # Epoch conversion done by explicit subtraction, not astype: pandas 2
+    # infers datetime64[s] from these ISO strings, so an integer view comes
+    # out in seconds and every tau lands off by 1000x, and astype refuses to
+    # cross the tz-aware boundary at all. Dividing by a Timedelta states the
+    # unit at the call site and cannot be silently reinterpreted.
+    ct = pd.to_datetime(out.close_time, utc=True, errors="coerce")
+    out["close_ts_ms"] = ((ct - pd.Timestamp("1970-01-01", tz="UTC"))
+                          // pd.Timedelta("1ms"))
     out["tau_s"] = (out.close_ts_ms - out.ts_ms) / 1000.0
     out = out[(out.tau_s > 0) & out.result.isin(["yes", "no"])]
     out.to_parquet(BOOK_F, index=False)

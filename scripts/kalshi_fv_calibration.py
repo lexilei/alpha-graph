@@ -97,10 +97,19 @@ def main() -> None:
     spot = pd.read_parquet(SPOT_F)
     sig = sigma_path(spot)
     print(f"book rows {len(book):,}  markets {book.ticker.nunique():,}")
+    ann = sig.sigma.median() * math.sqrt(365 * 24 * 3600)
     print(f"sigma grid {len(sig):,} points, sigma p50 "
-          f"{sig.sigma.median():.2e} (annualised "
-          f"{sig.sigma.median()*math.sqrt(365*24*3600):.1%}), "
+          f"{sig.sigma.median():.2e} (annualised {ann:.1%}), "
           f"at floor {(sig.sigma <= SIGMA_FLOOR*1.0001).mean():.1%}")
+    # a poisoned price path is what a mixed BTC/ETH feed produced on the
+    # first attempt here: sigma came out 1.7e5% annualised and the model
+    # column was meaningless. Refuse to score rather than print a table
+    # that looks like a result.
+    if not 0.05 < ann < 5.0:
+        raise SystemExit(
+            f"realised sigma is {ann:.1%} annualised, which is not a BTC "
+            f"vol. The price path is contaminated -- rebuild the substrate "
+            f"before scoring anything on it.")
 
     df = book[(book.tau_s >= tau_min) & (book.tau_s <= tau_max)].copy()
     df["ts_s"] = df.ts_ms // 1000
@@ -151,18 +160,55 @@ def main() -> None:
     for kind in ("bracket", "threshold"):
         calib_table(df[df.kind == kind], "gauss", f"gaussian FV, {kind}")
 
-    # what a passive quote at the touch would have earned, before queue and
-    # adverse selection: the ceiling on the market-making edge
-    print("\n=== passive edge at the touch (settlement-marked, no fill model) ===")
+    # The money question. The maker only takes a position where its FV
+    # disagrees with the book, so the test is not "is the model good" but
+    # "when the model disagrees with the mid, which one is right?"
+    #   lean = (y - market) * sign(gauss - market)
+    # positive => the disagreement predicts the settlement, i.e. real edge.
+    print("\n=== does the model's disagreement with the book predict truth? ===")
+    print(f"{'subset':<26}{'n':>8}{'events':>8}{'lean/ct':>10}{'t':>8}"
+          f"{'|disagree|':>12}")
+    for label, sel in (("all", df),
+                       ("bracket", df[df.kind == "bracket"]),
+                       ("threshold", df[df.kind == "threshold"]),
+                       ("disagreement > 5c",
+                        df[(df.gauss - df.market).abs() > 0.05]),
+                       ("disagreement > 10c",
+                        df[(df.gauss - df.market).abs() > 0.10]),
+                       ("maker's own filter",
+                        df[(df.gauss > 0.10) & (df.gauss < 0.90)])):
+        if len(sel) < 50:
+            continue
+        lean = (sel.y - sel.market) * np.sign(sel.gauss - sel.market)
+        by_ev = lean.groupby(sel.event).mean()
+        t = (by_ev.mean() / (by_ev.std(ddof=1) / math.sqrt(len(by_ev)))
+             if len(by_ev) > 1 and by_ev.std(ddof=1) > 0 else float("nan"))
+        print(f"{label:<26}{len(sel):8,d}{len(by_ev):8d}{lean.mean():+10.4f}"
+              f"{t:+8.2f}{(sel.gauss - sel.market).abs().mean():12.4f}")
+    print("  lean/ct is dollars per contract, before spread, fees and queue.")
+
+    # NOT a P&L estimate. (y - bid) + (ask - y) is identically the spread,
+    # so a "both sides" number is a tautology dressed as a measurement --
+    # it would read positive on any market whatsoever. The only content in
+    # a fill-free view is the mid's own error, and the asymmetry it induces.
+    print("\n=== mid error, and the asymmetry it puts on the two quotes ===")
+    print(f"{'subset':<12}{'mid err':>9}{'half-sp':>9}{'rest-bid':>10}"
+          f"{'rest-ask':>10}{'events':>8}{'t(mid err)':>11}")
     for label, sel in (("all", df),
                        ("bracket", df[df.kind == "bracket"]),
                        ("threshold", df[df.kind == "threshold"])):
-        buy = (sel.y - sel.yes_bid).mean()
-        sell = (sel.yes_ask - sel.y).mean()
-        print(f"  {label:<12} rest-bid {buy:+.4f}  rest-ask {sell:+.4f}  "
-              f"both {(buy + sell):+.4f}  half-spread {sel.spread.mean()/2:.4f}")
-    print("  a fair market gives rest-bid ~= rest-ask ~= half the spread;")
-    print("  a negative side is where the flow is picking that quote off.")
+        err = sel.y - sel.market
+        by_ev = err.groupby(sel.event).mean()
+        t = (by_ev.mean() / (by_ev.std(ddof=1) / math.sqrt(len(by_ev)))
+             if len(by_ev) > 1 else float("nan"))
+        hs = sel.spread.mean() / 2
+        print(f"{label:<12}{err.mean():+9.4f}{hs:9.4f}"
+              f"{(err.mean() + hs):+10.4f}{(hs - err.mean()):+10.4f}"
+              f"{len(by_ev):8d}{t:+11.2f}")
+    print("  mid err > 0 means YES settled more often than the book priced it,")
+    print("  which in a 3.4-day window is mostly the drift of one BTC path,")
+    print("  not an edge: it moves both quotes in opposite directions and")
+    print("  nets to zero for anyone quoting both sides.")
 
 
 if __name__ == "__main__":
