@@ -432,12 +432,78 @@ def _vendor_ticker_indices(vendor_tickers: pd.DataFrame) -> tuple[dict, dict]:
     return by_stem, by_related
 
 
+def build_rename_chain(actions: pd.DataFrame) -> dict[str, list[tuple]]:
+    """Index ACTIONS ticker changes as historical -> (change_date, current).
+
+    The vendor re-keys a company's whole price history to its CURRENT symbol,
+    while the reference membership spine holds the symbol as it traded. An
+    exact match therefore cannot see BK (the vendor files it under BNY),
+    ANTM (ELV) or PX (PX1) — the history is present and complete, just under
+    a name the spine never used. `tickerchangefrom` states each hop: `ticker`
+    is the current symbol, `contraticker` the one it replaced, `date` the
+    change. Self-referential rows carry no information and are dropped.
+
+    Only proposals come out of here. Every one still has to clear the
+    interval-bounds filter and the single-vendor-id test, so a wrong hop
+    becomes `unmatched` or `ambiguous`, never a silent bind.
+    """
+    required = {"action", "ticker", "contraticker", "date"}
+    missing = sorted(required - set(actions.columns))
+    if missing:
+        raise SharadarError(f"ACTIONS rename chain missing columns: {missing}")
+    edges = actions[actions["action"] == "tickerchangefrom"]
+    chain: dict[str, list[tuple]] = {}
+    for row in edges[["date", "ticker", "contraticker"]].itertuples(index=False):
+        current = _ticker_norm(row.ticker)
+        historical = _ticker_norm(row.contraticker)
+        if not current or not historical or current == historical:
+            continue
+        if pd.isna(row.date):
+            continue
+        chain.setdefault(historical, []).append((pd.Timestamp(row.date), current))
+    for key in chain:
+        chain[key].sort()
+    return chain
+
+
+def _chase_renames(
+    symbol: str,
+    when: pd.Timestamp,
+    chain: dict[str, list[tuple]],
+    *,
+    max_hops: int = 4,
+) -> list[str]:
+    """Successor symbols for `symbol` as of `when`, nearest hop first.
+
+    Only renames dated AFTER `when` are followed: a change that already
+    happened cannot explain what the spine called the company at `when`, and
+    following it would walk into whichever unrelated company inherited the
+    symbol next. The first such hop is taken and the walk continues from
+    there, so multi-hop histories (FB -> META, IR -> TT) resolve.
+    """
+    out: list[str] = []
+    seen = {symbol}
+    cursor = symbol
+    for _ in range(max_hops):
+        successor = next(
+            (new for changed, new in chain.get(cursor, ()) if changed > when),
+            None,
+        )
+        if successor is None or successor in seen:
+            break
+        out.append(successor)
+        seen.add(successor)
+        cursor = successor
+    return out
+
+
 def resolve_identity_intervals(
     intervals: pd.DataFrame,
     vendor_tickers: pd.DataFrame,
     overrides: pd.DataFrame | None = None,
     *,
     tolerance_days: int = 7,
+    rename_chain: dict[str, list[tuple]] | None = None,
 ) -> pd.DataFrame:
     overrides = overrides if overrides is not None else load_identity_overrides(None)
     by_ticker = {key: group for key, group in vendor_tickers.groupby("ticker_norm", sort=False)}
@@ -504,6 +570,21 @@ def resolve_identity_intervals(
                     if not proposed.empty:
                         candidates = proposed
                         method = fallback_method
+                        break
+            # The vendor's own rename log, applied last: it proposes a
+            # successor only where the suffix and relatedtickers conventions
+            # both came up empty, so it can add resolutions but never move
+            # one that already bound.
+            if method == "exact_ticker_interval" and candidates.empty and rename_chain:
+                for successor in _chase_renames(
+                    interval.reference_ticker, interval.valid_from, rename_chain
+                ):
+                    proposed = within_interval(
+                        by_ticker.get(successor, vendor_tickers.iloc[0:0])
+                    )
+                    if not proposed.empty:
+                        candidates = proposed
+                        method = "ticker_change_interval"
                         break
             ids = sorted({value for value in candidates["vendor_id"] if value})
             if len(ids) == 1:
@@ -863,18 +944,33 @@ def _resolve_symbol_ids(
     *,
     tolerance_days: int = 7,
     identity_map: dict[str, str] | None = None,
+    rename_chain: dict[str, list[tuple]] | None = None,
 ) -> tuple[set[str], int]:
     ids: set[str] = set()
     unresolved = 0
     tolerance = pd.Timedelta(days=tolerance_days)
-    for symbol in symbols:
-        norm = _ticker_norm(symbol)
+
+    def lookup(norm: str) -> set[str]:
         candidates = vendor_tickers[
             (vendor_tickers["ticker_norm"] == norm)
             & (vendor_tickers["firstpricedate"] <= when + tolerance)
             & (vendor_tickers["lastpricedate"] >= when - tolerance)
         ]
-        values = {value for value in candidates["vendor_id"] if value}
+        return {value for value in candidates["vendor_id"] if value}
+
+    for symbol in symbols:
+        norm = _ticker_norm(symbol)
+        values = lookup(norm)
+        # Fall back ONLY when the symbol as traded resolves to nothing. A
+        # symbol that matched but is ambiguous is a real ambiguity, and one
+        # that matched cleanly must keep the identity it already had — the
+        # chain may not re-map an existing resolution.
+        if not values and rename_chain:
+            for successor in _chase_renames(norm, when, rename_chain):
+                proposed = lookup(successor)
+                if proposed:
+                    values = proposed
+                    break
         if len(values) == 1:
             value = next(iter(values))
             if identity_map is not None:
@@ -897,6 +993,7 @@ def membership_reconciliation(
     end: pd.Timestamp,
     comparison_dates: pd.DatetimeIndex | None = None,
     identity_map: dict[str, str] | None = None,
+    rename_chain: dict[str, list[tuple]] | None = None,
 ) -> pd.DataFrame:
     frame = sp500.copy()
     frame["date"] = pd.to_datetime(frame["date"])
@@ -937,10 +1034,12 @@ def membership_reconciliation(
         if reference is None:
             continue
         reference_ids, unresolved_reference = _resolve_symbol_ids(
-            set(reference), when, vendor_tickers, identity_map=identity_map
+            set(reference), when, vendor_tickers,
+            identity_map=identity_map, rename_chain=rename_chain,
         )
         vendor_ids, unresolved_vendor = _resolve_symbol_ids(
-            state_symbols, when, vendor_tickers, identity_map=identity_map
+            state_symbols, when, vendor_tickers,
+            identity_map=identity_map, rename_chain=rename_chain,
         )
         union = reference_ids | vendor_ids
         denominator = len(union) + unresolved_reference + unresolved_vendor
@@ -1744,7 +1843,11 @@ def _audit_snapshot_unlocked(
         tickers_sha256=tickers_sha,
         membership_sha256=membership_sha,
     )
-    crosswalk = resolve_identity_intervals(intervals, tickers, overrides)
+    actions = read_staged_table(snapshot_dir, "ACTIONS")
+    rename_chain = build_rename_chain(actions)
+    crosswalk = resolve_identity_intervals(
+        intervals, tickers, overrides, rename_chain=rename_chain
+    )
     prices = read_staged_table(snapshot_dir, "SEP")
     panel = pd.read_parquet(panel_path, columns=["ticker", "date"])
     panel["date"] = pd.to_datetime(panel["date"])
@@ -1783,6 +1886,7 @@ def _audit_snapshot_unlocked(
         tickers,
         start=start_ts,
         end=end_ts,
+        rename_chain=rename_chain,
     )
     relevant_vendor_ids = set(crosswalk["vendor_id"].dropna().astype(str)) | {
         str(value) for value in panel_vendor_ids
@@ -1877,6 +1981,7 @@ def _audit_snapshot_unlocked(
         start=start_ts,
         end=end_ts,
         identity_map=identity_map,
+        rename_chain=rename_chain,
     )
     membership_daily = membership_reconciliation(
         sp500,
@@ -1886,6 +1991,7 @@ def _audit_snapshot_unlocked(
         end=end_ts,
         comparison_dates=calendar,
         identity_map=identity_map,
+        rename_chain=rename_chain,
     )
     membership_differences = membership_difference_report(
         membership_daily,
@@ -1907,7 +2013,6 @@ def _audit_snapshot_unlocked(
         duplicate_rows_max=thresholds["unresolved_primary_key_duplicates_max"],
     )
     alias_overlaps = alias_window_audit(tickers)
-    actions = read_staged_table(snapshot_dir, "ACTIONS")
     price_jump_audit = price_jump_review(
         verify_price_jumps(unexplained_price_jumps(prices, actions), actions, prices),
         jump_approvals_path,
