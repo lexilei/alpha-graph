@@ -1,0 +1,176 @@
+{
+ "KXBTC-26JUL2213-B66250": {
+  "cap": 66299.99,
+  "close": "2026-07-22T17:00:00Z",
+  "floor": 66200,
+  "result": "yes"
+ },
+ "KXBTC-26JUL2513-B64050": {
+  "cap": 64099.99,
+  "close": "2026-07-25T17:00:00Z",
+  "floor": 64000,
+  "result": "no"
+ },
+ "KXBTC-26JUL2513-B64150": {
+  "cap": 64199.99,
+  "close": "2026-07-25T17:00:00Z",
+  "floor": 64100,
+  "result": "yes"
+ },
+ "KXBTC-26JUL2513-B64250": {
+  "cap": 64299.99,
+  "close": "2026-07-25T17:00:00Z",
+  "floor": 64200,
+  "result": "no"
+ },
+ "KXBTC-26JUL2514-B64150": {
+  "cap": 64199.99,
+  "close": "2026-07-25T18:00:00Z",
+  "floor": 64100,
+  "result": "yes"
+ },
+ "KXBTC-26JUL2517-B64125": {
+  "cap": 64249.99,
+  "close": "2026-07-25T21:00:00Z",
+  "floor": 64000,
+  "result": "no"
+ },
+ "KXBTC-26JUL2517-B64375": {
+  "cap": 64499.99,
+  "close": "2026-07-25T21:00:00Z",
+  "floor": 64250,
+  "result": "yes"
+ },
+ "KXBTC-26JUL2518-B64150": {
+  "cap": 64199.99,
+  "close": "2026-07-25T22:00:00Z",
+  "floor": 64100,
+  "result": "no"
+ },
+ "KXBTC-26JUL2518-B64250": {
+  "cap": 64299.99,
+  "close": "2026-07-25T22:00:00Z",
+  "floor": 64200,
+  "result": "yes"
+ },
+ "KXBTC-26JUL2518-B64350": {
+  "cap": 64399.99,
+  "close": "2026-07-25T22:00:00Z",
+  "floor": 64300,
+  "result": "no"
+ },
+ "KXBTC-26JUL2519-B64250": {
+  "cap": 64299.99,
+  "close": "2026-07-25T23:00:00Z",
+  "floor": 64200,
+  "result": "no"
+ },
+ "KXBTC-26JUL2519-B64350": {
+  "cap": 64399.99,
+  "close": "2026-07-25T23:00:00Z",
+  "floor": 64300,
+  "result": "yes"
+ },
+ "KXBTC-26JUL2519-B64450": {
+  "cap": 64499.99,
+  "close": "2026-07-25T23:00:00Z",
+  "floor": 64400,
+  "result": "no"
+ },
+ "KXBTC-26JUL2521-B64250": {
+  "cap": 64299.99,
+  "close": "2026-07-26T01:00:00Z",
+  "floor": 64200,
+  "result": "no"
+ },
+ "KXBTC-26JUL2521-B64350": {
+  "cap": 64399.99,
+  "close": "2026-07-26T01:00:00Z",
+  "floor": 64300,
+  "result": "no"
+ },
+ "KXBTC-26JUL2521-B64450": {
+  "cap": 64499.99,
+  "close": "2026-07-26T01:00:00Z",
+  "floor": 64400,
+  "result": "yes"
+ },
+ "KXBTCD-26JUL2513-T64099.99": {
+  "cap": null,
+  "close": "2026-07-25T17:00:00Z",
+  "floor": 64099.99,
+  "result": "yes"
+ },
+ "KXBTCD-26JUL2513-T64199.99": {
+  "cap": null,
+  "close": "2026-07-25T17:00:00Z",
+  "floor": 64199.99,
+  "result": "no"
+ },
+ "KXBTCD-26JUL2514-T64199.99": {
+  "cap": null,
+  "close": "2026-07-25T18:00:00Z",
+  "floor": 64199.99,
+  "result": "no"
+ },
+ "KXBTCD-26JUL2516-T64299.99": {
+  "cap": null,
+  "close": "2026-07-25T20:00:00Z",
+  "floor": 64299.99,
+  "result": "yes"
+ },
+ "KXBTCD-26JUL2517-T63999.99": {
+  "cap": null,
+  "close": "2026-07-25T21:00:00Z",
+  "floor": 63999.99,
+  "result": "yes"
+ },
+ "KXBTCD-26JUL2517-T64249.99": {
+  "cap": null,
+  "close": "2026-07-25T21:00:00Z",
+  "floor": 64249.99,
+  "result": "yes"
+ },
+ "KXBTCD-26JUL2518-T64199.99": {
+  "cap": null,
+  "close": "2026-07-25T22:00:00Z",
+  "floor": 64199.99,
+  "result": "yes"
+ },
+ "KXBTCD-26JUL2518-T64299.99": {
+  "cap": null,
+  "close": "2026-07-25T22:00:00Z",
+  "floor": 64299.99,
+  "result": "no"
+ },
+ "KXBTCD-26JUL2519-T64199.99": {
+  "cap": null,
+  "close": "2026-07-25T23:00:00Z",
+  "floor": 64199.99,
+  "result": "yes"
+ },
+ "KXBTCD-26JUL2519-T64299.99": {
+  "cap": null,
+  "close": "2026-07-25T23:00:00Z",
+  "floor": 64299.99,
+  "result": "yes"
+ },
+ "KXBTCD-26JUL2519-T64399.99": {
+  "cap": null,
+  "close": "2026-07-25T23:00:00Z",
+  "floor": 64399.99,
+  "result": "no"
+ },
+ "KXBTCD-26JUL2521-T64299.99": {
+  "cap": null,
+  "close": "2026-07-26T01:00:00Z",
+  "floor": 64299.99,
+  "result": "yes"
+ },
+ "KXBTCD-26JUL2521-T64399.99": {
+  "cap": null,
+  "close": "2026-07-26T01:00:00Z",
+  "floor": 64399.99,
+  "result": "yes"
+ }
+}
