@@ -63,15 +63,33 @@ def test_region_rejects_empty_intervals():
         Region(64000.0, 64000.0)
 
 
-def test_region_from_strikes_threshold_and_bracket():
+def test_region_from_strikes_covers_all_three_kalshi_shapes():
+    # greater / between / less, the strike_type values the exchange ships
     assert region_from_strikes(64249.99) == Region(64249.99, math.inf)
     assert region_from_strikes(64000, 64249.99) == Region(64000.0, 64249.99)
     assert region_from_strikes(64000, "") == Region(64000.0, math.inf)
+    assert region_from_strikes(None, 54700) == Region(-math.inf, 54700.0)
 
 
-@pytest.mark.parametrize("floor,cap", [(None, None), ("", None), ("abc", None),
-                                       (64000, "abc"), (64000, 63000)])
+def test_less_market_pays_at_or_below_its_cap():
+    r = region_from_strikes(None, 54700)
+    assert r.pays(54700.0) and r.pays(1.0)
+    assert not r.pays(54700.01)
+    # and it carries real risk rather than being written off as unknown
+    wc = worst_case_payoff({"a": -10.0}, {"a": r})
+    assert wc.value == 0.0 and wc.at_price <= 54700.0
+
+
+@pytest.mark.parametrize("floor,cap", [(None, None), ("", ""), ("abc", None),
+                                       (64000, "abc"), (None, "abc"),
+                                       (float("nan"), None), (64000, 63000)])
 def test_region_from_strikes_refuses_to_invent_geometry(floor, cap):
+    """Absent is a shape; unparseable is a fault.
+
+    A bracket whose cap fails to parse must NOT degrade to an unbounded
+    threshold -- that widens the payout region and makes the risk gate
+    optimistic, the one direction it may never fail in.
+    """
     assert region_from_strikes(floor, cap) is None
 
 

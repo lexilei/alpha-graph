@@ -69,25 +69,40 @@ class Region:
         return self.lo < s <= self.hi
 
 
+def _f(x) -> float | None:
+    if x in (None, ""):
+        return None
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
+
+
 def region_from_strikes(floor_strike, cap_strike=None) -> Region | None:
     """Build a Region from an exchange market payload's strike fields.
 
-    Returns None when the payload cannot pin the region down, so the caller
-    falls back to the adversarial treatment rather than inventing geometry.
+    Kalshi ships three shapes: ``greater`` (floor only), ``less`` (cap only)
+    and ``between`` (both).  Returns None when the payload cannot pin the
+    region down, so the caller falls back to the adversarial treatment
+    rather than inventing geometry.
     """
-    try:
-        lo = float(floor_strike)
-    except (TypeError, ValueError):
+    lo, hi = _f(floor_strike), _f(cap_strike)
+    # absent is a shape; unparseable is a fault. Treating a bracket whose cap
+    # failed to parse as an unbounded threshold would widen the payout region
+    # and make the risk gate optimistic, which is the one direction this
+    # function must never fail in.
+    if floor_strike not in (None, "") and lo is None:
         return None
-    if not math.isfinite(lo):
+    if cap_strike not in (None, "") and hi is None:
         return None
-    if cap_strike in (None, ""):
-        return Region(lo)
-    try:
-        hi = float(cap_strike)
-    except (TypeError, ValueError):
+    if lo is None and hi is None:
         return None
-    if not math.isfinite(hi) or hi <= lo:
+    if lo is None:
+        return Region(-math.inf, hi)      # "less": pays at or below the cap
+    if hi is None:
+        return Region(lo)                 # "greater": pays above the floor
+    if hi <= lo:
         return None
     return Region(lo, hi)
 
