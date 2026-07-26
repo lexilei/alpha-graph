@@ -45,7 +45,11 @@ JOBS = {
     "brti_recorder": ("brti_recorder.py", "polymarket/brti_*.jsonl.gz", 300),
     "deribit_recorder": ("deribit_recorder.py", "deribit/deribit_*.jsonl.gz", 300),
     "deribit_kalshi_scan": ("deribit_kalshi_scan.py --loop 120", None, 0),
-    "kalshi_demo_maker": ("kalshi_demo_maker.py", None, 0),
+    # kalshi_demo_maker removed 2026-07-26: the demo environment mis-settles
+    # (212/212 resolved "no"), so its settlement variance is identically zero
+    # and every P&L number it produces is an artifact of the simulator, not
+    # edge. Supervising it only manufactured confident-looking fake results.
+    # Do not re-add until the demo settlement path is verified against prod.
     "perp_paper": ("perp_paper.py loop", None, 0),
     "nightly_compact": ("nightly_compact.py loop", None, 0),
     "queue_runner": ("queue_runner.py", None, 0),
